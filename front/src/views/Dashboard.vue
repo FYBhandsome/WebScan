@@ -1,0 +1,561 @@
+<template>
+  <div class="dashboard">
+    <div class="dashboard-header">
+      <h1>仪表盘</h1>
+      <p class="dashboard-subtitle">Web应用漏洞扫描概览</p>
+    </div>
+
+    <!-- 核心数据卡片 -->
+    <div class="stats-grid">
+      <div class="stat-card stat-card-primary">
+        <div class="stat-icon">🔍</div>
+        <div class="stat-content">
+          <div class="stat-number">{{ todayScans }}</div>
+          <div class="stat-label">今日扫描任务</div>
+        </div>
+      </div>
+
+      <div class="stat-card stat-card-danger">
+        <div class="stat-icon">⚠️</div>
+        <div class="stat-content">
+          <div class="stat-number">{{ highRiskVulns }}</div>
+          <div class="stat-label">未修复高危漏洞</div>
+        </div>
+      </div>
+
+      <div class="stat-card stat-card-trend" :class="trendClass">
+        <div class="stat-icon">📈</div>
+        <div class="stat-content">
+          <div class="stat-number">{{ weeklyTrend }}%</div>
+          <div class="stat-label">本周漏洞趋势</div>
+        </div>
+      </div>
+
+      <div class="stat-card stat-card-success">
+        <div class="stat-icon">✅</div>
+        <div class="stat-content">
+          <div class="stat-number">{{ completedScans }}</div>
+          <div class="stat-label">已完成扫描</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dashboard-content">
+      <!-- 漏洞趋势图 -->
+      <div class="chart-section">
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">漏洞趋势分析</h3>
+            <select v-model="trendPeriod" class="form-select" style="width: auto;">
+              <option value="7">最近7天</option>
+              <option value="30">最近30天</option>
+              <option value="90">最近90天</option>
+            </select>
+          </div>
+          <div class="chart-container">
+            <div class="trend-chart">
+              <div class="chart-legend">
+                <div class="legend-item">
+                  <span class="legend-color high-risk"></span>
+                  <span>高危漏洞</span>
+                </div>
+                <div class="legend-item">
+                  <span class="legend-color medium-risk"></span>
+                  <span>中危漏洞</span>
+                </div>
+                <div class="legend-item">
+                  <span class="legend-color low-risk"></span>
+                  <span>低危漏洞</span>
+                </div>
+              </div>
+              <div class="chart-area">
+                <div v-for="(day, index) in trendData" :key="index" class="chart-bar">
+                  <div class="bar-stack">
+                    <div 
+                      class="bar-segment high-risk" 
+                      :style="{ height: (day.high / maxVulns * 100) + '%' }"
+                      :title="`高危: ${day.high}`"
+                    ></div>
+                    <div 
+                      class="bar-segment medium-risk" 
+                      :style="{ height: (day.medium / maxVulns * 100) + '%' }"
+                      :title="`中危: ${day.medium}`"
+                    ></div>
+                    <div 
+                      class="bar-segment low-risk" 
+                      :style="{ height: (day.low / maxVulns * 100) + '%' }"
+                      :title="`低危: ${day.low}`"
+                    ></div>
+                  </div>
+                  <div class="bar-label">{{ day.date }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 最新扫描结果 -->
+      <div class="recent-scans">
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">最新扫描结果</h3>
+            <router-link to="/scan-tasks" class="btn btn-outline">查看全部</router-link>
+          </div>
+          <div class="scan-list">
+            <div 
+              v-for="scan in recentScans" 
+              :key="scan.id" 
+              class="scan-item"
+              @click="viewScanResults(scan.id)"
+            >
+              <div class="scan-info">
+                <div class="scan-name">{{ scan.name }}</div>
+                <div class="scan-url">{{ scan.url }}</div>
+                <div class="scan-time">{{ scan.time }}</div>
+              </div>
+              <div class="scan-status">
+                <span :class="['status', `status-${scan.status}`]">
+                  <span class="status-dot"></span>
+                  {{ getStatusText(scan.status) }}
+                </span>
+              </div>
+              <div class="scan-results">
+                <div v-if="scan.vulnerabilities" class="vuln-summary">
+                  <span class="vuln-count high-risk">{{ scan.vulnerabilities.high }}</span>
+                  <span class="vuln-count medium-risk">{{ scan.vulnerabilities.medium }}</span>
+                  <span class="vuln-count low-risk">{{ scan.vulnerabilities.low }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 快速操作 -->
+    <div class="quick-actions">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">快速操作</h3>
+        </div>
+        <div class="actions-grid">
+          <router-link to="/scan-tasks" class="action-item">
+            <div class="action-icon">🚀</div>
+            <div class="action-text">创建扫描任务</div>
+          </router-link>
+          <router-link to="/reports" class="action-item">
+            <div class="action-icon">📊</div>
+            <div class="action-text">生成报告</div>
+          </router-link>
+          <router-link to="/settings" class="action-item">
+            <div class="action-icon">⚙️</div>
+            <div class="action-text">系统设置</div>
+          </router-link>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+// TODO: 替换为真实的API调用
+import { 
+  mockDashboardStats, 
+  mockTrendData, 
+  mockRecentScans 
+} from '../data/mockData.js'
+
+export default {
+  name: 'Dashboard',
+  data() {
+    return {
+      // TODO: 从API获取仪表盘统计数据 - GET /api/dashboard/stats
+      todayScans: mockDashboardStats.todayScans,
+      highRiskVulns: mockDashboardStats.highRiskVulns,
+      weeklyTrend: mockDashboardStats.weeklyTrend,
+      completedScans: mockDashboardStats.completedScans,
+      
+      trendPeriod: '7',
+      // TODO: 从API获取趋势数据 - GET /api/dashboard/trends?period=7
+      trendData: mockTrendData,
+      
+      // TODO: 从API获取最新扫描结果 - GET /api/scans/recent?limit=4
+      recentScans: mockRecentScans
+    }
+  },
+  computed: {
+    trendClass() {
+      return this.weeklyTrend > 0 ? 'trend-up' : 'trend-down'
+    },
+    maxVulns() {
+      return Math.max(...this.trendData.map(day => day.high + day.medium + day.low))
+    }
+  },
+  methods: {
+    getStatusText(status) {
+      const statusMap = {
+        waiting: '等待中',
+        running: '进行中',
+        completed: '已完成',
+        failed: '失败'
+      }
+      return statusMap[status] || status
+    },
+    viewScanResults(scanId) {
+      this.$router.push(`/vulnerabilities/${scanId}`)
+    }
+  }
+}
+</script>
+
+<style scoped>
+.dashboard {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.dashboard-header {
+  margin-bottom: var(--spacing-xl);
+}
+
+.dashboard-subtitle {
+  color: var(--text-secondary);
+  margin-top: var(--spacing-xs);
+}
+
+/* 统计卡片网格 */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-xl);
+}
+
+.stat-card {
+  background-color: var(--card-background);
+  border-radius: var(--border-radius);
+  padding: var(--spacing-lg);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  transition: all 0.2s ease;
+  border-left: 4px solid transparent;
+}
+
+.stat-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.stat-card-primary {
+  border-left-color: var(--secondary-color);
+}
+
+.stat-card-danger {
+  border-left-color: var(--high-risk);
+}
+
+.stat-card-success {
+  border-left-color: var(--success-color);
+}
+
+.stat-card-trend.trend-up {
+  border-left-color: var(--success-color);
+}
+
+.stat-card-trend.trend-down {
+  border-left-color: var(--high-risk);
+}
+
+.stat-icon {
+  font-size: 32px;
+  opacity: 0.8;
+}
+
+.stat-number {
+  font-size: 28px;
+  font-weight: bold;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.stat-label {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin-top: var(--spacing-xs);
+}
+
+/* 仪表盘内容布局 */
+.dashboard-content {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--spacing-lg);
+  margin-bottom: var(--spacing-xl);
+}
+
+/* 趋势图 */
+.chart-container {
+  padding: var(--spacing-md) 0;
+}
+
+.chart-legend {
+  display: flex;
+  gap: var(--spacing-lg);
+  margin-bottom: var(--spacing-md);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  font-size: 12px;
+}
+
+.legend-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+.legend-color.high-risk {
+  background-color: var(--high-risk);
+}
+
+.legend-color.medium-risk {
+  background-color: var(--medium-risk);
+}
+
+.legend-color.low-risk {
+  background-color: var(--low-risk);
+}
+
+.chart-area {
+  display: flex;
+  align-items: end;
+  gap: var(--spacing-sm);
+  height: 200px;
+  padding: var(--spacing-md) 0;
+}
+
+.chart-bar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+}
+
+.bar-stack {
+  display: flex;
+  flex-direction: column-reverse;
+  width: 100%;
+  height: 180px;
+  border-radius: var(--border-radius);
+  overflow: hidden;
+}
+
+.bar-segment {
+  width: 100%;
+  min-height: 2px;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.bar-segment:hover {
+  opacity: 0.8;
+}
+
+.bar-segment.high-risk {
+  background-color: var(--high-risk);
+}
+
+.bar-segment.medium-risk {
+  background-color: var(--medium-risk);
+}
+
+.bar-segment.low-risk {
+  background-color: var(--low-risk);
+}
+
+.bar-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: var(--spacing-xs);
+}
+
+/* 扫描列表 */
+.scan-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.scan-item {
+  display: flex;
+  align-items: center;
+  padding: var(--spacing-md);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.scan-item:hover {
+  background-color: var(--background-color);
+  border-color: var(--secondary-color);
+}
+
+.scan-info {
+  flex: 1;
+}
+
+.scan-name {
+  font-weight: bold;
+  color: var(--text-primary);
+  margin-bottom: var(--spacing-xs);
+}
+
+.scan-url {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-bottom: var(--spacing-xs);
+}
+
+.scan-time {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.scan-status {
+  margin: 0 var(--spacing-md);
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: var(--spacing-xs);
+}
+
+.status-waiting .status-dot {
+  background-color: var(--secondary-color);
+}
+
+.status-running .status-dot {
+  background-color: var(--secondary-color);
+  animation: pulse 1.5s infinite;
+}
+
+.status-completed .status-dot {
+  background-color: var(--success-color);
+}
+
+.status-failed .status-dot {
+  background-color: var(--high-risk);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.vuln-summary {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.vuln-count {
+  padding: 2px var(--spacing-xs);
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: bold;
+  min-width: 20px;
+  text-align: center;
+}
+
+.vuln-count.high-risk {
+  background-color: rgba(231, 76, 60, 0.1);
+  color: var(--high-risk);
+}
+
+.vuln-count.medium-risk {
+  background-color: rgba(245, 166, 35, 0.1);
+  color: var(--medium-risk);
+}
+
+.vuln-count.low-risk {
+  background-color: rgba(241, 196, 15, 0.1);
+  color: var(--low-risk);
+}
+
+/* 快速操作 */
+.quick-actions {
+  margin-bottom: var(--spacing-xl);
+}
+
+.actions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--spacing-md);
+}
+
+.action-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--spacing-lg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  text-decoration: none;
+  color: var(--text-primary);
+  transition: all 0.2s ease;
+}
+
+.action-item:hover {
+  background-color: var(--background-color);
+  border-color: var(--secondary-color);
+  transform: translateY(-2px);
+}
+
+.action-icon {
+  font-size: 32px;
+  margin-bottom: var(--spacing-sm);
+}
+
+.action-text {
+  font-weight: 500;
+  text-align: center;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .dashboard-content {
+    grid-template-columns: 1fr;
+  }
+  
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .chart-area {
+    height: 150px;
+  }
+  
+  .bar-stack {
+    height: 130px;
+  }
+  
+  .scan-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+  }
+  
+  .actions-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
