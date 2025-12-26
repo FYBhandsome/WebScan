@@ -1,10 +1,12 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Dashboard from '../views/Dashboard.vue'
 import ScanTasks from '../views/ScanTasks.vue'
+import POCScan from '../views/POCScan.vue'
 import VulnerabilityResults from '../views/VulnerabilityResults.vue'
 import VulnerabilityDetail from '../views/VulnerabilityDetail.vue'
 import Reports from '../views/Reports.vue'
 import Settings from '../views/Settings.vue'
+import AWVSScan from '../views/AWVSScan.vue'
 
 const routes = [
   {
@@ -16,6 +18,11 @@ const routes = [
     path: '/scan-tasks',
     name: 'ScanTasks',
     component: ScanTasks
+  },
+  {
+    path: '/poc-scan',
+    name: 'POCScan',
+    component: POCScan
   },
   {
     path: '/vulnerabilities/:taskId',
@@ -38,6 +45,11 @@ const routes = [
     path: '/settings',
     name: 'Settings',
     component: Settings
+  },
+  {
+    path: '/awvs-scan',
+    name: 'AWVSScan',
+    component: AWVSScan
   }
 ]
 

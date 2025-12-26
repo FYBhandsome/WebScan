@@ -159,29 +159,26 @@
 </template>
 
 <script>
-// TODO: 替换为真实的API调用
-import { 
-  mockDashboardStats, 
-  mockTrendData, 
-  mockRecentScans 
-} from '../data/mockData.js'
+import { settingsApi, taskApi } from '../utils/api.js'
 
 export default {
   name: 'Dashboard',
   data() {
     return {
-      // TODO: 从API获取仪表盘统计数据 - GET /api/dashboard/stats
-      todayScans: mockDashboardStats.todayScans,
-      highRiskVulns: mockDashboardStats.highRiskVulns,
-      weeklyTrend: mockDashboardStats.weeklyTrend,
-      completedScans: mockDashboardStats.completedScans,
+      // 仪表盘统计数据
+      todayScans: 0,
+      highRiskVulns: 0,
+      weeklyTrend: 0,
+      completedScans: 0,
       
       trendPeriod: '7',
-      // TODO: 从API获取趋势数据 - GET /api/dashboard/trends?period=7
-      trendData: mockTrendData,
+      trendData: [],
       
-      // TODO: 从API获取最新扫描结果 - GET /api/scans/recent?limit=4
-      recentScans: mockRecentScans
+      recentScans: [],
+      
+      // 加载状态
+      loading: false,
+      error: null
     }
   },
   computed: {
@@ -189,10 +186,115 @@ export default {
       return this.weeklyTrend > 0 ? 'trend-up' : 'trend-down'
     },
     maxVulns() {
-      return Math.max(...this.trendData.map(day => day.high + day.medium + day.low))
+      if (this.trendData.length === 0) return 1
+      return Math.max(...this.trendData.map(day => day.high + day.medium + day.low), 1)
     }
   },
+  async mounted() {
+    await this.loadDashboardData()
+  },
   methods: {
+    async loadDashboardData() {
+      this.loading = true
+      this.error = null
+      
+      try {
+        // 并行加载所有数据
+        await Promise.all([
+          this.loadStats(),
+          this.loadTrendData(),
+          this.loadRecentScans()
+        ])
+      } catch (error) {
+        console.error('加载仪表盘数据失败:', error)
+        this.error = '加载数据失败，请稍后重试'
+      } finally {
+        this.loading = false
+      }
+    },
+    async loadStats() {
+      try {
+        const response = await settingsApi.getStatistics()
+        if (response && response.data) {
+          const stats = response.data
+          this.todayScans = stats.today_scans || 0
+          this.highRiskVulns = stats.high_risk_vulns || 0
+          this.weeklyTrend = stats.weekly_trend || 0
+          this.completedScans = stats.completed_scans || 0
+        }
+      } catch (error) {
+        console.error('加载统计数据失败:', error)
+        // 设置默认值
+        this.todayScans = 0
+        this.highRiskVulns = 0
+        this.weeklyTrend = 0
+        this.completedScans = 0
+      }
+    },
+    async loadTrendData() {
+      try {
+        const response = await settingsApi.getStatistics()
+        if (response && response.data && response.data.trend_data) {
+          this.trendData = response.data.trend_data
+        } else {
+          // 生成默认的空数据
+          this.trendData = this.generateDefaultTrendData()
+        }
+      } catch (error) {
+        console.error('加载趋势数据失败:', error)
+        this.trendData = this.generateDefaultTrendData()
+      }
+    },
+    async loadRecentScans() {
+      try {
+        const response = await taskApi.list({ limit: 4, sort: '-created_at' })
+        if (response && response.data && response.data.tasks) {
+          this.recentScans = response.data.tasks.map(task => ({
+            id: task.id,
+            name: task.task_name || `扫描任务 ${task.id}`,
+            url: task.target || '-',
+            time: this.formatTime(task.created_at),
+            status: this.mapTaskStatus(task.status),
+            vulnerabilities: task.result?.vulnerabilities || {
+              high: 0,
+              medium: 0,
+              low: 0
+            }
+          }))
+        } else {
+          this.recentScans = []
+        }
+      } catch (error) {
+        console.error('加载最近扫描失败:', error)
+        this.recentScans = []
+      }
+    },
+    generateDefaultTrendData() {
+      const days = []
+      const today = new Date()
+      
+      for (let i = parseInt(this.trendPeriod) - 1; i >= 0; i--) {
+        const date = new Date(today)
+        date.setDate(date.getDate() - i)
+        days.push({
+          date: `${date.getMonth() + 1}/${date.getDate()}`,
+          high: 0,
+          medium: 0,
+          low: 0
+        })
+      }
+      
+      return days
+    },
+    mapTaskStatus(status) {
+      const statusMap = {
+        'pending': 'waiting',
+        'running': 'running',
+        'completed': 'completed',
+        'failed': 'failed'
+      }
+      return statusMap[status] || status
+    },
     getStatusText(status) {
       const statusMap = {
         waiting: '等待中',
@@ -202,8 +304,29 @@ export default {
       }
       return statusMap[status] || status
     },
+    formatTime(timestamp) {
+      if (!timestamp) return '-'
+      const date = new Date(timestamp)
+      const now = new Date()
+      const diff = now - date
+      
+      if (diff < 60000) {
+        return '刚刚'
+      } else if (diff < 3600000) {
+        return `${Math.floor(diff / 60000)}分钟前`
+      } else if (diff < 86400000) {
+        return `${Math.floor(diff / 3600000)}小时前`
+      } else {
+        return date.toLocaleDateString('zh-CN')
+      }
+    },
     viewScanResults(scanId) {
       this.$router.push(`/vulnerabilities/${scanId}`)
+    }
+  },
+  watch: {
+    trendPeriod() {
+      this.loadTrendData()
     }
   }
 }
@@ -530,14 +653,48 @@ export default {
   text-align: center;
 }
 
-/* 响应式设计 */
-@media (max-width: 768px) {
+/* 响应式设计 - 平板设备 */
+@media (max-width: 1024px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
   .dashboard-content {
     grid-template-columns: 1fr;
   }
   
+  .chart-area {
+    height: 180px;
+  }
+  
+  .bar-stack {
+    height: 160px;
+  }
+}
+
+/* 响应式设计 - 手机设备 */
+@media (max-width: 768px) {
+  .dashboard-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+  }
+  
+  .period-selector {
+    width: 100%;
+  }
+  
   .stats-grid {
     grid-template-columns: 1fr;
+  }
+  
+  .stat-card {
+    padding: var(--spacing-md);
+  }
+  
+  .dashboard-content {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-md);
   }
   
   .chart-area {
@@ -548,14 +705,137 @@ export default {
     height: 130px;
   }
   
+  .bar-label {
+    font-size: 10px;
+  }
+  
   .scan-item {
     flex-direction: column;
     align-items: flex-start;
     gap: var(--spacing-sm);
+    padding: var(--spacing-sm);
+  }
+  
+  .scan-status {
+    margin: 0;
+    align-self: flex-end;
+  }
+  
+  .actions-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .action-item {
+    padding: var(--spacing-md);
+  }
+  
+  .action-icon {
+    font-size: 28px;
+  }
+  
+  .action-text {
+    font-size: 13px;
+  }
+}
+
+/* 响应式设计 - 小屏手机 */
+@media (max-width: 480px) {
+  .stat-card {
+    padding: var(--spacing-sm);
+  }
+  
+  .stat-value {
+    font-size: 24px;
+  }
+  
+  .stat-label {
+    font-size: 12px;
+  }
+  
+  .chart-legend {
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+  }
+  
+  .legend-item {
+    font-size: 11px;
+  }
+  
+  .chart-area {
+    height: 120px;
+  }
+  
+  .bar-stack {
+    height: 100px;
+  }
+  
+  .bar-label {
+    font-size: 9px;
+  }
+  
+  .scan-item {
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+  
+  .scan-name {
+    font-size: 14px;
+  }
+  
+  .scan-url {
+    font-size: 11px;
+  }
+  
+  .vuln-count {
+    font-size: 10px;
+    padding: 1px 4px;
+    min-width: 16px;
   }
   
   .actions-grid {
     grid-template-columns: 1fr;
   }
+  
+  .action-item {
+    padding: var(--spacing-sm);
+  }
+  
+  .action-icon {
+    font-size: 24px;
+  }
+  
+  .action-text {
+    font-size: 12px;
+  }
 }
+
+/* 响应式设计 - 超小屏设备 */
+@media (max-width: 360px) {
+  .stat-value {
+    font-size: 20px;
+  }
+  
+  .stat-label {
+    font-size: 11px;
+  }
+  
+  .chart-area {
+    height: 100px;
+  }
+  
+  .bar-stack {
+    height: 80px;
+  }
+  
+  .legend-color {
+    width: 10px;
+    height: 10px;
+  }
+  
+  .action-icon {
+    font-size: 20px;
+  }
+}
+
 </style>
+
+

@@ -6,14 +6,19 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix --ignore-path .gitignore"
   },
   "dependencies": {
     "vue": "^3.5.24",
-    "vue-router": "^4.2.5"
+    "vue-router": "^4.2.5",
+    "axios": "^1.7.9",
+    "pinia": "^2.3.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.1",
-    "vite": "^7.2.2"
+    "vite": "^7.2.2",
+    "eslint": "^9.17.0",
+    "eslint-plugin-vue": "^9.31.0"
   }
 }

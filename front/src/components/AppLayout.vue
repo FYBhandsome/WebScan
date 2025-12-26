@@ -4,6 +4,10 @@
     <header class="header">
       <div class="header-content">
         <div class="logo-section">
+          <!-- 移动端菜单按钮 -->
+          <button class="mobile-menu-btn d-md-none" @click="toggleMobileMenu">
+            <span class="menu-icon">☰</span>
+          </button>
           <div class="logo">
             <span class="logo-icon">🛡️</span>
             <span class="logo-text">WebScan AI</span>
@@ -34,8 +38,8 @@
 
     <div class="main-container">
       <!-- 侧边栏导航 -->
-      <aside class="sidebar" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
-        <div class="sidebar-toggle" @click="toggleSidebar">
+      <aside class="sidebar" :class="{ 'sidebar-collapsed': sidebarCollapsed, 'sidebar-mobile': isMobileMenuOpen }">
+        <div class="sidebar-toggle d-md-flex d-sm-none" @click="toggleSidebar">
           <span>{{ sidebarCollapsed ? '→' : '←' }}</span>
         </div>
         <nav class="sidebar-nav">
@@ -45,12 +49,16 @@
             :to="item.path" 
             class="nav-item"
             :class="{ 'active': $route.name === item.name }"
+            @click="closeMobileMenu"
           >
             <span class="nav-icon">{{ item.icon }}</span>
             <span v-if="!sidebarCollapsed" class="nav-text">{{ item.label }}</span>
           </router-link>
         </nav>
       </aside>
+
+      <!-- 移动端遮罩层 -->
+      <div v-if="isMobileMenuOpen" class="sidebar-overlay" @click="closeMobileMenu"></div>
 
       <!-- 主内容区域 -->
       <main class="main-content">
@@ -88,10 +96,14 @@ export default {
       sidebarCollapsed: false,
       showNotifications: false,
       showUserMenu: false,
+      isMobileMenuOpen: false,
+      isMobile: false,
       
       menuItems: [
         { name: 'Dashboard', path: '/', label: '仪表盘', icon: '📊' },
         { name: 'ScanTasks', path: '/scan-tasks', label: '扫描任务', icon: '🔍' },
+        { name: 'POCScan', path: '/poc-scan', label: 'POC扫描', icon: '🎯' },
+        { name: 'AWVSScan', path: '/awvs-scan', label: 'AWVS扫描', icon: '🛡️' },
         { name: 'Reports', path: '/reports', label: '报告', icon: '📋' },
         { name: 'Settings', path: '/settings', label: '设置', icon: '⚙️' }
       ],
@@ -111,9 +123,27 @@ export default {
   methods: {
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed
+    },
+    toggleMobileMenu() {
+      this.isMobileMenuOpen = !this.isMobileMenuOpen
+    },
+    closeMobileMenu() {
+      this.isMobileMenuOpen = false
+    },
+    checkMobile() {
+      this.isMobile = window.innerWidth <= 768
+      if (this.isMobile) {
+        this.sidebarCollapsed = false
+      }
     }
   },
   mounted() {
+    // 检查是否为移动设备
+    this.checkMobile()
+    
+    // 监听窗口大小变化
+    window.addEventListener('resize', this.checkMobile)
+    
     // 点击外部关闭下拉菜单
     document.addEventListener('click', (e) => {
       if (!e.target.closest('.user-menu')) {
@@ -123,6 +153,9 @@ export default {
         this.showNotifications = false
       }
     })
+  },
+  beforeUnmount() {
+    window.removeEventListener('resize', this.checkMobile)
   }
 }
 </script>
@@ -153,6 +186,26 @@ export default {
 .logo-section {
   display: flex;
   align-items: center;
+  gap: var(--spacing-md);
+}
+
+/* 移动端菜单按钮 */
+.mobile-menu-btn {
+  display: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: var(--spacing-sm);
+  border-radius: var(--border-radius);
+  transition: background-color 0.2s ease;
+}
+
+.mobile-menu-btn:hover {
+  background-color: var(--background-color);
+}
+
+.menu-icon {
+  font-size: 20px;
 }
 
 .logo {
@@ -269,6 +322,7 @@ export default {
   display: flex;
   flex: 1;
   overflow: hidden;
+  position: relative;
 }
 
 /* 侧边栏 */
@@ -276,8 +330,9 @@ export default {
   width: 240px;
   background-color: var(--card-background);
   border-right: 1px solid var(--border-color);
-  transition: width 0.3s ease;
+  transition: width 0.3s ease, transform 0.3s ease;
   position: relative;
+  z-index: 100;
 }
 
 .sidebar-collapsed {
@@ -332,6 +387,17 @@ export default {
 
 .nav-text {
   font-weight: 500;
+}
+
+/* 移动端遮罩层 */
+.sidebar-overlay {
+  position: fixed;
+  top: 60px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 99;
 }
 
 /* 主内容区域 */
@@ -410,23 +476,43 @@ export default {
   font-size: 11px;
 }
 
-/* 响应式设计 */
+/* 响应式设计 - 平板设备 */
+@media (max-width: 1024px) {
+  .sidebar {
+    width: 200px;
+  }
+  
+  .sidebar-collapsed {
+    width: 60px;
+  }
+}
+
+/* 响应式设计 - 手机设备 */
 @media (max-width: 768px) {
+  .mobile-menu-btn {
+    display: flex;
+  }
+  
+  .logo-text {
+    font-size: 16px;
+  }
+  
   .sidebar {
     position: fixed;
     left: -240px;
     top: 60px;
     height: calc(100vh - 60px);
-    z-index: 999;
+    width: 240px;
+    z-index: 100;
     transition: left 0.3s ease;
   }
   
-  .sidebar.show {
+  .sidebar.sidebar-mobile {
     left: 0;
   }
   
-  .sidebar-collapsed {
-    left: -60px;
+  .sidebar-toggle {
+    display: none;
   }
   
   .main-content {
@@ -438,5 +524,62 @@ export default {
     right: var(--spacing-md);
     left: var(--spacing-md);
   }
+  
+  .user-avatar {
+    width: 32px;
+    height: 32px;
+  }
+}
+
+/* 响应式设计 - 小屏手机 */
+@media (max-width: 480px) {
+  .header-content {
+    padding: 0 var(--spacing-sm);
+    height: 50px;
+  }
+  
+  .logo-icon {
+    font-size: 20px;
+  }
+  
+  .logo-text {
+    font-size: 14px;
+  }
+  
+  .notification-icon {
+    font-size: 18px;
+  }
+  
+  .sidebar {
+    top: 50px;
+    height: calc(100vh - 50px);
+  }
+  
+  .sidebar-overlay {
+    top: 50px;
+  }
+  
+  .notification-panel {
+    top: 50px;
+  }
+  
+  .main-content {
+    padding: var(--spacing-sm);
+  }
+}
+
+/* 响应式设计 - 超小屏设备 */
+@media (max-width: 360px) {
+  .logo-text {
+    display: none;
+  }
+  
+  .notification-badge {
+    min-width: 14px;
+    font-size: 9px;
+    padding: 1px 4px;
+  }
 }
 </style>
+
+

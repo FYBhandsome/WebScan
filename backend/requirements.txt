@@ -1,0 +1,47 @@
+# FastAPI 核心依赖
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# 数据库 ORM
+tortoise-orm==0.20.0
+aerich==0.7.2
+pypika==0.47.9
+
+# 数据验证
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# CORS 支持
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# HTTP 客户端
+httpx==0.25.2
+requests==2.31.0
+
+# 异步支持
+asyncio==3.4.3
+
+# 日志
+loguru==0.7.2
+
+# 环境变量
+python-dotenv==1.0.0
+
+# 工具库
+python-dateutil==2.8.2
+
+# 安全扫描相关
+nmap==0.6.1
+beautifulsoup4==4.12.2
+lxml==4.9.3
+dnslib==0.9.24
+geoip2==4.7.0
+
+# User-Agent生成
+fake-useragent==1.4.0
+
+# 其他工具
+colorama==0.4.6
+tqdm==4.66.1
