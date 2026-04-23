@@ -1,0 +1,248 @@
+/* 全局样式重置 */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: "Microsoft YaHei", sans-serif;
+}
+
+body {
+    background-color: #f0f2f5;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 10px;
+}
+
+/* 主容器 */
+.chat-container {
+    width: 100%;
+    max-width: 900px;
+    height: 90vh;
+    max-height: 700px;
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* 顶部标题栏 */
+.chat-header {
+    background: #1677ff;
+    color: white;
+    padding: 16px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.ai-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ai-info i {
+    font-size: 24px;
+}
+
+.ai-info h2 {
+    font-size: 18px;
+    font-weight: 500;
+}
+
+.clear-btn {
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: 0.2s;
+}
+
+.clear-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* 消息区域 */
+.chat-box {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    background: #f7f8fa;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+/* 滚动条美化 */
+.chat-box::-webkit-scrollbar {
+    width: 6px;
+}
+
+.chat-box::-webkit-scrollbar-thumb {
+    background: #ddd;
+    border-radius: 3px;
+}
+
+/* 消息通用样式 */
+.message {
+    display: flex;
+    gap: 10px;
+    max-width: 80%;
+}
+
+/* 用户消息（右侧） */
+.user-message {
+    align-self: flex-end;
+    flex-direction: row-reverse;
+}
+
+/* AI消息（左侧） */
+.ai-message {
+    align-self: flex-start;
+}
+
+/* 头像 */
+.avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #1677ff;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.user-message .avatar {
+    background: #00b42a;
+}
+
+/* 消息内容 */
+.message-content {
+    padding: 12px 16px;
+    border-radius: 18px;
+    line-height: 1.5;
+    word-wrap: break-word;
+}
+
+.ai-message .message-content {
+    background: white;
+    border: 1px solid #e5e6eb;
+    border-top-left-radius: 4px;
+}
+
+.user-message .message-content {
+    background: #1677ff;
+    color: white;
+    border-top-right-radius: 4px;
+}
+
+/* 输入框区域 */
+.input-box {
+    display: flex;
+    padding: 16px;
+    background: white;
+    border-top: 1px solid #e5e6eb;
+    gap: 12px;
+    align-items: flex-end;
+}
+
+#user-input {
+    flex: 1;
+    padding: 12px 16px;
+    border: 1px solid #e5e6eb;
+    border-radius: 24px;
+    resize: none;
+    outline: none;
+    font-size: 14px;
+    max-height: 120px;
+    min-height: 48px;
+    overflow-y: auto;
+}
+
+#user-input:focus {
+    border-color: #1677ff;
+}
+
+/* 发送按钮 */
+.send-btn {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: #1677ff;
+    color: white;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: 0.2s;
+}
+
+.send-btn:hover {
+    background: #0f6adc;
+}
+
+.send-btn:active {
+    transform: scale(0.95);
+}
+
+/* 响应式适配 */
+@media (max-width: 600px) {
+    .chat-container {
+        height: 100vh;
+        max-height: none;
+        border-radius: 0;
+    }
+    
+    .message {
+        max-width: 90%;
+    }
+}
+
+/* 加载指示器样式 */
+.typing-indicator {
+    display: flex;
+    gap: 4px;
+    padding: 4px 0;
+}
+
+.typing-indicator span {
+    width: 8px;
+    height: 8px;
+    background: #999;
+    border-radius: 50%;
+    animation: typing 1.4s infinite ease-in-out;
+}
+
+.typing-indicator span:nth-child(1) {
+    animation-delay: 0s;
+}
+
+.typing-indicator span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.typing-indicator span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes typing {
+    0%, 60%, 100% {
+        transform: translateY(0);
+    }
+    30% {
+        transform: translateY(-10px);
+    }
+}

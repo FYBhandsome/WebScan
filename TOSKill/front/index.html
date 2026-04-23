@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 智能对话</title>
+    <!-- 引入图标库 -->
+    <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- 引入样式 -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="chat-container">
+        <!-- 顶部导航栏 -->
+        <div class="chat-header">
+            <div class="ai-info">
+                <i class="fas fa-robot"></i>
+                <h2>AI 智能助手</h2>
+            </div>
+            <button id="clear-btn" class="clear-btn" title="清空对话">
+                <i class="fas fa-trash"></i>
+            </button>
+        </div>
+
+        <!-- 消息展示区域 -->
+        <div id="chat-box" class="chat-box">
+            <div class="message ai-message">
+                <div class="avatar">
+                    <i class="fas fa-robot"></i>
+                </div>
+                <div class="message-content">
+                    你好！我是你的AI助手，有什么我可以帮助你的吗？😊
+                </div>
+            </div>
+        </div>
+
+        <!-- 输入区域 -->
+        <div class="input-box">
+            <textarea 
+                id="user-input" 
+                placeholder="请输入你的问题..." 
+                rows="1"
+                autocomplete="off"
+            ></textarea>
+            <button id="send-btn" class="send-btn">
+                <i class="fas fa-paper-plane"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- 引入脚本 -->
+    <script src="script.js"></script>
+</body>
+</html>

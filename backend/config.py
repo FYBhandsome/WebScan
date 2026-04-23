@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     CODE_EXECUTOR_ENABLED: bool = True
     
     AGENT_MAX_EXECUTION_TIME: int = 18000
+    AGENT_TEMPERATURE: float = 0.3
+    
     AGENT_MAX_RETRIES: int = 3
     
     POC_VERIFICATION_ENABLED: bool = True
