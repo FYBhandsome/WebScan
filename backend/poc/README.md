@@ -8,7 +8,7 @@
 
 | 目标系统 | 漏洞编号 | 文件位置 | 漏洞描述 |
 |---------|---------|---------|----------|
-| **Drupal** | CVE-2018-7600 | `Drupal/cve_2018_7600_poc.py` | Drupal 远程代码执行漏洞 |
+| **drupal** | CVE-2018-7600 | `drupal/cve_2018_7600_poc.py` | drupal 远程代码执行漏洞 |
 | **JBoss** | CVE-2017-12149 | `jboss/cve_2017_12149_poc.py` | JBoss 反序列化漏洞 |
 | **Nexus** | CVE-2020-10199 | `nexus/cve_2020_10199_poc.py` | Nexus Repository Manager 远程代码执行漏洞 |
 | **Struts2** | S2-009 | `struts2/struts2_009_poc.py` | Struts2 远程代码执行漏洞 |

@@ -2,14 +2,14 @@
 # coding:utf-8
 
 """
-Drupal CVE-2018-7600 POC 检测脚本
+drupal CVE-2018-7600 POC 检测脚本
 
 漏洞描述:
-Drupal Core 的用户注册表单存在远程代码执行漏洞(Drupalgeddon 2)。
+drupal Core 的用户注册表单存在远程代码执行漏洞(drupalgeddon 2)。
 攻击者可以通过构造恶意的注册请求来执行任意 PHP 代码。
 
 影响版本:
-- Drupal 6.x, 7.x, 8.x, 9.x
+- drupal 6.x, 7.x, 8.x, 9.x
 
 检测原理:
 通过向 /user/register 端点发送包含恶意 PHP 代码的注册请求,
@@ -48,11 +48,11 @@ def poc(url, timeout=10):
         index1_url = target + '/index1.txt'
         res = requests.get(url=index1_url, timeout=timeout)
         if 'test:)' in res.text and res.status_code == 200:
-            print('[+] [{}] 存在Drupal geddon 2 远程代码执行漏洞(CVE-2018-7600)'.format(target))
-            return True, 'Drupal CVE-2018-7600: 存在漏洞'
+            print('[+] [{}] 存在drupal geddon 2 远程代码执行漏洞(CVE-2018-7600)'.format(target))
+            return True, 'drupal CVE-2018-7600: 存在漏洞'
         else:
-            print('[-] [{}] 不存在Drupal geddon 2 远程代码执行漏洞(CVE-2018-7600)'.format(target))
-            return False, 'Drupal CVE-2018-7600: 安全'
+            print('[-] [{}] 不存在drupal geddon 2 远程代码执行漏洞(CVE-2018-7600)'.format(target))
+            return False, 'drupal CVE-2018-7600: 安全'
     except Exception as e:
-        return False, f'Drupal CVE-2018-7600: 扫描失败 - {str(e)}'
+        return False, f'drupal CVE-2018-7600: 扫描失败 - {str(e)}'
 

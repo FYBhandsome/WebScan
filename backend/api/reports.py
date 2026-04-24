@@ -56,8 +56,6 @@ async def list_reports(
         APIResponse: 报告列表
     """
     try:
-        logger.info(f"获取报告列表 | 任务ID过滤: {task_id} | skip: {skip} | limit: {limit}")
-        
         query = Report.all()
         
         if task_id:
@@ -84,8 +82,6 @@ async def list_reports(
                 "updated_at": report.updated_at.strftime("%Y-%m-%dT%H:%M:%SZ")
             })
         
-        logger.info(f"报告列表获取成功 | 总数: {total} | 返回: {len(report_list)}")
-        
         return APIResponse(
             code=200,
             message="获取成功",
@@ -108,15 +104,12 @@ async def create_report(report: ReportCreate):
         APIResponse: 创建的报告信息
     """
     try:
-        logger.info(f"开始创建报告 | 任务ID: {report.task_id} | 名称: {report.name} | 包含AI分析: {report.include_ai_analysis}")
-        
         task = await Task.get_or_none(id=report.task_id)
         if not task:
             logger.error(f"任务不存在 | 任务ID: {report.task_id}")
             raise HTTPException(status_code=400, detail="任务不存在")
         
         vulns = await Vulnerability.filter(task_id=task.id).all()
-        logger.info(f"获取漏洞数据完成 | 任务ID: {report.task_id} | 漏洞数量: {len(vulns)}")
         
         vuln_list = [{
             "id": v.id,
@@ -128,7 +121,6 @@ async def create_report(report: ReportCreate):
             "remediation": v.remediation
         } for v in vulns]
         
-        logger.info(f"开始生成报告数据 | 任务: {task.task_name}")
         report_data = await report_service.generate_report(
             task_id=str(task.id),
             task_name=task.task_name,
@@ -137,7 +129,6 @@ async def create_report(report: ReportCreate):
             include_ai_analysis=report.include_ai_analysis,
             scan_time=str(task.created_at)
         )
-        logger.info(f"报告数据生成完成 | 风险评分: {report_data.risk_assessment.score} | 漏洞总数: {report_data.summary.total_vulnerabilities}")
         
         ai_analysis_json = None
         analyzed_at = None
@@ -147,7 +138,6 @@ async def create_report(report: ReportCreate):
             ai_analysis_json = json.dumps(report_data.ai_analysis.to_dict())
             analyzed_at = datetime.now()
             analysis_model = "AI_Analyzer_v1"
-            logger.info(f"AI分析完成 | 风险等级: {report_data.ai_analysis.risk_level}")
         
         new_report = await Report.create(
             task_id=report.task_id,
@@ -158,8 +148,6 @@ async def create_report(report: ReportCreate):
             analyzed_at=analyzed_at,
             analysis_model=analysis_model
         )
-        
-        logger.info(f"报告保存到数据库成功 | ID: {new_report.id} | 任务ID: {new_report.task_id}")
         
         response_data = {
             "id": new_report.id,
@@ -174,8 +162,6 @@ async def create_report(report: ReportCreate):
         
         if report_data.ai_analysis:
             response_data["ai_analysis"] = report_data.ai_analysis.to_dict()
-        
-        logger.info(f"报告创建流程完成 | 报告ID: {new_report.id}")
         
         return APIResponse(
             code=200,
@@ -201,8 +187,6 @@ async def get_report(report_id: int):
         APIResponse: 报告详情
     """
     try:
-        logger.info(f"获取报告详情 | 报告ID: {report_id}")
-        
         report = await Report.filter(id=report_id).prefetch_related('task').first()
         
         if not report:
@@ -215,13 +199,11 @@ async def get_report(report_id: int):
         if report.ai_analysis:
             try:
                 ai_analysis_data = json.loads(report.ai_analysis)
-                logger.info(f"从数据库字段读取AI分析结果 | 报告ID: {report_id}")
             except json.JSONDecodeError:
                 logger.warning(f"AI分析结果JSON解析失败 | 报告ID: {report_id}")
         
         if not ai_analysis_data and "ai_analysis" in content_data:
             ai_analysis_data = content_data.get("ai_analysis")
-            logger.info(f"从content字段读取AI分析结果 | 报告ID: {report_id}")
         
         response_data = {
             "id": report.id,
@@ -243,8 +225,6 @@ async def get_report(report_id: int):
             response_data["analysis_model"] = report.analysis_model
         else:
             response_data["has_ai_analysis"] = False
-        
-        logger.info(f"报告详情获取成功 | 报告ID: {report_id} | 包含AI分析: {ai_analysis_data is not None}")
         
         return APIResponse(
             code=200,
@@ -271,8 +251,6 @@ async def update_report(report_id: int, report_update: ReportUpdate):
         APIResponse: 更新后的报告信息
     """
     try:
-        logger.info(f"更新报告 | 报告ID: {report_id}")
-        
         report = await Report.get_or_none(id=report_id)
         if not report:
             logger.error(f"报告不存在 | 报告ID: {report_id}")
@@ -280,14 +258,10 @@ async def update_report(report_id: int, report_update: ReportUpdate):
 
         if report_update.report_name:
             report.report_name = report_update.report_name
-            logger.info(f"更新报告名称 | 报告ID: {report_id} | 新名称: {report_update.report_name}")
         if report_update.content is not None:
             report.content = json.dumps(report_update.content)
-            logger.info(f"更新报告内容 | 报告ID: {report_id}")
         
         await report.save()
-        
-        logger.info(f"报告更新成功 | 报告ID: {report_id}")
         
         return APIResponse(code=200, message="更新成功", data={"id": report.id})
     except HTTPException:
@@ -309,15 +283,12 @@ async def delete_report(report_id: int):
         APIResponse: 删除结果
     """
     try:
-        logger.info(f"删除报告 | 报告ID: {report_id}")
-        
         report = await Report.get_or_none(id=report_id)
         if not report:
             logger.error(f"报告不存在 | 报告ID: {report_id}")
             raise HTTPException(status_code=404, detail="报告不存在")
 
         await report.delete()
-        logger.info(f"报告删除成功 | 报告ID: {report_id}")
         return APIResponse(code=200, message="删除成功", data=None)
     except HTTPException:
         raise
@@ -342,8 +313,6 @@ async def export_report(
         Response: 导出的报告文件
     """
     try:
-        logger.info(f"开始导出报告 | 报告ID: {report_id} | 格式: {format}")
-        
         report = await Report.get_or_none(id=report_id)
         if not report:
             logger.error(f"报告不存在 | 报告ID: {report_id}")
@@ -383,7 +352,6 @@ async def export_report(
             
             report.file_path = file_path
             await report.save()
-            logger.info(f"HTML报告导出成功 | 报告ID: {report_id} | 文件路径: {file_path}")
             
             return Response(
                 content=html_content,
@@ -397,7 +365,6 @@ async def export_report(
             
             report.file_path = file_path
             await report.save()
-            logger.info(f"JSON报告导出成功 | 报告ID: {report_id} | 文件路径: {file_path}")
             
             return JSONResponse(
                 content=content,
@@ -410,7 +377,6 @@ async def export_report(
             
             report.file_path = file_path
             await report.save()
-            logger.info(f"Markdown报告导出成功 | 报告ID: {report_id} | 文件路径: {file_path}")
             
             return PlainTextResponse(
                 content=md_content,
@@ -424,7 +390,6 @@ async def export_report(
             
             report.file_path = file_path
             await report.save()
-            logger.info(f"PDF报告导出成功 | 报告ID: {report_id} | 文件路径: {file_path}")
             
             return Response(
                 content=pdf_content,
@@ -453,8 +418,6 @@ async def preview_report(report_id: int):
         APIResponse: 报告预览数据
     """
     try:
-        logger.info(f"预览报告 | 报告ID: {report_id}")
-        
         report = await Report.filter(id=report_id).prefetch_related('task').first()
         if not report:
             logger.error(f"报告不存在 | 报告ID: {report_id}")
@@ -491,8 +454,6 @@ async def preview_report(report_id: int):
         if ai_analysis_data:
             preview_data["ai_analysis"] = ai_analysis_data
         
-        logger.info(f"报告预览获取成功 | 报告ID: {report_id} | 漏洞总数: {len(vulnerabilities)}")
-        
         return APIResponse(code=200, message="获取预览成功", data=preview_data)
     except HTTPException:
         raise
@@ -513,8 +474,6 @@ async def get_latest_report_by_task(task_id: int):
         APIResponse: 最新报告信息
     """
     try:
-        logger.info(f"获取任务最新报告 | 任务ID: {task_id}")
-        
         task = await Task.get_or_none(id=task_id)
         if not task:
             logger.error(f"任务不存在 | 任务ID: {task_id}")
@@ -522,7 +481,6 @@ async def get_latest_report_by_task(task_id: int):
         
         report = await Report.filter(task_id=task_id).order_by('-created_at').first()
         if not report:
-            logger.info(f"该任务暂无报告 | 任务ID: {task_id}")
             return APIResponse(code=404, message="该任务暂无报告", data=None)
         
         content_data = json.loads(report.content) if report.content else {}
@@ -551,8 +509,6 @@ async def get_latest_report_by_task(task_id: int):
         if ai_analysis_data:
             response_data["ai_analysis"] = ai_analysis_data
         
-        logger.info(f"获取任务最新报告成功 | 任务ID: {task_id} | 报告ID: {report.id}")
-        
         return APIResponse(
             code=200,
             message="获取成功",
@@ -578,8 +534,6 @@ async def regenerate_report(report_id: int, background_tasks: BackgroundTasks):
         APIResponse: 重新生成结果
     """
     try:
-        logger.info(f"开始重新生成报告 | 报告ID: {report_id}")
-        
         report = await Report.get_or_none(id=report_id).prefetch_related('task')
         if not report:
             logger.error(f"报告不存在 | 报告ID: {report_id}")
@@ -591,7 +545,6 @@ async def regenerate_report(report_id: int, background_tasks: BackgroundTasks):
             raise HTTPException(status_code=400, detail="关联任务不存在")
         
         vulns = await Vulnerability.filter(task_id=task.id).all()
-        logger.info(f"获取漏洞数据完成 | 任务ID: {task.id} | 漏洞数量: {len(vulns)}")
         
         vuln_list = [{
             "id": v.id,
@@ -604,7 +557,6 @@ async def regenerate_report(report_id: int, background_tasks: BackgroundTasks):
         
         existing_content = json.loads(report.content) if report.content else {}
         
-        logger.info(f"开始重新生成报告数据 | 任务: {task.task_name}")
         report_data = await report_service.generate_report(
             task_id=str(task.id),
             task_name=task.task_name,
@@ -625,15 +577,12 @@ async def regenerate_report(report_id: int, background_tasks: BackgroundTasks):
             ai_analysis_json = json.dumps(report_data.ai_analysis.to_dict())
             analyzed_at = datetime.now()
             analysis_model = "AI_Analyzer_v1"
-            logger.info(f"AI分析完成 | 风险等级: {report_data.ai_analysis.risk_level}")
         
         report.content = json.dumps(report_data.to_dict())
         report.ai_analysis = ai_analysis_json
         report.analyzed_at = analyzed_at
         report.analysis_model = analysis_model
         await report.save()
-        
-        logger.info(f"报告重新生成成功 | 报告ID: {report_id}")
         
         return APIResponse(
             code=200,

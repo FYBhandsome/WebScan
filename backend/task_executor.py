@@ -10,6 +10,9 @@
 6. 任务状态持久化
 7. 任务恢复功能
 8. 任务超时处理
+9. 支持所有插件类型的执行 (plugins, vulnerability_scan_plugins, poc)
+10. 漏洞扫描插件并发执行
+11. POC 验证批量执行
 """
 import asyncio
 import logging
@@ -18,12 +21,14 @@ import signal
 import time
 import os
 import json
-from typing import Dict, Any, Set, Optional, Union, List
+import traceback
+from typing import Dict, Any, Set, Optional, Union, List, Callable
 from datetime import datetime
 from pathlib import Path
 from tortoise.expressions import Q
 from backend.api.websocket import manager
 from backend.config import settings
+from backend.services.notification_service import notification_service
 from backend.plugin_executor import run_plugin_process
 from backend.ai_agents.poc_system.dynamic_engine import dynamic_engine
 from backend.utils.logging_utils import (
@@ -32,17 +37,19 @@ from backend.utils.logging_utils import (
     set_request_id,
     StructuredLogger
 )
-
-try:
-    from kafka import KafkaProducer
-except ImportError:
-    KafkaProducer = None
+from backend.api.task_type_registry import (
+    task_type_registry, 
+    TaskCategory, 
+    ExecutorType,
+    TaskPriority
+)
 
 logger = logging.getLogger(__name__)
 structured_logger = StructuredLogger("task_executor")
 
 
 from backend.utils.serializers import sanitize_json_data
+from backend.services.report_service import report_service
 
 
 TASK_STATE_FILE = "data/task_states.json"
@@ -53,6 +60,62 @@ TASK_TIMEOUT_CONFIG = {
     "poc_scan": 60 * 60,
     "ai_agent_scan": 5 * 60 * 60,
     "default": 60 * 60,
+}
+
+PLUGIN_TYPE_MAPPING = {
+    "portscan": {"module": "backend.plugins.portscan.portscan", "class": "ScanPort", "executor": "plugin"},
+    "port_scan": {"module": "backend.plugins.portscan.portscan", "class": "ScanPort", "executor": "plugin"},
+    "infoleak": {"module": "backend.plugins.infoleak.infoleak", "class": "get_infoleak", "executor": "plugin"},
+    "info_leak": {"module": "backend.plugins.infoleak.infoleak", "class": "get_infoleak", "executor": "plugin"},
+    "webside": {"module": "backend.plugins.webside.webside", "class": "get_side_info", "executor": "plugin"},
+    "web_side": {"module": "backend.plugins.webside.webside", "class": "get_side_info", "executor": "plugin"},
+    "baseinfo": {"module": "backend.plugins.baseinfo.baseinfo", "class": "getbaseinfo", "executor": "plugin"},
+    "base_info": {"module": "backend.plugins.baseinfo.baseinfo", "class": "getbaseinfo", "executor": "plugin"},
+    "webweight": {"module": "backend.plugins.webweight.webweight", "class": "get_web_weight", "executor": "plugin"},
+    "web_weight": {"module": "backend.plugins.webweight.webweight", "class": "get_web_weight", "executor": "plugin"},
+    "iplocating": {"module": "backend.plugins.iplocating.iplocating", "class": "get_locating", "executor": "plugin"},
+    "ip_locating": {"module": "backend.plugins.iplocating.iplocating", "class": "get_locating", "executor": "plugin"},
+    "cdnexist": {"module": "backend.plugins.cdnexist.cdnexist", "class": "iscdn", "executor": "plugin"},
+    "cdn_check": {"module": "backend.plugins.cdnexist.cdnexist", "class": "iscdn", "executor": "plugin"},
+    "waf": {"module": "backend.plugins.waf.waf", "class": "getwaf", "executor": "plugin"},
+    "waf_check": {"module": "backend.plugins.waf.waf", "class": "getwaf", "executor": "plugin"},
+    "whatcms": {"module": "backend.plugins.whatcms.whatcms", "class": "getwhatcms", "executor": "plugin"},
+    "subdomain": {"module": "backend.plugins.subdomain.subdomain", "class": "get_subdomain", "executor": "plugin"},
+    "dirscan": {"module": "backend.plugins.dirscan.dirscan", "class": "get_dirscan", "executor": "plugin"},
+    "dir_scan": {"module": "backend.plugins.dirscan.dirscan", "class": "get_dirscan", "executor": "plugin"},
+    "crawler": {"module": "backend.plugins.crawler.crawler", "class": "Crawler", "executor": "plugin"},
+    "loginfo": {"module": "backend.plugins.loginfo.loginfo", "class": "get_loginfo", "executor": "plugin"},
+    "randheader": {"module": "backend.plugins.randheader.randheader", "class": "get_randheader", "executor": "plugin"},
+    "common": {"module": "backend.plugins.common.common", "class": "CommonPlugin", "executor": "plugin"},
+}
+
+VULN_SCAN_PLUGIN_MAPPING = {
+    "sqli": {"module": "backend.vulnerability_scan_plugins.sqli.scanner", "class": "SQLiScanner", "executor": "vuln_scan"},
+    "xss": {"module": "backend.vulnerability_scan_plugins.xss.scanner", "class": "XSSScanner", "executor": "vuln_scan"},
+    "csrf": {"module": "backend.vulnerability_scan_plugins.csrf.scanner", "class": "CSRFScanner", "executor": "vuln_scan"},
+    "ssrf": {"module": "backend.vulnerability_scan_plugins.ssrf.scanner", "class": "SSRFScanner", "executor": "vuln_scan"},
+    "lfi": {"module": "backend.vulnerability_scan_plugins.lfi.scanner", "class": "LFIScanner", "executor": "vuln_scan"},
+    "cmdi": {"module": "backend.vulnerability_scan_plugins.cmdi.scanner", "class": "CmdiScanner", "executor": "vuln_scan"},
+    "fileupload": {"module": "backend.vulnerability_scan_plugins.fileupload.scanner", "class": "FileUploadScanner", "executor": "vuln_scan"},
+    "weakpass": {"module": "backend.vulnerability_scan_plugins.weakpass.scanner", "class": "WeakPassScanner", "executor": "vuln_scan"},
+    "infoleak_vuln": {"module": "backend.vulnerability_scan_plugins.infoleak.scanner", "class": "InfoLeakScanner", "executor": "vuln_scan"},
+}
+
+POC_PLUGIN_MAPPING = {
+    "weblogic_cve_2020_2551": {"module": "backend.poc.weblogic.cve_2020_2551_poc", "class": "poc", "executor": "poc"},
+    "weblogic_cve_2018_2628": {"module": "backend.poc.weblogic.cve_2018_2628_poc", "class": "poc", "executor": "poc"},
+    "weblogic_cve_2018_2894": {"module": "backend.poc.weblogic.cve_2018_2894_poc", "class": "poc", "executor": "poc"},
+    "weblogic_cve_2020_14756": {"module": "backend.poc.weblogic.cve_2020_14756_poc", "class": "poc", "executor": "poc"},
+    "weblogic_cve_2023_21839": {"module": "backend.poc.weblogic.cve_2023_21839_poc", "class": "poc", "executor": "poc"},
+    "struts2_009": {"module": "backend.poc.struts2.struts2_009_poc", "class": "poc", "executor": "poc"},
+    "struts2_032": {"module": "backend.poc.struts2.struts2_032_poc", "class": "poc", "executor": "poc"},
+    "tomcat_cve_2017_12615": {"module": "backend.poc.tomcat.cve_2017_12615_poc", "class": "poc", "executor": "poc"},
+    "tomcat_cve_2022_22965": {"module": "backend.poc.tomcat.CVE-2022-22965", "class": "poc", "executor": "poc"},
+    "tomcat_cve_2022_47986": {"module": "backend.poc.tomcat.CVE-2022-47986", "class": "poc", "executor": "poc"},
+    "jboss_cve_2017_12149": {"module": "backend.poc.jboss.cve_2017_12149_poc", "class": "poc", "executor": "poc"},
+    "nexus_cve_2020_10199": {"module": "backend.poc.nexus.cve_2020_10199_poc", "class": "poc", "executor": "poc"},
+    "drupal_cve_2018_7600": {"module": "backend.poc.drupal.cve_2018_7600_poc", "class": "poc", "executor": "poc"},
+    "thinkphp_99617": {"module": "backend.poc.thinkphp.poc_99617_ai", "class": "poc", "executor": "poc"},
 }
 
 
@@ -145,7 +208,16 @@ class TaskExecutor:
             self._save_task_states()
 
     def _get_task_timeout(self, task_type: str, scan_config: Dict = None) -> int:
-        """获取任务超时时间，设置最小超时限制为 300 秒 (5分钟)"""
+        """
+        获取任务超时时间
+        
+        优先级:
+        1. scan_config 中配置的超时时间
+        2. task_type_registry 中注册的超时时间
+        3. TASK_TIMEOUT_CONFIG 中的默认超时时间
+        
+        设置最小超时限制为 300 秒 (5分钟)
+        """
         if scan_config and 'timeout' in scan_config:
             timeout = scan_config['timeout']
             if timeout < 300:
@@ -158,6 +230,11 @@ class TaskExecutor:
                 logger.warning(f"[Timeout] 任务配置的全局超时时间 {timeout}秒太短，自动调整为 300秒")
                 return max(timeout, 300)
             return timeout
+        
+        registry_timeout = task_type_registry.get_task_type_timeout(task_type)
+        if registry_timeout and registry_timeout != 300:
+            return registry_timeout
+            
         return TASK_TIMEOUT_CONFIG.get(task_type, TASK_TIMEOUT_CONFIG['default'])
 
     async def reset_scan_data(self):
@@ -572,7 +649,16 @@ class TaskExecutor:
             logger.error(f"更新任务 {task_id} 超时状态出错: {e}")
 
     async def _execute_wrapper(self, task_info: Dict):
-        """任务执行分发包装器"""
+        """
+        任务执行分发包装器
+        
+        根据任务类型和执行器类型分发到对应的执行方法:
+        - PLUGIN_EXECUTOR: execute_plugin_task
+        - VULN_SCAN_MANAGER: execute_vuln_scan_task
+        - POC_EXECUTOR: execute_poc_task
+        - AWVS_EXECUTOR: execute_scan_task
+        - AI_AGENT_EXECUTOR: execute_agent_task
+        """
         task_id = task_info['task_id']
         target = task_info['target']
         scan_config = task_info['scan_config']
@@ -582,18 +668,39 @@ class TaskExecutor:
             task = await Task.get(id=task_id)
             task_type = task.task_type
             
-            if task_type == 'poc_scan':
+            executor_type = task_type_registry.get_executor_type(task_type)
+            
+            logger.info(f"[TaskDispatcher] 任务 {task_id} 类型: {task_type}, 执行器: {executor_type}")
+            
+            if executor_type == ExecutorType.POC_EXECUTOR:
                 await self.execute_poc_task(task_id, target, scan_config)
-            elif task_type == 'awvs_scan':
+            elif executor_type == ExecutorType.AWVS_EXECUTOR:
                 await self.execute_scan_task(task_id, target, scan_config)
-            elif task_type == 'ai_agent_scan':
+            elif executor_type == ExecutorType.AI_AGENT_EXECUTOR:
                 await self.execute_agent_task(task_id, target, scan_config)
-            else:
-                logger.warning(f"未知任务类型 {task_type}, 任务ID: {task_id}")
-                # TODO：解决未知任务类型的问题
+            elif executor_type == ExecutorType.VULN_SCAN_MANAGER:
+                await self.execute_vuln_scan_task(task_id, target, scan_config, task_type)
+            elif executor_type == ExecutorType.PLUGIN_EXECUTOR:
                 await self.execute_plugin_task(task_id, target, scan_config, task_type)
+            elif executor_type == ExecutorType.CUSTOM_EXECUTOR:
+                custom_executor = task_type_registry.get_executor_for_task_type(task_type)
+                if custom_executor:
+                    await custom_executor(task_id, target, scan_config)
+                else:
+                    logger.warning(f"任务类型 {task_type} 未注册自定义执行器，使用默认插件执行")
+                    await self.execute_plugin_task(task_id, target, scan_config, task_type)
+            else:
+                if task_type in PLUGIN_TYPE_MAPPING:
+                    await self.execute_plugin_task(task_id, target, scan_config, task_type)
+                elif task_type in VULN_SCAN_PLUGIN_MAPPING:
+                    await self.execute_vuln_scan_task(task_id, target, scan_config, task_type)
+                elif task_type in POC_PLUGIN_MAPPING:
+                    await self.execute_poc_task(task_id, target, scan_config)
+                else:
+                    logger.warning(f"未知任务类型 {task_type}, 任务ID: {task_id}，尝试使用默认插件执行")
+                    await self.execute_plugin_task(task_id, target, scan_config, task_type)
         except Exception as e:
-            logger.error(f"任务分发失败: {e}")
+            logger.error(f"任务分发失败: {e}", exc_info=True)
             raise
 
     async def _handle_task_failure(self, task_id: int, error_msg: str, exc: Exception = None):
@@ -786,15 +893,54 @@ class TaskExecutor:
             } for h in history_data
         ]
         
+        tool_results = get_state_value(final_state, 'tool_results', {})
+        target_context = get_state_value(final_state, 'target_context', {})
         stage_status = get_state_value(final_state, 'stage_status', {})
 
+        logger.info(f"[Task {task_id}] 开始生成完整报告，使用 report_service...")
+        
+        try:
+            report_data = await report_service.generate_report(
+                task_id=str(task_id),
+                task_name=task.task_name,
+                target=target,
+                vulnerabilities=vulnerabilities,
+                execution_history=execution_history,
+                tool_results=tool_results,
+                target_context=target_context,
+                include_ai_analysis=True,
+                scan_time=str(task.created_at)
+            )
+            
+            report_id = await report_service.save_report_to_db(
+                report_data=report_data,
+                task_id=task_id,
+                report_name=f"Scan Report - {target}",
+                report_type="json"
+            )
+            
+            logger.info(f"[Task {task_id}] 报告生成完成 | 报告ID: {report_id} | 风险评分: {report_data.risk_assessment.score}")
+            
+        except Exception as e:
+            logger.error(f"[Task {task_id}] 报告生成失败: {e}", exc_info=True)
+            report_id = None
+            report_data = None
+
         result_data = {
+            "report_id": report_id,
             "scan_summary": scan_summary,
             "vulnerabilities": vulnerabilities,
             "report": report_content,
             "execution_history": execution_history,
+            "tool_results": tool_results,
             "stages": stage_status
         }
+        
+        if report_data:
+            result_data["risk_assessment"] = report_data.risk_assessment.to_dict()
+            result_data["summary"] = report_data.summary.to_dict()
+            if report_data.ai_analysis:
+                result_data["ai_analysis"] = report_data.ai_analysis.to_dict()
         
         result_data = sanitize_json_data(result_data)
         
@@ -818,7 +964,7 @@ class TaskExecutor:
             except Exception as e:
                 logger.error(f"Failed to save vulnerability: {e}")
 
-        if report_content:
+        if report_content and not report_id:
             try:
                 await Report.create(
                     task=task,
@@ -842,22 +988,32 @@ class TaskExecutor:
         
         execution_time = time.time() - start_time
         
+        broadcast_payload = {
+            "task_id": task_id,
+            "status": "completed",
+            "progress": 100,
+            "result": result_data,
+            "stages": stage_status,
+            "scan_summary": scan_summary,
+            "final_output": result_data,
+            "vulnerabilities": vulnerabilities,
+            "report": report_content,
+            "target_context": initial_state.target_context if hasattr(initial_state, 'target_context') else scan_config,
+            "execution_history": execution_history,
+            "execution_time": execution_time
+        }
+        
+        if report_data:
+            broadcast_payload["report_data"] = {
+                "id": report_id,
+                "summary": report_data.summary.to_dict(),
+                "risk_assessment": report_data.risk_assessment.to_dict(),
+                "ai_analysis": report_data.ai_analysis.to_dict() if report_data.ai_analysis else None
+            }
+        
         await manager.broadcast({
             "type": "task_completed",
-            "payload": {
-                "task_id": task_id,
-                "status": "completed",
-                "progress": 100,
-                "result": result_data,
-                "stages": stage_status,
-                "scan_summary": scan_summary,
-                "final_output": result_data,
-                "vulnerabilities": vulnerabilities,
-                "report": report_content,
-                "target_context": initial_state.target_context if hasattr(initial_state, 'target_context') else scan_config,
-                "execution_history": execution_history,
-                "execution_time": execution_time
-            }
+            "payload": broadcast_payload
         })
 
     def standardize_severity(self, severity_val) -> str:
@@ -879,61 +1035,125 @@ class TaskExecutor:
             return severity_val.capitalize()
         
         return 'Info'
-    
-    async def _create_task_notification(self, task_id: int, task_name: str, task_type: str, status: str, target: str = '', vuln_count: int = 0, error: str = ''):
-        """创建任务完成/失败通知"""
+
+    async def _generate_and_save_report(
+        self,
+        task_id: int,
+        task_name: str,
+        target: str,
+        task_type: str,
+        scan_result: Dict[str, Any],
+        scan_config: Dict[str, Any] = None,
+        include_ai_analysis: bool = True
+    ) -> Optional[int]:
+        """
+        统一的报告生成和保存方法
+        
+        Args:
+            task_id: 任务ID
+            task_name: 任务名称
+            target: 目标地址
+            task_type: 任务类型
+            scan_result: 扫描结果
+            scan_config: 扫描配置
+            include_ai_analysis: 是否包含AI分析
+            
+        Returns:
+            Optional[int]: 报告ID，失败返回None
+        """
         try:
-            from backend.models import Notification, User
+            logger.info(f"[Report] 开始为任务 {task_id} 生成报告...")
             
-            logger.info(f"[Notification] 开始创建通知: task_id={task_id}, task_name={task_name}, status={status}")
+            vulnerabilities = []
+            if scan_result:
+                if 'vulnerabilities' in scan_result:
+                    vulns_data = scan_result.get('vulnerabilities', [])
+                    for vuln in vulns_data:
+                        if isinstance(vuln, dict):
+                            vulnerabilities.append({
+                                'type': vuln.get('vuln_type', vuln.get('type', 'Unknown')),
+                                'severity': self.standardize_severity(vuln.get('severity', 'info')),
+                                'title': vuln.get('title', vuln.get('name', 'Unknown Vulnerability')),
+                                'description': vuln.get('description', ''),
+                                'url': vuln.get('url', target),
+                                'payload': vuln.get('payload', ''),
+                                'evidence': vuln.get('evidence', ''),
+                                'remediation': vuln.get('remediation', vuln.get('solution', ''))
+                            })
+                elif 'details' in scan_result:
+                    for detail in scan_result.get('details', []):
+                        if detail.get('vulnerable'):
+                            vulnerabilities.append({
+                                'type': detail.get('poc_type', 'POC'),
+                                'severity': self.standardize_severity(detail.get('severity', 'high')),
+                                'title': f"POC验证: {detail.get('poc_type', 'Unknown')}",
+                                'description': detail.get('output', ''),
+                                'url': target,
+                                'payload': '',
+                                'evidence': detail.get('output', ''),
+                                'remediation': ''
+                            })
             
-            default_user = await User.get_or_none(id=1)
-            if not default_user:
-                logger.warning(f"[Notification] 无法创建通知: 默认用户不存在")
-                return
+            execution_history = []
+            if scan_result and 'execution_history' in scan_result:
+                execution_history = scan_result['execution_history']
             
-            if status == 'completed':
-                title = f"任务完成: {task_name}"
-                if vuln_count > 0:
-                    message = f"扫描任务 {task_name} 已完成，目标: {target}，发现 {vuln_count} 个漏洞。"
-                    notif_type = 'scan-complete'
-                else:
-                    message = f"扫描任务 {task_name} 已完成，目标: {target}，未发现漏洞。"
-                    notif_type = 'scan-complete'
-            elif status == 'failed':
-                title = f"任务失败: {task_name}"
-                message = f"扫描任务 {task_name} 执行失败，目标: {target}。错误: {error}"
-                notif_type = 'scan-failed'
-            else:
-                logger.info(f"[Notification] 跳过创建通知: status={status} 不是 completed 或 failed")
-                return
+            tool_results = {}
+            if scan_result:
+                tool_results = {
+                    'scan_summary': scan_result.get('scan_summary', {}),
+                    'scan_details': scan_result.get('scan_details', {}),
+                    'total': scan_result.get('total', 0),
+                    'vulnerable_count': scan_result.get('vulnerable_count', 0)
+                }
             
-            notification = await Notification.create(
-                user=default_user,
-                title=title,
-                message=message,
-                type=notif_type,
-                read=False
+            target_context = {
+                'target': target,
+                'task_type': task_type,
+                'scan_config': scan_config or {},
+                'vuln_types_scanned': scan_result.get('vuln_types_scanned', []) if scan_result else [],
+                'poc_types': scan_result.get('scan_config', {}).get('poc_types', []) if scan_result else []
+            }
+            
+            report_data = await report_service.generate_report(
+                task_id=str(task_id),
+                task_name=task_name,
+                target=target,
+                vulnerabilities=vulnerabilities,
+                execution_history=execution_history,
+                tool_results=tool_results,
+                target_context=target_context,
+                include_ai_analysis=include_ai_analysis,
+                scan_time=datetime.utcnow().isoformat()
             )
             
-            logger.info(f"[Notification] 通知创建成功: id={notification.id}, title={title}")
+            report_id = await report_service.save_report_to_db(
+                report_data=report_data,
+                task_id=task_id,
+                report_name=f"{task_type.upper()} Report - {target}",
+                report_type="json"
+            )
             
-            await manager.broadcast({
-                "type": "new_notification",
-                "payload": {
-                    "id": notification.id,
-                    "title": title,
-                    "message": message,
-                    "type": notif_type,
-                    "created_at": notification.created_at.isoformat() if notification.created_at else None,
-                    "read": False
-                }
-            })
+            logger.info(f"[Report] 任务 {task_id} 报告生成成功 | 报告ID: {report_id} | 风险评分: {report_data.risk_assessment.score}")
             
-            logger.info(f"[Notification] 通知已广播到 WebSocket: id={notification.id}")
+            return report_id
             
         except Exception as e:
-            logger.error(f"[Notification] 创建任务通知失败: {e}", exc_info=True)
+            logger.error(f"[Report] 任务 {task_id} 报告生成失败: {e}", exc_info=True)
+            return None
+    
+    async def _create_task_notification(self, task_id: int, task_name: str, task_type: str, status: str, target: str = '', vuln_count: int = 0, error: str = ''):
+        """创建任务完成/失败通知 (使用服务层封装)"""
+        await notification_service.create_task_notification(
+            task_id=task_id,
+            task_name=task_name,
+            task_type=task_type,
+            status=status,
+            target=target,
+            vuln_count=vuln_count,
+            error=error,
+            user_id=1
+        )
     
     async def execute_scan_task(self, task_id: int, target: str, scan_config: Dict):
         """
@@ -1073,6 +1293,20 @@ class TaskExecutor:
                         target=task.target,
                         vuln_count=vuln_count
                     )
+
+                    try:
+                        result_data = json.loads(task.result) if task.result else {}
+                        await self._generate_and_save_report(
+                            task_id=task_id,
+                            task_name=task.task_name,
+                            target=task.target,
+                            task_type='awvs_scan',
+                            scan_result=result_data,
+                            scan_config=json.loads(task.config) if task.config else {},
+                            include_ai_analysis=True
+                        )
+                    except Exception as report_error:
+                        logger.error(f"[AWVS] 任务 {task_id} 报告生成异常: {report_error}", exc_info=True)
 
                     await manager.broadcast({
                         "type": "task_completed",
@@ -1249,9 +1483,27 @@ class TaskExecutor:
             logger.error(f"任务 {task_id} 保存扫描结果失败: {str(e)}", exc_info=True)
 
     async def execute_poc_task(self, task_id: int, target: str, scan_config: Dict):
-        """执行POC扫描任务 (Dynamic Engine Integrated)"""
+        """
+        执行POC扫描任务 (Dynamic Engine Integrated)
+        
+        支持多种 POC 验证模式:
+        1. 单个 POC 验证: scan_config 中指定单个 poc_type
+        2. 批量 POC 验证: scan_config 中指定 poc_types 列表
+        3. 漏洞列表验证: scan_config 中指定 vulnerabilities 列表
+        4. 知识库 POC 验证: 从 VulnerabilityKB 加载 POC
+        
+        Args:
+            task_id: 任务ID
+            target: 目标URL
+            scan_config: 扫描配置，支持以下字段:
+                - poc_type: 单个POC类型 (如 'weblogic_cve_2020_2551')
+                - poc_types: POC类型列表 (如 ['weblogic', 'struts2'])
+                - vulnerabilities: 漏洞信息列表
+                - use_dynamic_engine: 是否使用动态引擎 (默认True)
+                - batch_size: 批量验证时的批次大小 (默认5)
+        """
         try:
-            from backend.models import Task, POCScanResult, VulnerabilityKB
+            from backend.models import Task, POCScanResult, VulnerabilityKB, Vulnerability
             from tortoise.expressions import Q
             
             task = await Task.get(id=task_id)
@@ -1259,113 +1511,558 @@ class TaskExecutor:
             task.progress = 5
             await task.save()
             
-            logger.info(f"Starting POC verification task {task_id} for {target}")
+            start_time = time.time()
+            use_dynamic_engine = scan_config.get('use_dynamic_engine', True)
+            batch_size = scan_config.get('batch_size', 5)
             
-            # 1. Determine vulnerabilities to verify
+            logger.info(f"[POC] 开始 POC 验证任务 {task_id}, 目标: {target}")
+            
             vulns_to_verify = []
+            poc_types_to_run = []
             
-            # Case A: Explicit vulnerability list (from Agent or previous scan)
-            if 'vulnerabilities' in scan_config:
+            if 'vulnerabilities' in scan_config and scan_config['vulnerabilities']:
                 vulns_to_verify = scan_config['vulnerabilities']
-                
-            # Case B: POC types/names/CVEs (Legacy/Manual)
+                logger.info(f"[POC] 任务 {task_id}: 从漏洞列表加载 {len(vulns_to_verify)} 个漏洞")
+            
+            elif 'poc_type' in scan_config and scan_config['poc_type']:
+                poc_type = scan_config['poc_type']
+                if poc_type in POC_PLUGIN_MAPPING:
+                    poc_types_to_run = [poc_type]
+                else:
+                    matching_types = [pt for pt in POC_PLUGIN_MAPPING.keys() if poc_type.lower() in pt.lower()]
+                    poc_types_to_run = matching_types if matching_types else [poc_type]
+                logger.info(f"[POC] 任务 {task_id}: 单个 POC 类型 {poc_types_to_run}")
+            
             elif 'poc_types' in scan_config:
                 requested_pocs = scan_config['poc_types']
                 use_all = not requested_pocs or 'all' in requested_pocs
                 
                 if use_all:
-                    # Get all KB entries with POCs
+                    poc_types_to_run = list(POC_PLUGIN_MAPPING.keys())
                     kb_pocs = await VulnerabilityKB.filter(has_poc=True).all()
+                    for kb in kb_pocs:
+                        vulns_to_verify.append({
+                            "title": kb.name,
+                            "cve_id": kb.cve_id,
+                            "description": kb.description,
+                            "severity": kb.severity,
+                            "poc_code": kb.poc_code
+                        })
                 else:
-                    kb_pocs = []
                     for req in requested_pocs:
-                        items = await VulnerabilityKB.filter(Q(name=req) | Q(cve_id=req)).all()
-                        kb_pocs.extend(items)
+                        if req in POC_PLUGIN_MAPPING:
+                            poc_types_to_run.append(req)
+                        else:
+                            matching_types = [pt for pt in POC_PLUGIN_MAPPING.keys() if req.lower() in pt.lower()]
+                            poc_types_to_run.extend(matching_types)
+                            
+                            items = await VulnerabilityKB.filter(Q(name=req) | Q(cve_id=req)).all()
+                            for kb in items:
+                                vulns_to_verify.append({
+                                    "title": kb.name,
+                                    "cve_id": kb.cve_id,
+                                    "description": kb.description,
+                                    "severity": kb.severity,
+                                    "poc_code": kb.poc_code
+                                })
                 
-                # Convert KB items to vuln_info dicts
-                for kb in kb_pocs:
-                    vulns_to_verify.append({
-                        "title": kb.name,
-                        "cve_id": kb.cve_id,
-                        "description": kb.description,
-                        "severity": kb.severity,
-                        "poc_code": kb.poc_code 
-                    })
-
-            if not vulns_to_verify:
-                logger.warning(f"Task {task_id}: No vulnerabilities to verify")
-                task.status = 'completed'
-                task.result = json.dumps({'message': 'No vulnerabilities selected'})
-                await task.save()
-                return
-
-            # 2. Execute Dynamic Verification (Parallel)
-            total_vulns = len(vulns_to_verify)
-            completed_count = 0
-            vulnerable_count = 0
-            results_summary = []
+                logger.info(f"[POC] 任务 {task_id}: 批量 POC 类型 {poc_types_to_run}, 知识库 POC {len(vulns_to_verify)} 个")
             
-            # Batch size to avoid overwhelming
-            batch_size = 5
+            else:
+                poc_types_to_run = list(POC_PLUGIN_MAPPING.keys())
+                logger.info(f"[POC] 任务 {task_id}: 未指定 POC 类型，运行所有 {len(poc_types_to_run)} 个 POC")
             
-            for i in range(0, total_vulns, batch_size):
-                if not self.is_running:
-                    break
-
-                batch = vulns_to_verify[i:i+batch_size]
-                tasks = []
-                for vuln in batch:
-                    # Ensure vuln is a dict
-                    if not isinstance(vuln, dict):
-                        continue
-                    tasks.append(dynamic_engine.verify_vulnerability(target, vuln))
-                
-                if not tasks:
-                    continue
-
-                # Execute batch
-                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                for res in batch_results:
-                    if isinstance(res, Exception):
-                        logger.error(f"Verification error in task {task_id}: {res}")
-                        continue
-                        
-                    results_summary.append(res)
-                    
-                    if res.get('vulnerable'):
-                        vulnerable_count += 1
-                        # Create legacy POCScanResult for compatibility
-                        try:
-                            await POCScanResult.create(
-                                task=task,
-                                poc_type=res.get('poc_id', 'unknown'),
-                                target=target,
-                                vulnerable=True,
-                                message=str(res.get('output', ''))[:500],
-                                severity="High", 
-                                cve_id=res.get('cve_id')
-                            )
-                        except Exception as e:
-                            logger.error(f"Failed to save POCScanResult: {e}")
-
-                completed_count += len(batch)
-                task.progress = int((completed_count / total_vulns) * 100)
-                await task.save()
-
-            # 3. Finalize
-            task.status = 'completed'
-            task.result = json.dumps({
-                'total': total_vulns,
-                'vulnerable_count': vulnerable_count,
-                'details': results_summary
-            }, default=str)
+            task.progress = 10
             await task.save()
-            logger.info(f"Task {task_id} POC verification completed")
-
+            
+            results_summary = []
+            vulnerable_count = 0
+            total_items = len(vulns_to_verify) + len(poc_types_to_run)
+            completed_count = 0
+            
+            if poc_types_to_run:
+                logger.info(f"[POC] 任务 {task_id}: 开始执行 {len(poc_types_to_run)} 个内置 POC")
+                
+                for i in range(0, len(poc_types_to_run), batch_size):
+                    if not self.is_running:
+                        break
+                    
+                    batch = poc_types_to_run[i:i+batch_size]
+                    batch_tasks = []
+                    
+                    for poc_type in batch:
+                        batch_tasks.append(self._execute_single_poc(poc_type, target, task))
+                    
+                    batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                    
+                    for result in batch_results:
+                        if isinstance(result, Exception):
+                            logger.error(f"[POC] 任务 {task_id} POC 执行异常: {result}")
+                            continue
+                        
+                        results_summary.append(result)
+                        if result.get('vulnerable'):
+                            vulnerable_count += 1
+                            try:
+                                await POCScanResult.create(
+                                    task=task,
+                                    poc_type=result.get('poc_type', 'unknown'),
+                                    target=target,
+                                    vulnerable=True,
+                                    message=str(result.get('output', ''))[:500],
+                                    severity=result.get('severity', 'High'),
+                                    cve_id=result.get('cve_id')
+                                )
+                            except Exception as e:
+                                logger.error(f"[POC] 保存 POCScanResult 失败: {e}")
+                    
+                    completed_count += len(batch)
+                    progress = 10 + int((completed_count / total_items) * 80) if total_items > 0 else 90
+                    task.progress = min(progress, 90)
+                    await task.save()
+            
+            if vulns_to_verify and use_dynamic_engine:
+                logger.info(f"[POC] 任务 {task_id}: 开始使用动态引擎验证 {len(vulns_to_verify)} 个漏洞")
+                
+                for i in range(0, len(vulns_to_verify), batch_size):
+                    if not self.is_running:
+                        break
+                    
+                    batch = vulns_to_verify[i:i+batch_size]
+                    batch_tasks = []
+                    
+                    for vuln in batch:
+                        if isinstance(vuln, dict):
+                            batch_tasks.append(dynamic_engine.verify_vulnerability(target, vuln))
+                    
+                    if not batch_tasks:
+                        continue
+                    
+                    batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                    
+                    for result in batch_results:
+                        if isinstance(result, Exception):
+                            logger.error(f"[POC] 任务 {task_id} 动态验证异常: {result}")
+                            continue
+                        
+                        results_summary.append(result)
+                        if result.get('vulnerable'):
+                            vulnerable_count += 1
+                            try:
+                                await POCScanResult.create(
+                                    task=task,
+                                    poc_type=result.get('poc_id', 'dynamic'),
+                                    target=target,
+                                    vulnerable=True,
+                                    message=str(result.get('output', ''))[:500],
+                                    severity='High',
+                                    cve_id=result.get('cve_id')
+                                )
+                            except Exception as e:
+                                logger.error(f"[POC] 保存动态验证结果失败: {e}")
+                    
+                    completed_count += len(batch)
+                    progress = 10 + int((completed_count / total_items) * 80) if total_items > 0 else 90
+                    task.progress = min(progress, 90)
+                    await task.save()
+            
+            duration = time.time() - start_time
+            
+            result_data = {
+                'total': total_items,
+                'vulnerable_count': vulnerable_count,
+                'safe_count': total_items - vulnerable_count,
+                'details': results_summary,
+                'duration_seconds': round(duration, 2),
+                'scan_config': {
+                    'target': target,
+                    'poc_types': poc_types_to_run,
+                    'use_dynamic_engine': use_dynamic_engine
+                }
+            }
+            
+            task.status = 'completed'
+            task.progress = 100
+            task.result = json.dumps(result_data, default=str)
+            await task.save()
+            
+            logger.info(f"[POC] 任务 {task_id} 完成, 发现 {vulnerable_count} 个漏洞, 耗时 {duration:.2f}秒")
+            
+            await self._create_task_notification(
+                task_id=task_id,
+                task_name=task.task_name,
+                task_type='poc_scan',
+                status='completed',
+                target=target,
+                vuln_count=vulnerable_count
+            )
+            
+            await manager.broadcast({
+                "type": "task_completed",
+                "payload": {
+                    "task_id": task_id,
+                    "status": "completed",
+                    "progress": 100,
+                    "result": result_data,
+                    "duration": duration
+                }
+            })
+            
+            try:
+                await self._generate_and_save_report(
+                    task_id=task_id,
+                    task_name=task.task_name,
+                    target=target,
+                    task_type='poc_scan',
+                    scan_result=result_data,
+                    scan_config=scan_config,
+                    include_ai_analysis=True
+                )
+            except Exception as report_error:
+                logger.error(f"[POC] 任务 {task_id} 报告生成异常: {report_error}", exc_info=True)
+            
         except Exception as e:
-            logger.error(f"Task {task_id} failed: {e}", exc_info=True)
-            await self._handle_task_failure(task_id, str(e))
+            logger.error(f"[POC] 任务 {task_id} 执行失败: {e}", exc_info=True)
+            await self._handle_task_failure(task_id, str(e), e)
+
+    async def _execute_single_poc(self, poc_type: str, target: str, task) -> Dict:
+        """
+        执行单个 POC 验证
+        
+        Args:
+            poc_type: POC 类型
+            target: 目标 URL
+            task: 任务对象
+            
+        Returns:
+            Dict: 验证结果
+        """
+        import importlib
+        
+        result = {
+            "poc_type": poc_type,
+            "target": target,
+            "vulnerable": False,
+            "output": "",
+            "error": None
+        }
+        
+        try:
+            if poc_type in POC_PLUGIN_MAPPING:
+                poc_info = POC_PLUGIN_MAPPING[poc_type]
+                module_path = poc_info['module']
+                class_name = poc_info['class']
+                
+                module = importlib.import_module(module_path)
+                poc_func = getattr(module, class_name)
+                
+                if callable(poc_func):
+                    poc_result = poc_func(target)
+                    
+                    if isinstance(poc_result, tuple) and len(poc_result) == 2:
+                        is_vuln, message = poc_result
+                        result['vulnerable'] = bool(is_vuln)
+                        result['output'] = str(message)
+                    elif isinstance(poc_result, dict):
+                        result['vulnerable'] = poc_result.get('vulnerable', False)
+                        result['output'] = poc_result.get('output', '')
+                        result['error'] = poc_result.get('error')
+                    elif isinstance(poc_result, bool):
+                        result['vulnerable'] = poc_result
+                        result['output'] = "Vulnerable" if poc_result else "Safe"
+                else:
+                    result['error'] = f"POC {class_name} 不是可调用对象"
+            else:
+                result['error'] = f"未知的 POC 类型: {poc_type}"
+                
+        except Exception as e:
+            result['error'] = str(e)
+            logger.error(f"[POC] 执行 POC {poc_type} 失败: {e}")
+        
+        return result
+
+    async def execute_batch_poc_verification(self, task_id: int, targets: List[str], scan_config: Dict):
+        """
+        执行批量 POC 验证 (多目标)
+        
+        对多个目标执行相同的 POC 验证
+        
+        Args:
+            task_id: 任务ID
+            targets: 目标URL列表
+            scan_config: 扫描配置
+        """
+        from backend.models import Task
+        
+        task = await Task.get(id=task_id)
+        task.status = 'running'
+        task.progress = 5
+        await task.save()
+        
+        poc_types = scan_config.get('poc_types', list(POC_PLUGIN_MAPPING.keys()))
+        max_concurrent = scan_config.get('max_concurrent', 3)
+        
+        logger.info(f"[BatchPOC] 任务 {task_id} 开始批量验证 {len(targets)} 个目标, POC 类型: {poc_types}")
+        
+        all_results = {}
+        completed_count = 0
+        total_count = len(targets)
+        
+        semaphore = asyncio.Semaphore(max_concurrent)
+        
+        async def verify_single_target(target: str):
+            async with semaphore:
+                try:
+                    single_config = {**scan_config, 'poc_types': poc_types}
+                    target_results = []
+                    for poc_type in poc_types:
+                        result = await self._execute_single_poc(poc_type, target, task)
+                        target_results.append(result)
+                    return target, target_results
+                except Exception as e:
+                    logger.error(f"[BatchPOC] 验证目标 {target} 失败: {e}")
+                    return target, []
+        
+        tasks = [verify_single_target(t) for t in targets]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"[BatchPOC] 任务异常: {result}")
+                continue
+            target, target_results = result
+            all_results[target] = target_results
+            completed_count += 1
+            
+            task.progress = int((completed_count / total_count) * 100)
+            await task.save()
+        
+        vulnerable_targets = [t for t, results in all_results.items() if any(r.get('vulnerable') for r in results)]
+        
+        task.status = 'completed'
+        task.progress = 100
+        task.result = json.dumps({
+            "batch_verification_summary": {
+                "total_targets": total_count,
+                "vulnerable_targets": len(vulnerable_targets),
+                "poc_types_used": poc_types
+            },
+            "results": all_results
+        }, default=str)
+        await task.save()
+        
+        logger.info(f"[BatchPOC] 任务 {task_id} 批量验证完成, 发现 {len(vulnerable_targets)} 个易受攻击目标")
+
+    async def execute_vuln_scan_task(self, task_id: int, target: str, scan_config: Dict, task_type: str):
+        """
+        执行漏洞扫描任务
+        
+        使用 vulnerability_scan_plugins/manager.py 中的 VulnScanManager
+        支持并发扫描多个漏洞类型
+        
+        Args:
+            task_id: 任务ID
+            target: 扫描目标URL
+            scan_config: 扫描配置
+            task_type: 任务类型 (sqli, xss, csrf, ssrf, lfi, cmdi, fileupload, weakpass, infoleak)
+        """
+        from backend.models import Task, Vulnerability
+        from backend.vulnerability_scan_plugins.manager import plugin_manager
+        from backend.vulnerability_scan_plugins.base import VulnerabilitySeverity
+        
+        task = await Task.get(id=task_id)
+        task.status = 'running'
+        task.progress = 5
+        await task.save()
+        
+        logger.info(f"[VulnScan] 漏洞扫描任务 {task_id} 开始执行: {target}, 类型: {task_type}")
+        
+        start_time = time.time()
+        
+        try:
+            plugin_manager.load_plugins_from_directory()
+            
+            vuln_types_to_scan = scan_config.get('vuln_types', [])
+            if task_type in VULN_SCAN_PLUGIN_MAPPING:
+                vuln_types_to_scan = [task_type]
+            elif not vuln_types_to_scan:
+                vuln_types_to_scan = list(VULN_SCAN_PLUGIN_MAPPING.keys())
+            
+            max_concurrent = scan_config.get('max_concurrent', 3)
+            
+            logger.info(f"[VulScan] 任务 {task_id} 将扫描 {len(vuln_types_to_scan)} 个漏洞类型: {vuln_types_to_scan}")
+            
+            task.progress = 10
+            await task.save()
+            
+            results = await plugin_manager.scan_all_async(
+                target=target,
+                plugin_names=vuln_types_to_scan,
+                max_concurrent=max_concurrent
+            )
+            
+            aggregated = plugin_manager.aggregate_results(results)
+            
+            task.progress = 80
+            await task.save()
+            
+            saved_vulns = []
+            for vuln_data in aggregated.get('vulnerabilities', []):
+                try:
+                    severity = vuln_data.get('severity', 'info')
+                    if isinstance(severity, str):
+                        severity = self.standardize_severity(severity)
+                    
+                    vuln = await Vulnerability.create(
+                        task=task,
+                        vuln_type=vuln_data.get('vuln_type', 'Unknown'),
+                        severity=severity,
+                        title=vuln_data.get('title', 'Unknown Vulnerability'),
+                        description=vuln_data.get('description', ''),
+                        url=vuln_data.get('url', target),
+                        payload=vuln_data.get('payload', ''),
+                        evidence=vuln_data.get('evidence', ''),
+                        remediation=vuln_data.get('solution', ''),
+                        source='vuln_scan_plugin'
+                    )
+                    saved_vulns.append(vuln)
+                except Exception as e:
+                    logger.error(f"[VulnScan] 保存漏洞失败: {e}")
+            
+            duration = time.time() - start_time
+            
+            result_data = {
+                "scan_summary": {
+                    "target": target,
+                    "task_type": task_type,
+                    "vuln_types_scanned": vuln_types_to_scan,
+                    "total_vulnerabilities": aggregated.get('total_vulnerabilities', 0),
+                    "unique_vulnerabilities": aggregated.get('unique_vulnerabilities', 0),
+                    "severity_distribution": aggregated.get('severity_distribution', {}),
+                    "duration_seconds": round(duration, 2)
+                },
+                "scan_details": {
+                    "successful_plugins": aggregated.get('scan_summary', {}).get('successful_plugins', []),
+                    "failed_plugins": aggregated.get('scan_summary', {}).get('failed_plugins', []),
+                    "total_requests": aggregated.get('scan_summary', {}).get('total_requests', 0)
+                },
+                "vulnerabilities": aggregated.get('vulnerabilities', [])
+            }
+            
+            task.status = 'completed'
+            task.progress = 100
+            task.result = json.dumps(result_data, default=str)
+            await task.save()
+            
+            logger.info(f"[VulnScan] 任务 {task_id} 完成，发现 {len(saved_vulns)} 个漏洞，耗时 {duration:.2f}秒")
+            
+            await self._create_task_notification(
+                task_id=task_id,
+                task_name=task.task_name,
+                task_type=task_type,
+                status='completed',
+                target=target,
+                vuln_count=len(saved_vulns)
+            )
+            
+            await manager.broadcast({
+                "type": "task_completed",
+                "payload": {
+                    "task_id": task_id,
+                    "status": "completed",
+                    "progress": 100,
+                    "result": result_data,
+                    "vulnerabilities": saved_vulns,
+                    "duration": duration
+                }
+            })
+            
+            try:
+                await self._generate_and_save_report(
+                    task_id=task_id,
+                    task_name=task.task_name,
+                    target=target,
+                    task_type=task_type,
+                    scan_result=result_data,
+                    scan_config=scan_config,
+                    include_ai_analysis=True
+                )
+            except Exception as report_error:
+                logger.error(f"[VulnScan] 任务 {task_id} 报告生成异常: {report_error}", exc_info=True)
+            
+        except Exception as e:
+            logger.error(f"[VulnScan] 任务 {task_id} 执行失败: {e}", exc_info=True)
+            await self._handle_task_failure(task_id, str(e), e)
+
+    async def execute_batch_vuln_scan(self, task_id: int, target: str, scan_config: Dict):
+        """
+        执行批量漏洞扫描
+        
+        同时运行多个漏洞扫描插件，支持自定义并发控制
+        
+        Args:
+            task_id: 任务ID
+            target: 扫描目标URL
+            scan_config: 扫描配置，包含:
+                - vuln_types: 要扫描的漏洞类型列表
+                - max_concurrent: 最大并发数
+                - timeout_per_scan: 每个扫描的超时时间
+        """
+        from backend.models import Task
+        
+        task = await Task.get(id=task_id)
+        task.status = 'running'
+        task.progress = 5
+        await task.save()
+        
+        vuln_types = scan_config.get('vuln_types', list(VULN_SCAN_PLUGIN_MAPPING.keys()))
+        max_concurrent = scan_config.get('max_concurrent', 3)
+        
+        logger.info(f"[BatchVulnScan] 任务 {task_id} 开始批量扫描: {target}, 漏洞类型: {vuln_types}")
+        
+        all_results = {}
+        completed_count = 0
+        total_count = len(vuln_types)
+        
+        semaphore = asyncio.Semaphore(max_concurrent)
+        
+        async def scan_single_vuln_type(vuln_type: str):
+            async with semaphore:
+                try:
+                    single_scan_config = {**scan_config, 'vuln_types': [vuln_type]}
+                    await self.execute_vuln_scan_task(task_id, target, single_scan_config, vuln_type)
+                    return vuln_type, True, None
+                except Exception as e:
+                    logger.error(f"[BatchVulnScan] 扫描 {vuln_type} 失败: {e}")
+                    return vuln_type, False, str(e)
+        
+        tasks = [scan_single_vuln_type(vt) for vt in vuln_types]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"[BatchVulnScan] 任务异常: {result}")
+                continue
+            vuln_type, success, error = result
+            all_results[vuln_type] = {
+                "success": success,
+                "error": error
+            }
+            completed_count += 1
+            
+            task.progress = int((completed_count / total_count) * 100)
+            await task.save()
+        
+        task.status = 'completed'
+        task.progress = 100
+        task.result = json.dumps({
+            "batch_scan_summary": all_results,
+            "total_scans": total_count,
+            "successful_scans": sum(1 for r in all_results.values() if r['success'])
+        })
+        await task.save()
+        
+        logger.info(f"[BatchVulnScan] 任务 {task_id} 批量扫描完成")
 
     async def _run_kb_poc(self, kb_obj, target):
         """执行知识库 POC (基于 Pocsuite3)"""
@@ -1439,7 +2136,19 @@ class TaskExecutor:
         self.task_heartbeats[task_id] = time.time()
 
     async def execute_plugin_task(self, task_id: int, target: str, scan_config: Dict, task_type: str):
-        """执行通用插件扫描任务 (多进程版)"""
+        """
+        执行通用插件扫描任务 (多进程版)
+        
+        支持所有 plugins 目录下的插件类型，使用 task_type_registry 获取超时配置
+        
+        Args:
+            task_id: 任务ID
+            target: 扫描目标
+            scan_config: 扫描配置
+            task_type: 任务类型 (portscan, infoleak, webside, baseinfo, webweight, 
+                                 iplocating, cdnexist, waf, whatcms, subdomain, dirscan, 
+                                 crawler, loginfo, randheader, common)
+        """
         try:
             from backend.models import Task
             task = await Task.get(id=task_id)
@@ -1447,14 +2156,12 @@ class TaskExecutor:
             task.progress = 10
             await task.save()
             
-            logger.info(f"插件任务 {task_id} ({task_type}) 开始执行: {target}")
+            logger.info(f"[Plugin] 插件任务 {task_id} ({task_type}) 开始执行: {target}")
             
             agent_url = f"http://{settings.HOST}:{settings.PORT}"
             
-            # 初始化心跳
             self.task_heartbeats[task_id] = time.time()
             
-            # 启动进程
             p = multiprocessing.Process(
                 target=run_plugin_process,
                 args=(task_id, task_type, target, scan_config, agent_url)
@@ -1463,57 +2170,68 @@ class TaskExecutor:
             self.task_processes[task_id] = p
             self.running_task_id = task_id
             
-            # 设置硬超时 (Requirement 4.1)
-            # 端口扫描 ≤ 15 min, WAF 识别 ≤ 5 min, AWVS 扫描 ≤ 5 hours
-            timeout_seconds = 300 # default 5 min
-            if task_type == 'port_scan': timeout_seconds = 15 * 60
-            elif task_type == 'waf_check': timeout_seconds = 5 * 60
-            elif task_type == 'awvs_scan': timeout_seconds = 5 * 60 * 60
+            timeout_seconds = self._get_task_timeout(task_type, scan_config)
+            
+            heartbeat_timeout = scan_config.get('heartbeat_timeout', 90)
+            
+            logger.info(f"[Plugin] 任务 {task_id} 超时设置: {timeout_seconds}s, 心跳超时: {heartbeat_timeout}s")
             
             start_time = time.time()
+            last_progress_update = start_time
             
-            # 等待进程结束或被取消
             try:
                 while p.is_alive():
-                    # 检查是否取消
                     if task_id in self.cancelled_task_ids:
-                        logger.info(f"检测到任务 {task_id} 取消信号，终止进程")
+                        logger.info(f"[Plugin] 检测到任务 {task_id} 取消信号，终止进程")
                         self._kill_process(p, task_id)
                         task = await Task.get(id=task_id)
                         task.status = 'aborted'
                         await task.save()
                         break
                     
-                    # 检查硬超时 (4.1)
-                    if time.time() - start_time > timeout_seconds:
-                        logger.warning(f"任务 {task_id} 超时 ({timeout_seconds}s)，强制终止")
+                    elapsed_time = time.time() - start_time
+                    if elapsed_time > timeout_seconds:
+                        logger.warning(f"[Plugin] 任务 {task_id} 超时 ({timeout_seconds}s)，强制终止")
                         self._kill_process(p, task_id)
                         task = await Task.get(id=task_id)
                         task.status = 'failed'
-                        task.result = json.dumps({"error": "Task execution timed out"})
+                        task.result = json.dumps({
+                            "error": "Task execution timed out",
+                            "timeout_seconds": timeout_seconds,
+                            "elapsed_seconds": round(elapsed_time, 2)
+                        })
                         await task.save()
                         break
                     
-                    # 检查心跳 (4.2)
-                    # 累计 3 次未收到心跳 (30s * 3 = 90s)
                     last_hb = self.task_heartbeats.get(task_id, start_time)
-                    if time.time() - last_hb > 90:
-                        logger.warning(f"任务 {task_id} 心跳丢失 (>90s)，强制终止")
+                    hb_elapsed = time.time() - last_hb
+                    if hb_elapsed > heartbeat_timeout:
+                        logger.warning(f"[Plugin] 任务 {task_id} 心跳丢失 (>{heartbeat_timeout}s)，强制终止")
                         self._kill_process(p, task_id)
                         task = await Task.get(id=task_id)
-                        task.status = 'aborted' # Or failed? Requirement says 'trigger abort'
-                        task.result = json.dumps({"error": "Heartbeat lost"})
+                        task.status = 'aborted'
+                        task.result = json.dumps({
+                            "error": "Heartbeat lost",
+                            "heartbeat_timeout": heartbeat_timeout,
+                            "last_heartbeat_ago": round(hb_elapsed, 2)
+                        })
                         await task.save()
                         break
+                    
+                    if time.time() - last_progress_update > 10:
+                        task = await Task.get(id=task_id)
+                        if task.progress < 90:
+                            task.progress = min(10 + int((elapsed_time / timeout_seconds) * 80), 90)
+                            await task.save()
+                        last_progress_update = time.time()
 
                     await asyncio.sleep(1)
             except asyncio.CancelledError:
-                logger.warning(f"插件任务 {task_id} 协程被取消，正在终止进程...")
+                logger.warning(f"[Plugin] 插件任务 {task_id} 协程被取消，正在终止进程...")
                 if p.is_alive():
                     self._kill_process(p, task_id)
                 raise
             
-            # 进程结束后清理
             if task_id in self.task_processes:
                 del self.task_processes[task_id]
             if task_id in self.task_heartbeats:
@@ -1521,12 +2239,11 @@ class TaskExecutor:
             if self.running_task_id == task_id:
                 self.running_task_id = None
             
-            logger.info(f"插件任务 {task_id} 进程已退出 (ExitCode: {p.exitcode})")
+            logger.info(f"[Plugin] 插件任务 {task_id} 进程已退出 (ExitCode: {p.exitcode})")
             
-            # 检查状态是否已由回调更新 (Requirement 3.2: 30s timeout)
-            # 循环检查直到状态改变或超时
             wait_start = time.time()
-            while time.time() - wait_start < 30:
+            callback_timeout = 30
+            while time.time() - wait_start < callback_timeout:
                 task = await Task.get(id=task_id)
                 if task.status != 'running':
                     break
@@ -1534,8 +2251,7 @@ class TaskExecutor:
             
             task = await Task.get(id=task_id)
             if task.status == 'running':
-                # 如果仍为running，说明回调失败或超时
-                logger.warning(f"任务 {task_id} 进程退出后 30s 内未收到完成回调，标记为 FAILED")
+                logger.warning(f"[Plugin] 任务 {task_id} 进程退出后 {callback_timeout}s 内未收到完成回调，标记为 FAILED")
                 if p.exitcode == 0:
                      task.result = json.dumps({"error": "No result callback received (Timeout 30s)"})
                 else:
@@ -1543,13 +2259,28 @@ class TaskExecutor:
                 task.status = 'failed'
                 await task.save()
 
+            if task.status == 'completed':
+                try:
+                    result_data = json.loads(task.result) if task.result else {}
+                    await self._generate_and_save_report(
+                        task_id=task_id,
+                        task_name=task.task_name,
+                        target=target,
+                        task_type=task_type,
+                        scan_result=result_data,
+                        scan_config=scan_config,
+                        include_ai_analysis=True
+                    )
+                except Exception as report_error:
+                    logger.error(f"[Plugin] 任务 {task_id} 报告生成异常: {report_error}", exc_info=True)
+
         except Exception as e:
-            logger.error(f"插件任务 {task_id} 执行失败: {str(e)}", exc_info=True)
+            logger.error(f"[Plugin] 插件任务 {task_id} 执行失败: {str(e)}", exc_info=True)
             try:
                 from backend.models import Task
                 task = await Task.get(id=task_id)
                 task.status = 'failed'
-                task.result = json.dumps({'error': str(e)})
+                task.result = json.dumps({'error': str(e), 'traceback': traceback.format_exc()})
                 await task.save()
             except:
                 pass
@@ -1563,6 +2294,124 @@ class TaskExecutor:
         if p.is_alive():
             logger.warning(f"任务 {task_id} 未响应 SIGTERM，发送 SIGKILL")
             p.kill()
+
+    def _log_execution_history(
+        self, 
+        task_id: int, 
+        task_type: str, 
+        status: str, 
+        duration: float = 0,
+        error: str = None,
+        result_summary: Dict = None
+    ):
+        """
+        记录任务执行历史
+        
+        Args:
+            task_id: 任务ID
+            task_type: 任务类型
+            status: 执行状态 (started, completed, failed, timeout, cancelled)
+            duration: 执行时长 (秒)
+            error: 错误信息
+            result_summary: 结果摘要
+        """
+        history_entry = {
+            "task_id": task_id,
+            "task_type": task_type,
+            "status": status,
+            "duration": round(duration, 2),
+            "timestamp": datetime.utcnow().isoformat(),
+            "error": error,
+            "result_summary": result_summary
+        }
+        
+        structured_logger.info(
+            f"Task execution history: {task_type} - {status}",
+            **history_entry
+        )
+        
+        if self.kafka_producer:
+            try:
+                self.kafka_producer.send("agent.execution.history", history_entry)
+            except Exception as e:
+                logger.error(f"Failed to send execution history to Kafka: {e}")
+
+    async def _handle_execution_error(
+        self, 
+        task_id: int, 
+        error: Exception, 
+        context: Dict = None
+    ):
+        """
+        统一处理执行错误
+        
+        Args:
+            task_id: 任务ID
+            error: 异常对象
+            context: 错误上下文信息
+        """
+        error_info = {
+            "task_id": task_id,
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "traceback": traceback.format_exc(),
+            "context": context or {},
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        logger.error(
+            f"[ErrorHandler] 任务 {task_id} 执行错误: {error_info['error_type']} - {error_info['error_message']}",
+            exc_info=True
+        )
+        
+        structured_logger.error(
+            f"Task execution error: {error_info['error_type']}",
+            **error_info
+        )
+        
+        await self._handle_task_failure(task_id, str(error), error)
+
+    def get_supported_task_types(self) -> Dict[str, List[str]]:
+        """
+        获取支持的任务类型列表
+        
+        Returns:
+            Dict: 按类别分组的任务类型列表
+        """
+        return {
+            "plugins": list(PLUGIN_TYPE_MAPPING.keys()),
+            "vulnerability_scan": list(VULN_SCAN_PLUGIN_MAPPING.keys()),
+            "poc": list(POC_PLUGIN_MAPPING.keys()),
+            "external": ["awvs_scan"],
+            "ai_agent": ["ai_agent_scan"]
+        }
+
+    def get_task_executor_info(self, task_type: str) -> Dict:
+        """
+        获取任务执行器信息
+        
+        Args:
+            task_type: 任务类型
+            
+        Returns:
+            Dict: 执行器信息
+        """
+        metadata = task_type_registry.get_task_type_metadata(task_type)
+        executor_type = task_type_registry.get_executor_type(task_type)
+        timeout = task_type_registry.get_task_type_timeout(task_type)
+        priority = task_type_registry.get_task_type_priority(task_type)
+        
+        return {
+            "task_type": task_type,
+            "executor_type": executor_type.value if executor_type else "unknown",
+            "timeout": timeout,
+            "priority": priority.value if priority else 3,
+            "metadata": metadata.to_dict() if metadata else None,
+            "supported": task_type in PLUGIN_TYPE_MAPPING or 
+                        task_type in VULN_SCAN_PLUGIN_MAPPING or 
+                        task_type in POC_PLUGIN_MAPPING or
+                        task_type in ["awvs_scan", "ai_agent_scan", "poc_scan"]
+        }
 
     def abort_task(self, task_id: int):
         """强制中止任务"""

@@ -83,6 +83,75 @@ class AIAnalysisData:
 
 
 @dataclass
+class WorkflowExecutionRecord:
+    """工作流执行记录"""
+    node_id: str = ""
+    node_name: str = ""
+    node_type: str = ""
+    status: str = "pending"
+    step_number: int = 0
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    duration_ms: Optional[float] = None
+    execution_time: Optional[float] = None
+    input_params: Dict[str, Any] = field(default_factory=dict)
+    output_data: Dict[str, Any] = field(default_factory=dict)
+    error: Optional[str] = None
+    tool_name: Optional[str] = None
+    task: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WorkflowTaskPlan:
+    """工作流任务规划"""
+    plan_id: str = ""
+    plan_name: str = ""
+    plan_type: str = "scan"
+    priority: int = 5
+    status: str = "pending"
+    dependencies: List[str] = field(default_factory=list)
+    estimated_time: Optional[float] = None
+    actual_time: Optional[float] = None
+    parameters: Dict[str, Any] = field(default_factory=dict)
+    result: Dict[str, Any] = field(default_factory=dict)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WorkflowData:
+    """工作流数据"""
+    workflow_id: str = ""
+    workflow_name: str = ""
+    status: str = "pending"
+    progress: int = 0
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    duration: Optional[float] = None
+    execution_history: List[WorkflowExecutionRecord] = field(default_factory=list)
+    task_plans: List[WorkflowTaskPlan] = field(default_factory=list)
+    graph_flow: Dict[str, Any] = field(default_factory=dict)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "workflow_id": self.workflow_id,
+            "workflow_name": self.workflow_name,
+            "status": self.status,
+            "progress": self.progress,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "duration": self.duration,
+            "execution_history": [r.to_dict() for r in self.execution_history],
+            "task_plans": [p.to_dict() for p in self.task_plans],
+            "graph_flow": self.graph_flow
+        }
+
+
+@dataclass
 class ReportData:
     """统一报告数据结构"""
     task_id: str = ""
@@ -100,6 +169,8 @@ class ReportData:
     tool_results: Dict[str, Any] = field(default_factory=dict)
     target_context: Dict[str, Any] = field(default_factory=dict)
     
+    workflow: Optional[WorkflowData] = None
+    
     def to_dict(self) -> Dict[str, Any]:
         data = {
             "task_id": self.task_id,
@@ -116,6 +187,8 @@ class ReportData:
         }
         if self.ai_analysis:
             data["ai_analysis"] = self.ai_analysis.to_dict()
+        if self.workflow:
+            data["workflow"] = self.workflow.to_dict()
         return data
 
 
@@ -281,7 +354,8 @@ class ReportService:
         tool_results: Dict[str, Any] = None,
         target_context: Dict[str, Any] = None,
         include_ai_analysis: bool = True,
-        scan_time: str = None
+        scan_time: str = None,
+        workflow_data: Dict[str, Any] = None
     ) -> ReportData:
         """
         生成统一报告数据
@@ -296,6 +370,7 @@ class ReportService:
             target_context: 目标上下文
             include_ai_analysis: 是否包含 AI 分析
             scan_time: 扫描时间
+            workflow_data: 工作流数据（包含执行历史、任务规划等）
             
         Returns:
             ReportData: 报告数据
@@ -313,6 +388,10 @@ class ReportService:
         report_data.execution_history = execution_history or []
         report_data.tool_results = tool_results or {}
         report_data.target_context = target_context or {}
+        
+        if workflow_data:
+            report_data.workflow = self._parse_workflow_data(workflow_data)
+            logger.info(f"📊 工作流数据已集成 | 执行记录: {len(report_data.workflow.execution_history)} | 任务规划: {len(report_data.workflow.task_plans)}")
         
         report_data.summary = self.calculate_summary(vulnerabilities)
         report_data.risk_assessment = self.calculate_risk_score(vulnerabilities)
@@ -333,6 +412,62 @@ class ReportService:
         
         logger.info(f"📄 报告数据生成完成 | 风险评分: {report_data.risk_assessment.score} | 风险等级: {report_data.risk_assessment.label}")
         return report_data
+    
+    def _parse_workflow_data(self, workflow_data: Dict[str, Any]) -> WorkflowData:
+        """
+        解析工作流数据
+        
+        Args:
+            workflow_data: 原始工作流数据字典
+            
+        Returns:
+            WorkflowData: 标准化的工作流数据对象
+        """
+        workflow = WorkflowData()
+        workflow.workflow_id = workflow_data.get("workflow_id", "")
+        workflow.workflow_name = workflow_data.get("workflow_name", "AI Security Scan")
+        workflow.status = workflow_data.get("status", "pending")
+        workflow.progress = workflow_data.get("progress", 0)
+        workflow.start_time = workflow_data.get("start_time")
+        workflow.end_time = workflow_data.get("end_time")
+        workflow.duration = workflow_data.get("duration")
+        workflow.graph_flow = workflow_data.get("graph_flow", {})
+        
+        for record in workflow_data.get("execution_history", []):
+            exec_record = WorkflowExecutionRecord(
+                node_id=record.get("node_id", ""),
+                node_name=record.get("node_name", ""),
+                node_type=record.get("node_type", ""),
+                status=record.get("status", "pending"),
+                step_number=record.get("step_number", 0),
+                start_time=record.get("start_time"),
+                end_time=record.get("end_time"),
+                duration_ms=record.get("duration_ms"),
+                execution_time=record.get("execution_time"),
+                input_params=record.get("input_params", {}),
+                output_data=record.get("output_data", {}),
+                error=record.get("error"),
+                tool_name=record.get("tool_name"),
+                task=record.get("task")
+            )
+            workflow.execution_history.append(exec_record)
+        
+        for plan in workflow_data.get("task_plans", []):
+            task_plan = WorkflowTaskPlan(
+                plan_id=plan.get("plan_id", ""),
+                plan_name=plan.get("plan_name", ""),
+                plan_type=plan.get("plan_type", "scan"),
+                priority=plan.get("priority", 5),
+                status=plan.get("status", "pending"),
+                dependencies=plan.get("dependencies", []),
+                estimated_time=plan.get("estimated_time"),
+                actual_time=plan.get("actual_time"),
+                parameters=plan.get("parameters", {}),
+                result=plan.get("result", {})
+            )
+            workflow.task_plans.append(task_plan)
+        
+        return workflow
     
     async def save_report_to_db(
         self,
@@ -480,6 +615,7 @@ class ReportService:
         
         vuln_items_html = self._render_vulnerabilities_html(report_data.vulnerabilities, language)
         ai_analysis_html = self._render_ai_analysis_html(report_data.ai_analysis, language) if report_data.ai_analysis else ""
+        workflow_html = self._render_workflow_html(report_data.workflow, language) if report_data.workflow else ""
         
         labels = {
             "report_title": "安全扫描报告" if language == Language.ZH_CN else "Security Scan Report",
@@ -536,11 +672,45 @@ class ReportService:
         .ai-analysis {{ background: #e8f4fd; border-left: 4px solid #3498db; padding: 20px; border-radius: 8px; }}
         .ai-analysis h3 {{ color: #3498db; margin-bottom: 15px; }}
         
+        .workflow-section {{ background: white; border-radius: 10px; padding: 30px; margin-bottom: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+        .workflow-section h2 {{ color: #333; border-bottom: 2px solid #10b981; padding-bottom: 10px; margin-bottom: 20px; }}
+        
+        .workflow-overview {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 25px; }}
+        .workflow-stat {{ background: #f8fafc; padding: 15px; border-radius: 8px; text-align: center; }}
+        .workflow-stat .value {{ font-size: 24px; font-weight: bold; color: #10b981; }}
+        .workflow-stat .label {{ font-size: 12px; color: #64748b; margin-top: 5px; }}
+        
+        .execution-timeline {{ margin-top: 20px; }}
+        .timeline-item {{ display: flex; gap: 15px; margin-bottom: 15px; padding: 15px; background: #f8fafc; border-radius: 8px; border-left: 3px solid #10b981; }}
+        .timeline-item.success {{ border-left-color: #10b981; }}
+        .timeline-item.failed {{ border-left-color: #ef4444; }}
+        .timeline-item.running {{ border-left-color: #3b82f6; }}
+        .timeline-item.pending {{ border-left-color: #94a3b8; }}
+        .timeline-step {{ min-width: 30px; height: 30px; background: #10b981; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; }}
+        .timeline-content {{ flex: 1; }}
+        .timeline-title {{ font-weight: 600; margin-bottom: 5px; }}
+        .timeline-meta {{ font-size: 12px; color: #64748b; }}
+        .timeline-duration {{ font-size: 12px; color: #10b981; font-weight: 500; }}
+        
+        .task-plans {{ margin-top: 20px; }}
+        .plan-item {{ display: flex; align-items: center; gap: 15px; padding: 12px 15px; background: #f8fafc; border-radius: 8px; margin-bottom: 10px; }}
+        .plan-priority {{ min-width: 30px; height: 30px; background: #667eea; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; }}
+        .plan-info {{ flex: 1; }}
+        .plan-name {{ font-weight: 600; }}
+        .plan-status {{ padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 500; }}
+        .status-completed {{ background: #d1fae5; color: #065f46; }}
+        .status-running {{ background: #dbeafe; color: #1e40af; }}
+        .status-pending {{ background: #f1f5f9; color: #475569; }}
+        .status-failed {{ background: #fee2e2; color: #991b1b; }}
+        
+        .progress-bar {{ width: 100%; height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin-top: 10px; }}
+        .progress-fill {{ height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.3s; }}
+        
         .footer {{ text-align: center; padding: 20px; color: #666; font-size: 12px; }}
         
         @media print {{
             body {{ background: white; }}
-            .section, .card, .vuln-item {{ box-shadow: none; border: 1px solid #ddd; }}
+            .section, .card, .vuln-item, .workflow-section {{ box-shadow: none; border: 1px solid #ddd; }}
         }}
     </style>
 </head>
@@ -596,6 +766,8 @@ class ReportService:
                 <div class="count" style="color: #95a5a6;">{summary.info_count}</div>
             </div>
         </div>
+        
+        {workflow_html}
         
         <div class="section">
             <h2>🔍 {labels['vulnerability_details']}</h2>

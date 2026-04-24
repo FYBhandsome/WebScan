@@ -169,8 +169,6 @@ async def create_verification_task(request: CreateVerificationTaskRequest):
         if not settings.POC_VERIFICATION_ENABLED:
             raise HTTPException(status_code=403, detail="POC 验证功能已禁用")
         
-        logger.info(f"创建 POC 验证任务: {request.poc_id} -> {request.target}")
-        
         verification_task = await poc_manager.create_verification_task(
             poc_id=request.poc_id,
             target=request.target,
@@ -201,11 +199,8 @@ async def create_verification_task(request: CreateVerificationTaskRequest):
         try:
             result.analysis = analysis_data
             await result.save()
-            logger.info(f"AI分析结果已保存到数据库: result_id={result.id}")
         except Exception as e:
             logger.error(f"保存AI分析结果失败: result_id={result.id}, error={str(e)}")
-        
-        logger.info(f"POC 验证任务完成: {verification_task.id}")
         
         return APIResponse(
             code=200,
@@ -290,8 +285,6 @@ async def create_batch_verification_tasks(request: CreateBatchVerificationTaskRe
         if not settings.POC_VERIFICATION_ENABLED:
             raise HTTPException(status_code=403, detail="POC 验证功能已禁用")
         
-        logger.info(f"批量创建 POC 验证任务,数量: {len(request.poc_tasks)}")
-        
         verification_tasks = []
         for poc_task in request.poc_tasks:
             task = await poc_manager.create_verification_task(
@@ -323,7 +316,6 @@ async def create_batch_verification_tasks(request: CreateBatchVerificationTaskRe
                 }
                 result.analysis = analysis_data
                 await result.save()
-                logger.debug(f"批量验证 - AI分析结果已保存: result_id={result.id}")
             except Exception as e:
                 logger.error(f"批量验证 - 保存分析结果失败: result_id={result.id}, error={str(e)}")
         
@@ -348,8 +340,6 @@ async def create_batch_verification_tasks(request: CreateBatchVerificationTaskRe
                 await task.save()
             except Exception as e:
                 logger.error(f"保存批量分析摘要到任务失败: task_id={task.id}, error={str(e)}")
-        
-        logger.info(f"批量验证完成: {len(results)}个结果, {analysis_summary.vulnerable_count}个漏洞")
         
         return APIResponse(
             code=200,
@@ -755,7 +745,6 @@ async def generate_verification_report(
                 ai_analysis=json.dumps(analysis_summary, ensure_ascii=False) if analysis_summary else None
             )
             await report_record.save()
-            logger.info(f"报告已保存到数据库: report_id={report_record.id}, task_id={task_id}")
         except Exception as e:
             logger.error(f"保存报告到数据库失败: {str(e)}")
         

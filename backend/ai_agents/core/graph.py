@@ -116,23 +116,6 @@ def _log_edge_traversal(task_id: str, from_node: str, to_node: str, condition: s
         logger.debug(f"[{timestamp}] [EDGE_STATE_SNAPSHOT] 任务ID: {task_id}, 状态快照: {json.dumps(state_snapshot, ensure_ascii=False, default=str)[:500]}")
 
 
-def _log_data_flow(task_id: str, flow_type: str, source: str, data: Any, description: str = ""):
-    """
-    记录数据流转日志
-    
-    Args:
-        task_id: 任务ID
-        flow_type: 流转类型(input/output/transform)
-        source: 数据来源
-        data: 数据内容
-        description: 描述
-    """
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    data_str = str(data)[:200] if data else "None"
-    log_msg = f"[{timestamp}] [DATA_FLOW] 任务ID: {task_id}, 类型: {flow_type}, 来源: {source}, 数据: {data_str}"
-    if description:
-        log_msg += f", 描述: {description}"
-    logger.debug(log_msg)
 
 
 def _log_error(task_id: str, node_name: str, error: Exception, context: Dict[str, Any] = None):

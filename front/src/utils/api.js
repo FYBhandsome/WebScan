@@ -869,51 +869,6 @@ export const pocVerificationApi = {
   }
 }
 
-export const pocFilesApi = {
-  getFiles: async (params = {}) => {
-    return request({
-      url: '/poc/files/list',
-      method: 'get',
-      params
-    })
-  },
-
-  getFileContent: async (filePath) => {
-    return request({
-      url: `/poc/files/content/${filePath}`,
-      method: 'get'
-    })
-  },
-
-  getFileInfo: async (filePath) => {
-    return request({
-      url: `/poc/files/info/${filePath}`,
-      method: 'get'
-    })
-  },
-
-  getDirectories: async () => {
-    return request({
-      url: '/poc/files/directories',
-      method: 'get'
-    })
-  },
-
-  syncFiles: async () => {
-    return request({
-      url: '/poc/files/sync',
-      method: 'post'
-    })
-  },
-
-  getSyncStatus: async () => {
-    return request({
-      url: '/poc/files/sync/status',
-      method: 'get'
-    })
-  }
-}
-
 export const seebugAgentApi = {
   getStatus: async () => {
     return request({
@@ -1212,7 +1167,6 @@ export default {
   user: userApi,
   notifications: notificationsApi,
   pocVerification: pocVerificationApi,
-  pocFiles: pocFilesApi,
   seebugAgent: seebugAgentApi,
   aiAgents: aiAgentsApi
 }

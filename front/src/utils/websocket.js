@@ -139,6 +139,39 @@ class WebSocketManager {
       case 'heartbeat':
         this.handleHeartbeat()
         break
+      case 'connected':
+        this.emit('ai:connected', payload)
+        break
+      case 'ai_message':
+        this.emit('ai:message', payload)
+        break
+      case 'decision':
+        this.emit('ai:decision', payload)
+        break
+      case 'progress':
+        this.emit('ai:progress', payload)
+        break
+      case 'confirmation_required':
+        this.emit('ai:confirmation', payload)
+        break
+      case 'report_ready':
+        this.emit('ai:report', payload)
+        break
+      case 'scan_cancelled':
+        this.emit('ai:cancelled', payload)
+        break
+      case 'error':
+        this.emit('ai:error', payload)
+        break
+      case 'history':
+        this.emit('ai:history', payload)
+        break
+      case 'status':
+        this.emit('ai:status', payload)
+        break
+      case 'user_message_received':
+        this.emit('ai:user_received', payload)
+        break
       default:
         this.emit('message', data)
     }

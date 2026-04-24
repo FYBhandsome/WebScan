@@ -12,7 +12,7 @@ CMS(内容管理系统)检测模块
 特性:
 - 单例模式,避免重复加载规则文件
 - 预编译正则表达式,提升检测效率
-- 支持多种CMS类型识别(WordPress、Drupal、Joomla等)
+- 支持多种CMS类型识别(WordPress、drupal、Joomla等)
 - 返回详细的CMS信息和相关技术栈
 
 依赖:

@@ -513,7 +513,7 @@ def _post_analysis_routing(state):
 | --------------------- | -------------- | ---------- | -------- |
 | cve\_2017\_12149\_poc | CVE-2017-12149 | JBoss RCE  | Critical |
 | cve\_2020\_10199\_poc | CVE-2020-10199 | Nexus RCE  | High     |
-| cve\_2018\_7600\_poc  | CVE-2018-7600  | Drupal RCE | Critical |
+| cve\_2018\_7600\_poc  | CVE-2018-7600  | drupal RCE | Critical |
 
 ### 代码生成能力
 
@@ -779,20 +779,6 @@ async def my_scan_tool(target: str) -> dict:
 ```
 
 1. 注册工具：
-
-```python
-from ai_agents.tools import register_tool
-
-@register_tool(
-    name="my_tool",
-    description="我的扫描工具",
-    category="plugin",
-    timeout=30
-)
-async def my_tool(target: str):
-    return await my_scan_tool(target)
-```
-
 ### 添加新节点
 
 1. 创建节点类：

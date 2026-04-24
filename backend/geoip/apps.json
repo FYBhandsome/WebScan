@@ -146,7 +146,7 @@
         "X-AH-Environment": "^\\w+$"
       },
       "icon": "acquia-cloud.png",
-      "implies": "Drupal\\;confidence:95",
+      "implies": "drupal\\;confidence:95",
       "website": "https://www.acquia.com/"
     },
     "Act-On": {
@@ -1112,7 +1112,7 @@
       "cats": [
         1
       ],
-      "excludes": "Drupal",
+      "excludes": "drupal",
       "icon": "Backdrop.png",
       "implies": "PHP",
       "js": {
@@ -2790,34 +2790,34 @@
       "icon": "DreamWeaver.png",
       "website": "https://www.adobe.com/products/dreamweaver.html"
     },
-    "Drupal": {
+    "drupal": {
       "cats": [
         1
       ],
       "headers": {
         "Expires": "19 Nov 1978",
-        "X-Drupal-Cache": "",
-        "X-Generator": "^Drupal(?:\\s([\\d.]+))?\\;version:\\1"
+        "X-drupal-Cache": "",
+        "X-Generator": "^drupal(?:\\s([\\d.]+))?\\;version:\\1"
       },
       "html": "<(?:link|style)[^>]+\"/sites/(?:default|all)/(?:themes|modules)/",
-      "icon": "Drupal.svg",
+      "icon": "drupal.svg",
       "implies": "PHP",
       "js": {
-        "Drupal": ""
+        "drupal": ""
       },
       "meta": {
-        "generator": "^Drupal(?:\\s([\\d.]+))?\\;version:\\1"
+        "generator": "^drupal(?:\\s([\\d.]+))?\\;version:\\1"
       },
       "script": "drupal\\.js",
       "website": "https://drupal.org"
     },
-    "Drupal Commerce": {
+    "drupal Commerce": {
       "cats": [
         6
       ],
       "html": "<[^>]+(?:id=\"block[_-]commerce[_-]cart[_-]cart|class=\"commerce[_-]product[_-]field)",
-      "icon": "Drupal Commerce.png",
-      "implies": "Drupal",
+      "icon": "drupal Commerce.png",
+      "implies": "drupal",
       "website": "http://drupalcommerce.org"
     },
     "Dynamicweb": {
@@ -10502,7 +10502,7 @@
         6
       ],
       "icon": "Ubercart.png",
-      "implies": "Drupal",
+      "implies": "drupal",
       "script": "uc_cart/uc_cart_block\\.js",
       "website": "http://www.ubercart.org"
     },
@@ -12204,10 +12204,10 @@
       ],
       "icon": "govCMS.svg",
       "implies": [
-        "Drupal"
+        "drupal"
       ],
       "meta": {
-        "generator": "Drupal ([\\d]+) \\(http:\\/\\/drupal\\.org\\) \\+ govCMS\\;version:\\1"
+        "generator": "drupal ([\\d]+) \\(http:\\/\\/drupal\\.org\\) \\+ govCMS\\;version:\\1"
       },
       "website": "https://www.govcms.gov.au"
     },

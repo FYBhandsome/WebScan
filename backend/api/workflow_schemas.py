@@ -20,16 +20,23 @@
    - optimized_node: 节点优化装饰器
    - get_execution_optimizer: 获取全局优化器实例
 
+4. 数据持久化功能
+   - WorkflowDataValidator: 工作流数据验证器
+   - WorkflowPersistence: 工作流数据持久化管理器
+   - get_workflow_persistence: 获取全局持久化实例
+
 合并说明:
 - 本模块合并了原 backend.ai_agents.core.execution_optimizer.py 的全部功能
 - 统一了工作流数据的格式定义和转换逻辑
 - 提供了执行性能监控和优化能力
+- 提供了完整的数据持久化和验证功能
 
 使用示例:
     from backend.api.workflow_schemas import (
         WorkflowDataConverter,
         StandardizedWorkflowData,
-        get_execution_optimizer
+        get_execution_optimizer,
+        get_workflow_persistence
     )
     
     # 转换工作流数据
@@ -40,6 +47,17 @@
     optimizer = get_execution_optimizer()
     result, success = await optimizer.execute_with_optimization(
         node_func, "node_name", "task_id"
+    )
+    
+    # 保存工作流数据到数据库
+    persistence = get_workflow_persistence()
+    workflow_id = await persistence.save_workflow(workflow_data)
+    
+    # 保存完整工作流（包括执行历史和任务规划）
+    result = await persistence.save_complete_workflow(
+        workflow_data,
+        task_id="task_001",
+        task_plans=[{"plan_id": "p1", "plan_name": "端口扫描", "priority": 1}]
     )
 """
 from typing import Dict, List, Optional, Any, Callable, Tuple
@@ -903,3 +921,800 @@ def get_execution_optimizer() -> NodeExecutionOptimizer:
         summary = optimizer.get_execution_summary("task_001")
     """
     return _execution_optimizer
+
+
+class WorkflowDataValidator:
+    """
+    工作流数据验证器
+    
+    提供数据完整性验证功能，确保数据符合预期格式和约束。
+    
+    主要方法:
+        validate_workflow_data: 验证工作流数据
+        validate_node_execution: 验证节点执行数据
+        validate_task_plan: 验证任务规划数据
+        validate_status: 验证状态值
+        validate_progress: 验证进度值
+    
+    使用示例:
+        validator = WorkflowDataValidator()
+        is_valid, errors = validator.validate_workflow_data(workflow_dict)
+        if not is_valid:
+            print(f"验证失败: {errors}")
+    """
+    
+    VALID_WORKFLOW_STATUSES = ["pending", "running", "completed", "failed", "cancelled"]
+    VALID_NODE_STATUSES = ["pending", "running", "success", "failed", "skipped"]
+    VALID_PLAN_STATUSES = ["pending", "running", "completed", "failed", "skipped"]
+    
+    @staticmethod
+    def validate_workflow_data(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+        """
+        验证工作流数据完整性
+        
+        Args:
+            data: 工作流数据字典
+            
+        Returns:
+            (是否有效, 错误列表)
+        """
+        errors = []
+        
+        if not isinstance(data, dict):
+            return False, ["数据必须是字典类型"]
+        
+        if "task_id" not in data or not data["task_id"]:
+            errors.append("task_id 是必填字段")
+        
+        if "target" not in data or not data["target"]:
+            errors.append("target 是必填字段")
+        
+        if "status" in data:
+            is_valid, status_errors = WorkflowDataValidator.validate_status(
+                data["status"], "workflow"
+            )
+            if not is_valid:
+                errors.extend(status_errors)
+        
+        if "progress" in data:
+            is_valid, progress_errors = WorkflowDataValidator.validate_progress(data["progress"])
+            if not is_valid:
+                errors.extend(progress_errors)
+        
+        if "execution_history" in data:
+            if not isinstance(data["execution_history"], list):
+                errors.append("execution_history 必须是列表类型")
+        
+        if "vulnerabilities" in data:
+            if not isinstance(data["vulnerabilities"], list):
+                errors.append("vulnerabilities 必须是列表类型")
+        
+        if "tool_results" in data:
+            if not isinstance(data["tool_results"], dict):
+                errors.append("tool_results 必须是字典类型")
+        
+        return len(errors) == 0, errors
+    
+    @staticmethod
+    def validate_node_execution(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+        """
+        验证节点执行数据完整性
+        
+        Args:
+            data: 节点执行数据字典
+            
+        Returns:
+            (是否有效, 错误列表)
+        """
+        errors = []
+        
+        if not isinstance(data, dict):
+            return False, ["数据必须是字典类型"]
+        
+        if "node_id" not in data or not data["node_id"]:
+            errors.append("node_id 是必填字段")
+        
+        if "node_name" not in data or not data["node_name"]:
+            errors.append("node_name 是必填字段")
+        
+        if "status" in data:
+            is_valid, status_errors = WorkflowDataValidator.validate_status(
+                data["status"], "node"
+            )
+            if not is_valid:
+                errors.extend(status_errors)
+        
+        if "step_number" in data:
+            if not isinstance(data["step_number"], int) or data["step_number"] < 0:
+                errors.append("step_number 必须是非负整数")
+        
+        if "duration_ms" in data:
+            if not isinstance(data["duration_ms"], (int, float)) or data["duration_ms"] < 0:
+                errors.append("duration_ms 必须是非负数值")
+        
+        return len(errors) == 0, errors
+    
+    @staticmethod
+    def validate_task_plan(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+        """
+        验证任务规划数据完整性
+        
+        Args:
+            data: 任务规划数据字典
+            
+        Returns:
+            (是否有效, 错误列表)
+        """
+        errors = []
+        
+        if not isinstance(data, dict):
+            return False, ["数据必须是字典类型"]
+        
+        if "plan_id" not in data or not data["plan_id"]:
+            errors.append("plan_id 是必填字段")
+        
+        if "plan_name" not in data or not data["plan_name"]:
+            errors.append("plan_name 是必填字段")
+        
+        if "status" in data:
+            is_valid, status_errors = WorkflowDataValidator.validate_status(
+                data["status"], "plan"
+            )
+            if not is_valid:
+                errors.extend(status_errors)
+        
+        if "priority" in data:
+            if not isinstance(data["priority"], int) or not (1 <= data["priority"] <= 10):
+                errors.append("priority 必须是1-10之间的整数")
+        
+        if "dependencies" in data:
+            if not isinstance(data["dependencies"], list):
+                errors.append("dependencies 必须是列表类型")
+        
+        return len(errors) == 0, errors
+    
+    @staticmethod
+    def validate_status(status: str, status_type: str = "workflow") -> Tuple[bool, List[str]]:
+        """
+        验证状态值
+        
+        Args:
+            status: 状态值
+            status_type: 状态类型 (workflow/node/plan)
+            
+        Returns:
+            (是否有效, 错误列表)
+        """
+        errors = []
+        
+        if not isinstance(status, str):
+            return False, ["状态必须是字符串类型"]
+        
+        status_lower = status.lower()
+        
+        if status_type == "workflow":
+            valid_statuses = WorkflowDataValidator.VALID_WORKFLOW_STATUSES
+        elif status_type == "node":
+            valid_statuses = WorkflowDataValidator.VALID_NODE_STATUSES
+        elif status_type == "plan":
+            valid_statuses = WorkflowDataValidator.VALID_PLAN_STATUSES
+        else:
+            valid_statuses = WorkflowDataValidator.VALID_WORKFLOW_STATUSES
+        
+        if status_lower not in valid_statuses:
+            errors.append(f"无效的{status_type}状态: {status}, 有效值: {valid_statuses}")
+        
+        return len(errors) == 0, errors
+    
+    @staticmethod
+    def validate_progress(progress: int) -> Tuple[bool, List[str]]:
+        """
+        验证进度值
+        
+        Args:
+            progress: 进度值
+            
+        Returns:
+            (是否有效, 错误列表)
+        """
+        errors = []
+        
+        if not isinstance(progress, int):
+            return False, ["进度必须是整数类型"]
+        
+        if not (0 <= progress <= 100):
+            errors.append("进度必须在0-100之间")
+        
+        return len(errors) == 0, errors
+
+
+class WorkflowPersistence:
+    """
+    工作流数据持久化管理器
+    
+    提供工作流数据的数据库持久化功能，包括保存、更新、查询等操作。
+    
+    主要功能:
+    - 工作流数据保存和更新
+    - 执行历史保存
+    - 任务规划数据保存
+    - 执行结果保存
+    - 数据完整性验证
+    
+    使用示例:
+        persistence = WorkflowPersistence()
+        
+        # 保存工作流数据
+        workflow_id = await persistence.save_workflow(workflow_data)
+        
+        # 保存执行历史
+        await persistence.save_execution_history(workflow_id, execution_history)
+        
+        # 保存任务规划
+        await persistence.save_task_plans(workflow_id, task_plans)
+    """
+    
+    def __init__(self):
+        self.validator = WorkflowDataValidator()
+        self._initialized = False
+    
+    async def _ensure_db_initialized(self):
+        """确保数据库已初始化"""
+        if not self._initialized:
+            try:
+                from tortoise import Tortoise
+                if not Tortoise._inited:
+                    from backend.database import init_db
+                    await init_db()
+                self._initialized = True
+            except Exception as e:
+                logger.warning(f"数据库初始化检查: {e}")
+                self._initialized = True
+    
+    async def save_workflow(
+        self,
+        workflow_data: StandardizedWorkflowData,
+        task_id: Optional[str] = None,
+        workflow_name: str = "AI Security Scan"
+    ) -> str:
+        """
+        保存工作流数据到数据库
+        
+        Args:
+            workflow_data: 标准化工作流数据
+            task_id: 关联的任务ID
+            workflow_name: 工作流名称
+            
+        Returns:
+            工作流ID
+            
+        Raises:
+            ValueError: 数据验证失败
+        """
+        await self._ensure_db_initialized()
+        
+        from backend.models import WorkflowExecution
+        from uuid import uuid4
+        
+        data_dict = workflow_data.to_dict()
+        
+        is_valid, errors = self.validator.validate_workflow_data(data_dict)
+        if not is_valid:
+            raise ValueError(f"工作流数据验证失败: {', '.join(errors)}")
+        
+        workflow_id = str(uuid4())
+        
+        try:
+            workflow = await WorkflowExecution.create(
+                id=workflow_id,
+                task_id=task_id or data_dict.get("task_id"),
+                workflow_name=workflow_name,
+                target=data_dict.get("target", ""),
+                status=data_dict.get("status", "pending"),
+                progress=data_dict.get("progress", 0),
+                start_time=data_dict.get("start_time"),
+                end_time=data_dict.get("end_time"),
+                duration=data_dict.get("duration"),
+                current_step=data_dict.get("current_step"),
+                total_steps=data_dict.get("total_steps", 0),
+                completed_steps=data_dict.get("completed_steps", 0),
+                graph_flow=data_dict.get("graph_flow", {}),
+                vulnerabilities=data_dict.get("vulnerabilities", []),
+                tool_results=data_dict.get("tool_results", {}),
+                metadata=data_dict.get("metadata", {})
+            )
+            
+            logger.info(f"工作流数据已保存: {workflow_id}")
+            return workflow_id
+            
+        except Exception as e:
+            logger.error(f"保存工作流数据失败: {e}")
+            raise
+    
+    async def update_workflow(
+        self,
+        workflow_id: str,
+        workflow_data: StandardizedWorkflowData
+    ) -> bool:
+        """
+        更新工作流数据
+        
+        Args:
+            workflow_id: 工作流ID
+            workflow_data: 标准化工作流数据
+            
+        Returns:
+            是否更新成功
+        """
+        await self._ensure_db_initialized()
+        
+        from backend.models import WorkflowExecution
+        
+        data_dict = workflow_data.to_dict()
+        
+        is_valid, errors = self.validator.validate_workflow_data(data_dict)
+        if not is_valid:
+            raise ValueError(f"工作流数据验证失败: {', '.join(errors)}")
+        
+        try:
+            workflow = await WorkflowExecution.get_or_none(id=workflow_id)
+            if not workflow:
+                logger.warning(f"工作流不存在: {workflow_id}")
+                return False
+            
+            workflow.status = data_dict.get("status", workflow.status)
+            workflow.progress = data_dict.get("progress", workflow.progress)
+            workflow.end_time = data_dict.get("end_time", workflow.end_time)
+            workflow.duration = data_dict.get("duration", workflow.duration)
+            workflow.current_step = data_dict.get("current_step", workflow.current_step)
+            workflow.total_steps = data_dict.get("total_steps", workflow.total_steps)
+            workflow.completed_steps = data_dict.get("completed_steps", workflow.completed_steps)
+            workflow.graph_flow = data_dict.get("graph_flow", workflow.graph_flow)
+            workflow.vulnerabilities = data_dict.get("vulnerabilities", workflow.vulnerabilities)
+            workflow.tool_results = data_dict.get("tool_results", workflow.tool_results)
+            workflow.metadata = data_dict.get("metadata", workflow.metadata)
+            
+            if workflow.status == "failed":
+                workflow.error_message = data_dict.get("error_message", "")
+            
+            await workflow.save()
+            
+            logger.info(f"工作流数据已更新: {workflow_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"更新工作流数据失败: {e}")
+            raise
+    
+    async def save_execution_history(
+        self,
+        workflow_id: str,
+        execution_history: List[Dict[str, Any]]
+    ) -> int:
+        """
+        保存执行历史到数据库
+        
+        Args:
+            workflow_id: 工作流ID
+            execution_history: 执行历史列表
+            
+        Returns:
+            保存的记录数量
+        """
+        await self._ensure_db_initialized()
+        
+        from backend.models import WorkflowExecution, WorkflowNodeExecution
+        
+        if not execution_history:
+            return 0
+        
+        try:
+            workflow = await WorkflowExecution.get_or_none(id=workflow_id)
+            if not workflow:
+                raise ValueError(f"工作流不存在: {workflow_id}")
+            
+            saved_count = 0
+            for idx, record in enumerate(execution_history):
+                is_valid, errors = self.validator.validate_node_execution(record)
+                if not is_valid:
+                    logger.warning(f"节点执行数据验证失败，跳过: {errors}")
+                    continue
+                
+                node_execution = await WorkflowNodeExecution.create(
+                    workflow=workflow,
+                    node_id=record.get("node_id", f"node-{idx}"),
+                    node_name=record.get("node_name", "Unknown"),
+                    node_type=record.get("node_type", "unknown"),
+                    status=record.get("status", "pending"),
+                    step_number=record.get("step_number", idx + 1),
+                    start_time=record.get("start_time"),
+                    end_time=record.get("end_time"),
+                    duration_ms=record.get("duration_ms"),
+                    execution_time=record.get("execution_time"),
+                    input_params=record.get("input_params", {}),
+                    output_data=record.get("output_data", {}),
+                    error=record.get("error"),
+                    error_message=record.get("error_message"),
+                    task=record.get("task"),
+                    tool_name=record.get("tool_name"),
+                    timestamp=record.get("timestamp"),
+                    timestamp_iso=record.get("timestamp_iso"),
+                    metadata=record.get("metadata", {})
+                )
+                saved_count += 1
+            
+            logger.info(f"执行历史已保存: {saved_count} 条记录")
+            return saved_count
+            
+        except Exception as e:
+            logger.error(f"保存执行历史失败: {e}")
+            raise
+    
+    async def save_task_plans(
+        self,
+        workflow_id: str,
+        task_plans: List[Dict[str, Any]]
+    ) -> int:
+        """
+        保存任务规划数据到数据库
+        
+        Args:
+            workflow_id: 工作流ID
+            task_plans: 任务规划列表
+            
+        Returns:
+            保存的记录数量
+        """
+        await self._ensure_db_initialized()
+        
+        from backend.models import WorkflowExecution, WorkflowTaskPlan
+        
+        if not task_plans:
+            return 0
+        
+        try:
+            workflow = await WorkflowExecution.get_or_none(id=workflow_id)
+            if not workflow:
+                raise ValueError(f"工作流不存在: {workflow_id}")
+            
+            saved_count = 0
+            for idx, plan in enumerate(task_plans):
+                is_valid, errors = self.validator.validate_task_plan(plan)
+                if not is_valid:
+                    logger.warning(f"任务规划数据验证失败，跳过: {errors}")
+                    continue
+                
+                task_plan = await WorkflowTaskPlan.create(
+                    workflow=workflow,
+                    plan_id=plan.get("plan_id", f"plan-{idx}"),
+                    plan_name=plan.get("plan_name", "Unknown Task"),
+                    plan_type=plan.get("plan_type", "scan"),
+                    priority=plan.get("priority", 5),
+                    status=plan.get("status", "pending"),
+                    dependencies=plan.get("dependencies", []),
+                    estimated_time=plan.get("estimated_time"),
+                    actual_time=plan.get("actual_time"),
+                    parameters=plan.get("parameters", {}),
+                    result=plan.get("result", {}),
+                    error_message=plan.get("error_message")
+                )
+                saved_count += 1
+            
+            logger.info(f"任务规划已保存: {saved_count} 条记录")
+            return saved_count
+            
+        except Exception as e:
+            logger.error(f"保存任务规划失败: {e}")
+            raise
+    
+    async def save_execution_result(
+        self,
+        workflow_id: str,
+        result_type: str,
+        result_data: Dict[str, Any]
+    ) -> bool:
+        """
+        保存执行结果
+        
+        Args:
+            workflow_id: 工作流ID
+            result_type: 结果类型 (vulnerability/scan/tool)
+            result_data: 结果数据
+            
+        Returns:
+            是否保存成功
+        """
+        await self._ensure_db_initialized()
+        
+        from backend.models import WorkflowExecution
+        
+        try:
+            workflow = await WorkflowExecution.get_or_none(id=workflow_id)
+            if not workflow:
+                raise ValueError(f"工作流不存在: {workflow_id}")
+            
+            if result_type == "vulnerability":
+                vulnerabilities = workflow.vulnerabilities or []
+                vulnerabilities.append(result_data)
+                workflow.vulnerabilities = vulnerabilities
+            elif result_type == "scan":
+                tool_results = workflow.tool_results or {}
+                scan_results = tool_results.get("scan_results", [])
+                scan_results.append(result_data)
+                tool_results["scan_results"] = scan_results
+                workflow.tool_results = tool_results
+            elif result_type == "tool":
+                tool_results = workflow.tool_results or {}
+                tool_name = result_data.get("tool_name", "unknown")
+                tool_results[tool_name] = result_data
+                workflow.tool_results = tool_results
+            else:
+                metadata = workflow.metadata or {}
+                if "results" not in metadata:
+                    metadata["results"] = {}
+                if result_type not in metadata["results"]:
+                    metadata["results"][result_type] = []
+                metadata["results"][result_type].append(result_data)
+                workflow.metadata = metadata
+            
+            await workflow.save()
+            
+            logger.info(f"执行结果已保存: {result_type}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"保存执行结果失败: {e}")
+            raise
+    
+    async def get_workflow(self, workflow_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取工作流数据
+        
+        Args:
+            workflow_id: 工作流ID
+            
+        Returns:
+            工作流数据字典，不存在返回None
+        """
+        await self._ensure_db_initialized()
+        
+        from backend.models import WorkflowExecution
+        
+        try:
+            workflow = await WorkflowExecution.get_or_none(id=workflow_id)
+            if not workflow:
+                return None
+            
+            return {
+                "id": str(workflow.id),
+                "task_id": workflow.task_id,
+                "workflow_name": workflow.workflow_name,
+                "target": workflow.target,
+                "status": workflow.status,
+                "progress": workflow.progress,
+                "start_time": workflow.start_time,
+                "end_time": workflow.end_time,
+                "duration": workflow.duration,
+                "current_step": workflow.current_step,
+                "total_steps": workflow.total_steps,
+                "completed_steps": workflow.completed_steps,
+                "graph_flow": workflow.graph_flow,
+                "vulnerabilities": workflow.vulnerabilities,
+                "tool_results": workflow.tool_results,
+                "metadata": workflow.metadata,
+                "error_message": workflow.error_message,
+                "created_at": workflow.created_at.isoformat() if workflow.created_at else None,
+                "updated_at": workflow.updated_at.isoformat() if workflow.updated_at else None
+            }
+            
+        except Exception as e:
+            logger.error(f"获取工作流数据失败: {e}")
+            raise
+    
+    async def get_execution_history(
+        self,
+        workflow_id: str,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """
+        获取执行历史
+        
+        Args:
+            workflow_id: 工作流ID
+            limit: 返回记录数量限制
+            
+        Returns:
+            执行历史列表
+        """
+        await self._ensure_db_initialized()
+        
+        from backend.models import WorkflowNodeExecution
+        
+        try:
+            node_executions = await WorkflowNodeExecution.filter(
+                workflow_id=workflow_id
+            ).order_by("step_number").limit(limit)
+            
+            return [
+                {
+                    "id": ne.id,
+                    "node_id": ne.node_id,
+                    "node_name": ne.node_name,
+                    "node_type": ne.node_type,
+                    "status": ne.status,
+                    "step_number": ne.step_number,
+                    "start_time": ne.start_time,
+                    "end_time": ne.end_time,
+                    "duration_ms": ne.duration_ms,
+                    "execution_time": ne.execution_time,
+                    "input_params": ne.input_params,
+                    "output_data": ne.output_data,
+                    "error": ne.error,
+                    "error_message": ne.error_message,
+                    "task": ne.task,
+                    "tool_name": ne.tool_name,
+                    "timestamp": ne.timestamp,
+                    "timestamp_iso": ne.timestamp_iso,
+                    "metadata": ne.metadata,
+                    "created_at": ne.created_at.isoformat() if ne.created_at else None
+                }
+                for ne in node_executions
+            ]
+            
+        except Exception as e:
+            logger.error(f"获取执行历史失败: {e}")
+            raise
+    
+    async def get_task_plans(
+        self,
+        workflow_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        获取任务规划
+        
+        Args:
+            workflow_id: 工作流ID
+            
+        Returns:
+            任务规划列表
+        """
+        await self._ensure_db_initialized()
+        
+        from backend.models import WorkflowTaskPlan
+        
+        try:
+            task_plans = await WorkflowTaskPlan.filter(
+                workflow_id=workflow_id
+            ).order_by("priority")
+            
+            return [
+                {
+                    "id": tp.id,
+                    "plan_id": tp.plan_id,
+                    "plan_name": tp.plan_name,
+                    "plan_type": tp.plan_type,
+                    "priority": tp.priority,
+                    "status": tp.status,
+                    "dependencies": tp.dependencies,
+                    "estimated_time": tp.estimated_time,
+                    "actual_time": tp.actual_time,
+                    "parameters": tp.parameters,
+                    "result": tp.result,
+                    "error_message": tp.error_message,
+                    "created_at": tp.created_at.isoformat() if tp.created_at else None,
+                    "updated_at": tp.updated_at.isoformat() if tp.updated_at else None
+                }
+                for tp in task_plans
+            ]
+            
+        except Exception as e:
+            logger.error(f"获取任务规划失败: {e}")
+            raise
+    
+    async def delete_workflow(self, workflow_id: str) -> bool:
+        """
+        删除工作流及相关数据
+        
+        Args:
+            workflow_id: 工作流ID
+            
+        Returns:
+            是否删除成功
+        """
+        await self._ensure_db_initialized()
+        
+        from backend.models import WorkflowExecution, WorkflowNodeExecution, WorkflowTaskPlan
+        
+        try:
+            workflow = await WorkflowExecution.get_or_none(id=workflow_id)
+            if not workflow:
+                return False
+            
+            await WorkflowNodeExecution.filter(workflow_id=workflow_id).delete()
+            await WorkflowTaskPlan.filter(workflow_id=workflow_id).delete()
+            await workflow.delete()
+            
+            logger.info(f"工作流已删除: {workflow_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"删除工作流失败: {e}")
+            raise
+    
+    async def save_complete_workflow(
+        self,
+        workflow_data: StandardizedWorkflowData,
+        task_id: Optional[str] = None,
+        workflow_name: str = "AI Security Scan",
+        task_plans: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        保存完整的工作流数据（包括执行历史和任务规划）
+        
+        Args:
+            workflow_data: 标准化工作流数据
+            task_id: 关联的任务ID
+            workflow_name: 工作流名称
+            task_plans: 任务规划列表
+            
+        Returns:
+            保存结果信息
+        """
+        result = {
+            "workflow_id": None,
+            "execution_history_count": 0,
+            "task_plans_count": 0,
+            "success": False,
+            "errors": []
+        }
+        
+        try:
+            workflow_id = await self.save_workflow(
+                workflow_data,
+                task_id=task_id,
+                workflow_name=workflow_name
+            )
+            result["workflow_id"] = workflow_id
+            
+            if workflow_data.execution_history:
+                count = await self.save_execution_history(
+                    workflow_id,
+                    workflow_data.execution_history
+                )
+                result["execution_history_count"] = count
+            
+            if task_plans:
+                count = await self.save_task_plans(workflow_id, task_plans)
+                result["task_plans_count"] = count
+            
+            result["success"] = True
+            logger.info(f"完整工作流数据已保存: {workflow_id}")
+            
+        except Exception as e:
+            result["errors"].append(str(e))
+            logger.error(f"保存完整工作流数据失败: {e}")
+        
+        return result
+
+
+_workflow_persistence: Optional[WorkflowPersistence] = None
+
+
+def get_workflow_persistence() -> WorkflowPersistence:
+    """
+    获取全局工作流持久化实例
+    
+    返回单例模式的 WorkflowPersistence 实例，
+    用于在整个应用中共享数据持久化功能。
+    
+    返回:
+        WorkflowPersistence: 全局持久化实例
+    
+    使用示例:
+        persistence = get_workflow_persistence()
+        workflow_id = await persistence.save_workflow(workflow_data)
+    """
+    global _workflow_persistence
+    if _workflow_persistence is None:
+        _workflow_persistence = WorkflowPersistence()
+    return _workflow_persistence

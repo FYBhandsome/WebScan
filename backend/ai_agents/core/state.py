@@ -348,14 +348,6 @@ async def persist_task_state(task_id: str, state_data: Dict[str, Any], progress:
         
         await task.save()
         
-        logger.info(
-            f"Successfully persisted task state for {task_id}: "
-            f"{len(current_result.get('vulnerabilities', []))} vulnerabilities, "
-            f"{len(current_result.get('execution_history', []))} history items, "
-            f"{len(current_result.get('tool_results', {}))} tool results, "
-            f"workflow nodes: {len(current_result.get('workflow_trace', {}).get('nodes', []))}"
-        )
-        
     except Exception as e:
         logger.error(f"Failed to persist task state for {task_id}: {e}", exc_info=True)
 
@@ -466,7 +458,7 @@ class AgentState:
     目标上下文
 
     存储目标的关键特征,如:
-    - cms: CMS类型(WordPress、Drupal等)
+    - cms: CMS类型(WordPress、drupal等)
     - open_ports: 开放端口列表
     - waf: WAF类型
     - cdn: 是否使用CDN
@@ -592,13 +584,11 @@ class AgentState:
     def start_workflow_recording(self):
         if self.workflow_trace:
             self.workflow_trace.start_workflow()
-            logger.info(f"[{self.task_id}] 🚀 工作流开始记录 | Workflow ID: {self.workflow_trace.workflow_id}")
     
     def start_node_recording(self, node_name: str, node_type: str, input_data: Dict[str, Any] = None) -> int:
         if self.workflow_trace:
             node_index = self.workflow_trace.start_node(node_name, node_type, input_data)
             self._current_node_index = node_index
-            logger.debug(f"[{self.task_id}] 📍 节点开始 | 节点: {node_name} | 类型: {node_type} | 索引: {node_index}")
             return node_index
         return -1
     
@@ -607,40 +597,22 @@ class AgentState:
             idx = node_index if node_index is not None else self._current_node_index
             if idx >= 0:
                 self.workflow_trace.complete_node(idx, output_data, metadata)
-                node = self.workflow_trace.nodes[idx] if idx < len(self.workflow_trace.nodes) else None
-                if node:
-                    logger.debug(f"[{self.task_id}] ✅ 节点完成 | 节点: {node.node_name} | 耗时: {node.duration_ms:.2f}ms")
     
     def fail_node_recording(self, error_message: str, node_index: int = None, output_data: Dict[str, Any] = None):
         if self.workflow_trace:
             idx = node_index if node_index is not None else self._current_node_index
             if idx >= 0:
                 self.workflow_trace.fail_node(idx, error_message, output_data)
-                node = self.workflow_trace.nodes[idx] if idx < len(self.workflow_trace.nodes) else None
-                if node:
-                    logger.debug(f"[{self.task_id}] ❌ 节点失败 | 节点: {node.node_name} | 错误: {error_message}")
     
     def skip_node_recording(self, reason: str = None, node_index: int = None):
         if self.workflow_trace:
             idx = node_index if node_index is not None else self._current_node_index
             if idx >= 0:
                 self.workflow_trace.skip_node(idx, reason)
-                node = self.workflow_trace.nodes[idx] if idx < len(self.workflow_trace.nodes) else None
-                if node:
-                    logger.debug(f"[{self.task_id}] ⏭️ 节点跳过 | 节点: {node.node_name} | 原因: {reason}")
     
     def complete_workflow_recording(self, summary: Dict[str, Any] = None):
         if self.workflow_trace:
             self.workflow_trace.complete_workflow(summary)
-            stats = self.workflow_trace.get_statistics()
-            logger.info(
-                f"[{self.task_id}] 🏁 工作流完成 | "
-                f"总节点: {stats['total_nodes']} | "
-                f"成功: {stats['success_count']} | "
-                f"失败: {stats['failed_count']} | "
-                f"总耗时: {stats['total_duration_ms']:.2f}ms | "
-                f"成功率: {stats['success_rate']:.1f}%"
-            )
     
     def fail_workflow_recording(self, error_message: str):
         if self.workflow_trace:
@@ -650,11 +622,6 @@ class AgentState:
     def get_workflow_statistics(self) -> Dict[str, Any]:
         if self.workflow_trace:
             return self.workflow_trace.get_statistics()
-        return {}
-    
-    def get_workflow_report(self) -> Dict[str, Any]:
-        if self.workflow_trace:
-            return self.workflow_trace.to_dict()
         return {}
     
     # = Vulnerability Scan =
@@ -947,7 +914,6 @@ class AgentState:
         try:
             state_data = self.to_dict()
             await persist_task_state(self.task_id, state_data, self.get_progress())
-            logger.debug(f"State persisted for task {self.task_id}")
         except Exception as e:
             logger.error(f"Failed to persist state for task {self.task_id}: {e}", exc_info=True)
     
@@ -1173,117 +1139,3 @@ class AgentState:
             "stage_status", "vuln_scan_results", "vuln_scan_plugins_loaded",
             "vuln_scan_progress", "vuln_scan_metadata", "scan_summary", "report"
         ]
-    
-    def validate_data_integrity(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        验证数据完整性
-        
-        检查序列化数据是否包含所有必需字段，用于子图间数据传递验证。
-        
-        Args:
-            data: 要验证的数据字典
-            
-        Returns:
-            Dict: 包含验证结果的字典
-                - is_valid: 是否有效
-                - missing_fields: 缺失字段列表
-                - extra_fields: 多余字段列表
-                - field_count: 字段总数
-        """
-        all_fields = set(self.get_all_fields())
-        data_fields = set(data.keys())
-        
-        missing_fields = all_fields - data_fields
-        extra_fields = data_fields - all_fields
-        
-        return {
-            "is_valid": len(missing_fields) == 0,
-            "missing_fields": list(missing_fields),
-            "extra_fields": list(extra_fields),
-            "field_count": len(data_fields),
-            "expected_count": len(all_fields)
-        }
-    
-    def serialize_for_transfer(self) -> Dict[str, Any]:
-        """
-        为子图传递序列化数据（带完整性验证）
-        
-        序列化当前状态并验证数据完整性，确保子图间数据传递的可靠性。
-        
-        Returns:
-            Dict: 包含状态数据和验证信息的字典
-        """
-        data = self.to_dict()
-        validation = self.validate_data_integrity(data)
-        
-        if not validation["is_valid"]:
-            logger.warning(
-                f"Data serialization incomplete. Missing fields: {validation['missing_fields']}"
-            )
-        
-        return {
-            "state_data": data,
-            "validation": validation,
-            "timestamp": datetime.now().isoformat()
-        }
-    
-    @classmethod
-    def deserialize_from_transfer(cls, transfer_data: Dict[str, Any]) -> "AgentState":
-        """
-        从子图传递反序列化数据（带完整性验证）
-        
-        反序列化数据并验证完整性，确保子图间数据传递的可靠性。
-        
-        Args:
-            transfer_data: 包含状态数据和验证信息的字典
-            
-        Returns:
-            AgentState: 新的AgentState实例
-            
-        Raises:
-            ValueError: 如果数据格式无效或缺少关键字段
-        """
-        if "state_data" not in transfer_data:
-            raise ValueError("Invalid transfer data: missing 'state_data' field")
-        
-        data = transfer_data["state_data"]
-        
-        if "validation" in transfer_data:
-            validation = transfer_data["validation"]
-            if not validation["is_valid"]:
-                logger.warning(
-                    f"Data deserialization with missing fields: {validation['missing_fields']}"
-                )
-        
-        return cls.from_dict(data)
-    
-    def merge_from_dict(self, data: Dict[str, Any]) -> "AgentState":
-        """
-        合并字典数据到当前状态
-        
-        用于子图间增量数据传递，只更新提供的字段。
-        
-        Args:
-            data: 要合并的数据字典
-            
-        Returns:
-            AgentState: 更新后的状态实例（self）
-        """
-        for key, value in data.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-            else:
-                logger.warning(f"Unknown field '{key}' ignored during merge")
-        
-        return self
-    
-    def clone(self) -> "AgentState":
-        """
-        克隆当前状态
-        
-        创建当前状态的深拷贝，用于子图间数据隔离。
-        
-        Returns:
-            AgentState: 新的AgentState实例
-        """
-        return self.from_dict(self.to_dict())

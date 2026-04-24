@@ -61,6 +61,15 @@
             </div>
           </div>
         </div>
+        
+        <div class="ai-chat-section">
+          <AIChatPanel 
+            :target="currentTarget"
+            @scan-started="handleAIChatScanStarted"
+            @scan-completed="handleAIChatScanCompleted"
+            @report-ready="handleReportReady"
+          />
+        </div>
       </div>
 
       <div class="right-section">
@@ -282,6 +291,7 @@
 import { ref, onMounted, onUnmounted, reactive, computed } from 'vue'
 import { aiAgentsApi, ProgressWatcher } from '@/utils/aiAgents'
 import AgentScanForm from '@/components/business/AgentScanForm.vue'
+import AIChatPanel from '@/components/business/AIChatPanel.vue'
 import Alert from '@/components/common/Alert.vue'
 import { formatDate } from '@/utils/date'
 import { useWebSocket } from '@/utils/websocket'
@@ -292,6 +302,7 @@ export default {
   name: 'AgentScan',
   components: {
     AgentScanForm,
+    AIChatPanel,
     Alert
   },
   setup() {
@@ -314,6 +325,7 @@ export default {
     const retryCount = ref(0)
     const maxRetryCount = 3
     const expandedStages = ref({})
+    const currentTarget = ref('')
     
     const subgraphState = reactive({
       planning: { status: 'pending', progress: 0, time: 0 },
@@ -789,6 +801,22 @@ export default {
         }
       }
     }
+    
+    const handleAIChatScanStarted = (data) => {
+      currentTarget.value = data.target
+      currentExecution.value = { task_id: data.task_id || Date.now().toString() }
+      resetSubgraphState()
+      toast.success('AI对话扫描开始', `正在扫描: ${data.target}`)
+    }
+    
+    const handleAIChatScanCompleted = (data) => {
+      toast.success('AI对话扫描完成', '扫描任务已完成')
+      loadRecentTasks()
+    }
+    
+    const handleReportReady = (report) => {
+      toast.success('报告已生成', '点击下载报告')
+    }
 
     onMounted(() => {
       loadRecentTasks()
@@ -869,6 +897,7 @@ export default {
       maxRetryCount,
       canRetry,
       expandedStages,
+      currentTarget,
       handleSubmit,
       handleRetry,
       handleSuccess,
@@ -885,7 +914,10 @@ export default {
       getSubgraphStatusText,
       getSubgraphProgress,
       getSubgraphTime,
-      viewPluginResult
+      viewPluginResult,
+      handleAIChatScanStarted,
+      handleAIChatScanCompleted,
+      handleReportReady
     }
   }
 }
@@ -1634,5 +1666,13 @@ export default {
   .scan-layout {
     grid-template-columns: 1fr;
   }
+}
+
+.ai-chat-section {
+  margin-top: var(--spacing-lg);
+  background-color: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-lg);
+  overflow: hidden;
 }
 </style>

@@ -63,61 +63,6 @@ def standardize_severity(severity_val) -> str:
     
     return 'Info'
 
-def standardize_title(title: str) -> str:
-    """
-    标准化漏洞标题,添加类型前缀以便识别
-    
-    Args:
-        title: 原始漏洞标题
-        
-    Returns:
-        str: 添加了类型前缀的标准化标题
-        
-    Examples:
-        >>> standardize_title("SQL Injection in login form")
-        '[SQL Injection] SQL Injection in login form'
-    """
-    if not title: return "Unknown Vulnerability"
-    if 'SQL Injection' in title and not title.startswith('[SQL'):
-        return f"[SQL Injection] {title}"
-    if 'XSS' in title and not title.startswith('[XSS'):
-         return f"[XSS] {title}"
-    return title
-
-def validate_vulnerability_consistency(vuln_data: dict) -> List[str]:
-    """
-    验证漏洞数据一致性
-    
-    检查漏洞数据的关键字段是否存在且格式正确。
-    
-    Args:
-        vuln_data: 漏洞数据字典
-        
-    Returns:
-        List[str]: 错误信息列表,空列表表示数据有效
-    """
-    errors = []
-    if not vuln_data.get('vuln_id'):
-        errors.append("Missing vuln_id")
-    
-    # 验证严重程度
-    severity = vuln_data.get('severity')
-    if severity is not None:
-        if isinstance(severity, int) and not (0 <= severity <= 4):
-            errors.append(f"Invalid severity value (int): {severity}")
-        elif isinstance(severity, str) and severity.lower() not in ['critical', 'high', 'medium', 'low', 'info']:
-             # 仅记录警告,不视为严重错误
-             pass
-    
-    if not vuln_data.get('vt_name'):
-        errors.append("Missing vt_name (title)")
-        
-    # 检查关键字段是否存在
-    if 'affects_url' not in vuln_data:
-        errors.append("Missing affects_url")
-        
-    return errors
-
 # ====== 业务规则常量 ======
 
 VALID_TASK_STATUSES = ['pending', 'running', 'completed', 'failed', 'cancelled']
@@ -141,10 +86,7 @@ def validate_status_transition(current_status: str, new_status: str) -> tuple:
     Returns:
         tuple: (is_valid: bool, error_message: str)
     """
-    logger.info(f"[状态转换验证] 当前状态: {current_status}, 目标状态: {new_status}")
-    
     if current_status == new_status:
-        logger.info(f"[状态转换验证] 状态未变化: {current_status}")
         return True, None
     
     if new_status not in VALID_TASK_STATUSES:
@@ -156,7 +98,6 @@ def validate_status_transition(current_status: str, new_status: str) -> tuple:
         logger.warning(f"[状态转换验证] 非法状态转换: {current_status} -> {new_status}")
         return False, f"Invalid state transition: {current_status} -> {new_status}"
     
-    logger.info(f"[状态转换验证] 状态转换合法: {current_status} -> {new_status}")
     return True, None
 
 # ====== 请求模型 ======
@@ -218,7 +159,6 @@ async def create_task(request: CreateTaskRequest):
     """
     try:
         from task_executor import task_executor
-        logger.info(f"收到创建任务请求: {request.task_name} (Type: {request.task_type}, Target: {request.target})")
 
         # 1. 验证参数
         if not request.target:
@@ -256,8 +196,6 @@ async def create_task(request: CreateTaskRequest):
         except Exception as db_err:
             logger.error(f"创建任务数据库记录失败: {str(db_err)}")
             raise HTTPException(status_code=500, detail=f"Database error: {str(db_err)}")
-
-        logger.info(f"任务记录创建成功: {task.id}")
 
         # 3. 启动异步任务执行
         try:
@@ -621,9 +559,6 @@ async def update_task(task_id: int, task_update: TaskUpdate):
         - cancelled -> pending
     """
     try:
-        logger.info(f"[任务更新] 开始处理任务更新请求 | 任务ID: {task_id}")
-        logger.info(f"[任务更新] 请求参数 | status: {task_update.status}, progress: {task_update.progress}, result: {task_update.result is not None}")
-        
         task = await Task.get_or_none(id=task_id)
         if not task:
             logger.warning(f"[任务更新] 任务不存在 | 任务ID: {task_id}")
@@ -631,7 +566,6 @@ async def update_task(task_id: int, task_update: TaskUpdate):
         
         current_status = task.status
         current_progress = task.progress
-        logger.info(f"[任务更新] 当前任务状态 | status: {current_status}, progress: {current_progress}")
         
         if task_update.status:
             is_valid, error_msg = validate_status_transition(current_status, task_update.status)
@@ -639,22 +573,17 @@ async def update_task(task_id: int, task_update: TaskUpdate):
                 logger.warning(f"[任务更新] 状态转换验证失败 | {error_msg}")
                 raise HTTPException(status_code=400, detail=error_msg)
             task.status = task_update.status
-            logger.info(f"[任务更新] 状态已更新 | {current_status} -> {task_update.status}")
         
         if task_update.progress is not None:
             if not (0 <= task_update.progress <= 100):
                 logger.warning(f"[任务更新] 进度值无效: {task_update.progress}")
                 raise HTTPException(status_code=400, detail="Progress must be between 0 and 100")
-            old_progress = task.progress
             task.progress = task_update.progress
-            logger.info(f"[任务更新] 进度已更新 | {old_progress} -> {task_update.progress}")
         
         if task_update.result:
             task.result = json.dumps(task_update.result)
-            logger.info(f"[任务更新] 结果已更新 | 数据长度: {len(task.result)}")
             
         await task.save()
-        logger.info(f"[任务更新] 任务保存成功 | 任务ID: {task_id}")
         
         return APIResponse(code=200, message="更新成功")
     except HTTPException:

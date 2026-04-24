@@ -259,6 +259,44 @@ async def websocket_endpoint(websocket: WebSocket):
                         "history": history
                     })
                 
+                elif message_type == "ai_user_input":
+                    payload = message.get("payload", {})
+                    content = payload.get("content", "")
+                    
+                    await websocket.send_json({
+                        "type": "user_message_received",
+                        "payload": {
+                            "content": content,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    })
+                
+                elif message_type == "ai_user_confirm":
+                    payload = message.get("payload", {})
+                    choice = payload.get("choice", "confirm")
+                    
+                    await websocket.send_json({
+                        "type": "confirmation_result",
+                        "payload": {
+                            "choice": choice,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    })
+                
+                elif message_type == "ai_start_scan":
+                    payload = message.get("payload", {})
+                    target = payload.get("target", "")
+                    scan_mode = payload.get("scan_mode", "full")
+                    
+                    await websocket.send_json({
+                        "type": "scan_started",
+                        "payload": {
+                            "target": target,
+                            "scan_mode": scan_mode,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    })
+                
                 else:
                     if data == "ping":
                         await websocket.send_text("pong")

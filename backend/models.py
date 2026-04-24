@@ -892,3 +892,209 @@ class Notification(Model):
     def is_high_priority(self) -> bool:
         """检查是否为高优先级通知"""
         return self.type in ["high-vulnerability", "critical-vulnerability"]
+
+
+class WorkflowExecution(Model):
+    """
+    工作流执行记录表
+    
+    用于记录AI Agent工作流的执行状态、进度和结果。
+    工作流与节点执行是一对多关系。
+    
+    Attributes:
+        id: 工作流唯一标识
+        task_id: 关联的任务ID
+        workflow_name: 工作流名称
+        target: 执行目标
+        status: 工作流状态
+        progress: 执行进度
+        start_time: 开始时间
+        end_time: 结束时间
+        duration: 执行时长（秒）
+        graph_flow: 图流数据（JSON格式）
+        vulnerabilities: 发现的漏洞（JSON格式）
+        tool_results: 工具执行结果（JSON格式）
+        metadata: 元数据（JSON格式）
+        created_at: 创建时间
+        updated_at: 更新时间
+    """
+    
+    id = fields.UUIDField(pk=True, description="工作流ID")
+    task_id = fields.CharField(max_length=100, null=True, description="关联任务ID")
+    workflow_name = fields.CharField(max_length=255, default="AI Security Scan", description="工作流名称")
+    target = fields.CharField(max_length=500, description="执行目标")
+    status = fields.CharField(max_length=50, default="pending", description="状态：pending, running, completed, failed, cancelled")
+    progress = fields.IntField(default=0, description="执行进度 0-100")
+    start_time = fields.FloatField(null=True, description="开始时间戳")
+    end_time = fields.FloatField(null=True, description="结束时间戳")
+    duration = fields.FloatField(null=True, description="执行时长（秒）")
+    current_step = fields.CharField(max_length=255, null=True, description="当前步骤")
+    total_steps = fields.IntField(default=0, description="总步骤数")
+    completed_steps = fields.IntField(default=0, description="已完成步骤数")
+    graph_flow = fields.JSONField(null=True, default=dict, description="图流数据")
+    vulnerabilities = fields.JSONField(null=True, default=list, description="发现的漏洞")
+    tool_results = fields.JSONField(null=True, default=dict, description="工具执行结果")
+    metadata = fields.JSONField(null=True, default=dict, description="元数据")
+    error_message = fields.TextField(null=True, description="错误信息")
+    created_at = fields.DatetimeField(auto_now_add=True, description="创建时间")
+    updated_at = fields.DatetimeField(auto_now=True, description="更新时间")
+    
+    node_executions: fields.ReverseRelation["WorkflowNodeExecution"]
+    task_plans: fields.ReverseRelation["WorkflowTaskPlan"]
+    
+    class Meta:
+        table = "workflow_executions"
+        table_description = "工作流执行记录表"
+        ordering = ["-created_at"]
+        indexes = [
+            ("task_id",),
+            ("status",),
+            ("target",),
+        ]
+    
+    def __str__(self):
+        return f"Workflow {self.id} - {self.target} ({self.status})"
+    
+    def is_running(self) -> bool:
+        return self.status == "running"
+    
+    def is_completed(self) -> bool:
+        return self.status == "completed"
+    
+    def is_failed(self) -> bool:
+        return self.status == "failed"
+
+
+class WorkflowNodeExecution(Model):
+    """
+    工作流节点执行记录表
+    
+    用于记录工作流中每个节点的执行详情。
+    节点执行与工作流是多对一关系。
+    
+    Attributes:
+        id: 节点执行唯一标识
+        workflow: 关联的工作流对象
+        node_id: 节点ID
+        node_name: 节点名称
+        node_type: 节点类型
+        status: 执行状态
+        step_number: 步骤序号
+        start_time: 开始时间戳
+        end_time: 结束时间戳
+        duration_ms: 执行耗时（毫秒）
+        execution_time: 执行时间（秒）
+        input_params: 输入参数（JSON格式）
+        output_data: 输出数据（JSON格式）
+        error: 错误信息
+        task: 任务名称
+        tool_name: 工具名称
+        timestamp: 时间戳
+        metadata: 元数据（JSON格式）
+        created_at: 创建时间
+    """
+    
+    id = fields.BigIntField(pk=True, description="节点执行ID")
+    workflow: fields.ForeignKeyRelation[WorkflowExecution] = fields.ForeignKeyField(
+        "models.WorkflowExecution", related_name="node_executions", description="关联工作流"
+    )
+    node_id = fields.CharField(max_length=100, description="节点ID")
+    node_name = fields.CharField(max_length=255, description="节点名称")
+    node_type = fields.CharField(max_length=100, default="unknown", description="节点类型")
+    status = fields.CharField(max_length=50, default="pending", description="状态：pending, running, success, failed, skipped")
+    step_number = fields.IntField(default=0, description="步骤序号")
+    start_time = fields.FloatField(null=True, description="开始时间戳")
+    end_time = fields.FloatField(null=True, description="结束时间戳")
+    duration_ms = fields.FloatField(null=True, description="执行耗时（毫秒）")
+    execution_time = fields.FloatField(null=True, description="执行时间（秒）")
+    input_params = fields.JSONField(null=True, default=dict, description="输入参数")
+    output_data = fields.JSONField(null=True, default=dict, description="输出数据")
+    error = fields.TextField(null=True, description="错误信息")
+    error_message = fields.TextField(null=True, description="错误消息")
+    task = fields.CharField(max_length=255, null=True, description="任务名称")
+    tool_name = fields.CharField(max_length=100, null=True, description="工具名称")
+    timestamp = fields.FloatField(null=True, description="时间戳")
+    timestamp_iso = fields.CharField(max_length=50, null=True, description="ISO格式时间戳")
+    metadata = fields.JSONField(null=True, default=dict, description="元数据")
+    created_at = fields.DatetimeField(auto_now_add=True, description="创建时间")
+    
+    class Meta:
+        table = "workflow_node_executions"
+        table_description = "工作流节点执行记录表"
+        ordering = ["step_number", "created_at"]
+        indexes = [
+            ("workflow",),
+            ("node_id",),
+            ("status",),
+        ]
+    
+    def __str__(self):
+        return f"Node {self.node_name} - {self.status}"
+    
+    def is_success(self) -> bool:
+        return self.status == "success"
+    
+    def is_failed(self) -> bool:
+        return self.status == "failed"
+
+
+class WorkflowTaskPlan(Model):
+    """
+    工作流任务规划表
+    
+    用于记录AI Agent生成的任务规划信息。
+    任务规划与工作流是多对一关系。
+    
+    Attributes:
+        id: 任务规划唯一标识
+        workflow: 关联的工作流对象
+        plan_id: 规划ID
+        plan_name: 规划名称
+        plan_type: 规划类型
+        priority: 优先级
+        status: 执行状态
+        dependencies: 依赖任务（JSON格式）
+        estimated_time: 预估时间（秒）
+        actual_time: 实际时间（秒）
+        parameters: 参数（JSON格式）
+        result: 执行结果（JSON格式）
+        created_at: 创建时间
+        updated_at: 更新时间
+    """
+    
+    id = fields.BigIntField(pk=True, description="任务规划ID")
+    workflow: fields.ForeignKeyRelation[WorkflowExecution] = fields.ForeignKeyField(
+        "models.WorkflowExecution", related_name="task_plans", description="关联工作流"
+    )
+    plan_id = fields.CharField(max_length=100, description="规划ID")
+    plan_name = fields.CharField(max_length=255, description="规划名称")
+    plan_type = fields.CharField(max_length=100, default="scan", description="规划类型")
+    priority = fields.IntField(default=5, description="优先级 1-10")
+    status = fields.CharField(max_length=50, default="pending", description="状态：pending, running, completed, failed, skipped")
+    dependencies = fields.JSONField(null=True, default=list, description="依赖任务")
+    estimated_time = fields.FloatField(null=True, description="预估时间（秒）")
+    actual_time = fields.FloatField(null=True, description="实际时间（秒）")
+    parameters = fields.JSONField(null=True, default=dict, description="参数")
+    result = fields.JSONField(null=True, default=dict, description="执行结果")
+    error_message = fields.TextField(null=True, description="错误信息")
+    created_at = fields.DatetimeField(auto_now_add=True, description="创建时间")
+    updated_at = fields.DatetimeField(auto_now=True, description="更新时间")
+    
+    class Meta:
+        table = "workflow_task_plans"
+        table_description = "工作流任务规划表"
+        ordering = ["priority", "created_at"]
+        indexes = [
+            ("workflow",),
+            ("plan_id",),
+            ("status",),
+        ]
+    
+    def __str__(self):
+        return f"Plan {self.plan_name} - {self.status}"
+    
+    def is_completed(self) -> bool:
+        return self.status == "completed"
+    
+    def is_failed(self) -> bool:
+        return self.status == "failed"

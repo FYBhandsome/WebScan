@@ -8,7 +8,7 @@ POC 漏洞扫描 API 路由
 - Tomcat: CVE-2017-12615, CVE-2022-22965, CVE-2022-47986
 - JBoss: CVE-2017-12149
 - Nexus: CVE-2020-10199
-- Drupal: CVE-2018-7600
+- drupal: CVE-2018-7600
 
 主要功能:
 - 创建和管理 POC 扫描任务

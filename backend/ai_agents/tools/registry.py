@@ -5,7 +5,6 @@
 
 增强功能：
 - 丰富的元数据管理（版本、作者、依赖、场景、标签等）
-- 调用链追踪（start_trace/end_trace/get_call_chain）
 - 执行安全检查（危险模式检测、权限检查）
 - 结果缓存（支持TTL过期）
 - 统一返回 PluginResult 格式
@@ -152,11 +151,7 @@ class ToolRegistry:
             "subprocess",
             "os.system",
         }
-        
-        logger.info(
-            "工具注册表初始化完成 "
-            "（增强版：支持元数据管理、调用链追踪、安全检查、结果缓存）"
-        )
+
     
     def register(
         self,
@@ -225,157 +220,7 @@ class ToolRegistry:
             "last_called_at": None,
             "avg_execution_time": 0.0,
         }
-        
-        logger.info(
-            f"✅ 注册工具: {name} "
-            f"(分类: {category}, 版本: {version}, 作者: {author}, 优先级: {priority})"
-        )
-    
-    def get_tool_metadata(self, tool_name: str) -> Optional[Dict[str, Any]]:
-        """
-        获取工具元数据
-        
-        Args:
-            tool_name: 工具名称
-            
-        Returns:
-            Optional[Dict]: 工具元数据字典，不存在则返回None
-        """
-        if tool_name not in self.tool_metadata:
-            logger.warning(f"工具 {tool_name} 不存在")
-            return None
-        
-        metadata = self.tool_metadata[tool_name].copy()
-        metadata["tool_name"] = tool_name
-        return metadata
-    
-    def update_metadata(
-        self,
-        tool_name: str,
-        **kwargs
-    ) -> bool:
-        """
-        更新工具元数据
-        
-        Args:
-            tool_name: 工具名称
-            **kwargs: 要更新的元数据字段
-            
-        Returns:
-            bool: 更新是否成功
-        """
-        if tool_name not in self.tool_metadata:
-            logger.warning(f"工具 {tool_name} 不存在，无法更新元数据")
-            return False
-        
-        protected_fields = {"registered_at"}
-        for key, value in kwargs.items():
-            if key in protected_fields:
-                logger.warning(f"字段 {key} 是受保护字段，不允许更新")
-                continue
-            if key in self.tool_metadata[tool_name]:
-                self.tool_metadata[tool_name][key] = value
-                logger.debug(f"更新工具 {tool_name} 的元数据字段 {key}")
-            else:
-                logger.warning(f"未知的元数据字段: {key}")
-        
-        logger.info(f"✅ 更新工具 {tool_name} 的元数据")
-        return True
-    
-    def start_trace(self, trace_id: Optional[str] = None) -> str:
-        """
-        开始调用链追踪
-        
-        Args:
-            trace_id: 追踪ID，如果不提供则自动生成
-            
-        Returns:
-            str: 追踪ID
-        """
-        if trace_id is None:
-            trace_id = hashlib.md5(f"{time.time()}".encode()).hexdigest()[:12]
-        
-        self._current_trace_id = trace_id
-        self._call_chain = []
-        self._call_chain_enabled = True
-        
-        logger.info(f"🔍 开始调用链追踪: {trace_id}")
-        return trace_id
-    
-    def end_trace(self) -> Dict[str, Any]:
-        """
-        结束调用链追踪
-        
-        Returns:
-            Dict: 调用链摘要信息
-        """
-        if not self._current_trace_id:
-            logger.warning("没有正在进行的调用链追踪")
-            return {"status": "no_active_trace"}
-        
-        trace_summary = {
-            "trace_id": self._current_trace_id,
-            "start_time": self._call_chain[0].start_time if self._call_chain else None,
-            "end_time": self._call_chain[-1].end_time if self._call_chain else None,
-            "total_tools": len(self._call_chain),
-            "successful_calls": sum(1 for node in self._call_chain if node.status == "success"),
-            "failed_calls": sum(1 for node in self._call_chain if node.status == "failed"),
-            "total_duration": self._calculate_total_duration(),
-            "call_chain": [
-                {
-                    "tool_name": node.tool_name,
-                    "target": node.target,
-                    "status": node.status,
-                    "start_time": node.start_time.isoformat() if node.start_time else None,
-                    "end_time": node.end_time.isoformat() if node.end_time else None,
-                    "error": node.error,
-                }
-                for node in self._call_chain
-            ]
-        }
-        
-        logger.info(
-            f"🔍 结束调用链追踪: {self._current_trace_id}, "
-            f"共调用 {len(self._call_chain)} 个工具"
-        )
-        
-        self._current_trace_id = None
-        return trace_summary
-    
-    def get_call_chain(self) -> List[Dict[str, Any]]:
-        """
-        获取当前调用链
-        
-        Returns:
-            List[Dict]: 调用链列表
-        """
-        return [
-            {
-                "node_id": node.node_id,
-                "tool_name": node.tool_name,
-                "target": node.target,
-                "status": node.status,
-                "start_time": node.start_time.isoformat() if node.start_time else None,
-                "end_time": node.end_time.isoformat() if node.end_time else None,
-                "params": node.params,
-                "error": node.error,
-                "parent_id": node.parent_id,
-            }
-            for node in self._call_chain
-        ]
-    
-    def _calculate_total_duration(self) -> Optional[float]:
-        """计算调用链总耗时"""
-        if not self._call_chain:
-            return None
-        
-        start = min(node.start_time for node in self._call_chain if node.start_time)
-        end = max(node.end_time for node in self._call_chain if node.end_time)
-        
-        if start and end:
-            return (end - start).total_seconds()
-        return None
-    
+
     def _security_check(
         self,
         tool_name: str,
@@ -436,12 +281,6 @@ class ToolRegistry:
             )
         
         self._log_security_audit(tool_name, target, check_result)
-        
-        if not check_result["passed"]:
-            logger.warning(f"⚠️ 安全检查未通过: {tool_name} - {check_result['errors']}")
-        elif check_result["warnings"]:
-            logger.info(f"⚠️ 安全检查警告: {tool_name} - {check_result['warnings']}")
-        
         return check_result
     
     def _check_dangerous_patterns(self, value: str, field_name: str) -> Dict[str, Any]:
@@ -496,169 +335,7 @@ class ToolRegistry:
         
         if len(self._security_audit_log) > 1000:
             self._security_audit_log = self._security_audit_log[-500:]
-    
-    def get_security_audit_log(
-        self,
-        tool_name: Optional[str] = None,
-        passed_only: Optional[bool] = None,
-        limit: int = 100
-    ) -> List[Dict[str, Any]]:
-        """
-        获取安全审计日志
-        
-        Args:
-            tool_name: 按工具名称过滤
-            passed_only: 只返回通过/未通过的记录
-            limit: 返回记录数量限制
-            
-        Returns:
-            List[Dict]: 审计日志列表
-        """
-        logs = self._security_audit_log
-        
-        if tool_name:
-            logs = [log for log in logs if log["tool_name"] == tool_name]
-        
-        if passed_only is not None:
-            logs = [log for log in logs if log["passed"] == passed_only]
-        
-        return logs[-limit:]
-    
-    def _generate_cache_key(
-        self,
-        tool_name: str,
-        target: str,
-        **kwargs
-    ) -> str:
-        """
-        生成缓存键
-        
-        Args:
-            tool_name: 工具名称
-            target: 扫描目标
-            **kwargs: 工具参数
-            
-        Returns:
-            str: 缓存键
-        """
-        cache_data = {
-            "tool_name": tool_name,
-            "target": target,
-            "kwargs": kwargs
-        }
-        cache_str = json.dumps(cache_data, sort_keys=True)
-        return hashlib.sha256(cache_str.encode()).hexdigest()
-    
-    def _get_cached_result(
-        self,
-        cache_key: str
-    ) -> Optional[PluginResult]:
-        """
-        获取缓存结果
-        
-        Args:
-            cache_key: 缓存键
-            
-        Returns:
-            Optional[PluginResult]: 缓存的结果，不存在或已过期则返回None
-        """
-        if not self._cache_enabled:
-            return None
-        
-        if cache_key not in self._result_cache:
-            return None
-        
-        entry = self._result_cache[cache_key]
-        
-        if entry.is_expired():
-            del self._result_cache[cache_key]
-            logger.debug(f"缓存已过期: {cache_key[:16]}...")
-            return None
-        
-        logger.debug(f"命中缓存: {cache_key[:16]}...")
-        return entry.result
-    
-    def _cache_result(
-        self,
-        cache_key: str,
-        result: PluginResult,
-        ttl_seconds: int
-    ):
-        """
-        缓存执行结果
-        
-        Args:
-            cache_key: 缓存键
-            result: 执行结果
-            ttl_seconds: 缓存时间(秒)
-        """
-        if not self._cache_enabled:
-            return
-        
-        self._result_cache[cache_key] = CacheEntry(
-            result=result,
-            created_at=datetime.now(),
-            ttl_seconds=ttl_seconds,
-            cache_key=cache_key
-        )
-        
-        logger.debug(f"缓存结果: {cache_key[:16]}..., TTL: {ttl_seconds}秒")
-        
-        self._cleanup_expired_cache()
-    
-    def _cleanup_expired_cache(self):
-        """清理过期缓存"""
-        expired_keys = [
-            key for key, entry in self._result_cache.items()
-            if entry.is_expired()
-        ]
-        
-        for key in expired_keys:
-            del self._result_cache[key]
-        
-        if expired_keys:
-            logger.debug(f"清理过期缓存: {len(expired_keys)} 条")
-    
-    def clear_cache(self, tool_name: Optional[str] = None):
-        """
-        清除缓存
-        
-        Args:
-            tool_name: 指定工具名称，None表示清除所有缓存
-        """
-        if tool_name is None:
-            self._result_cache.clear()
-            logger.info("清除所有缓存")
-        else:
-            keys_to_remove = [
-                key for key, entry in self._result_cache.items()
-                if entry.result.tool_name == tool_name
-            ]
-            for key in keys_to_remove:
-                del self._result_cache[key]
-            logger.info(f"清除工具 {tool_name} 的缓存: {len(keys_to_remove)} 条")
-    
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """
-        获取缓存统计信息
-        
-        Returns:
-            Dict: 缓存统计信息
-        """
-        total_entries = len(self._result_cache)
-        expired_entries = sum(
-            1 for entry in self._result_cache.values()
-            if entry.is_expired()
-        )
-        
-        return {
-            "enabled": self._cache_enabled,
-            "total_entries": total_entries,
-            "active_entries": total_entries - expired_entries,
-            "expired_entries": expired_entries,
-            "default_ttl": self._default_cache_ttl,
-        }
-    
+
     async def call_tool(
         self,
         tool_name: str,
@@ -722,8 +399,6 @@ class ToolRegistry:
         tool = self.tools[tool_name]
         metadata = self.tool_metadata.get(tool_name, {})
         
-        logger.info(f"🔧 调用工具: {tool_name} -> {target}")
-        
         start_time = time.time()
         
         try:
@@ -756,7 +431,6 @@ class ToolRegistry:
             if use_cache:
                 self._cache_result(cache_key, result, ttl)
             
-            logger.info(f"✅ 工具 {tool_name} 执行成功 (耗时: {execution_time:.2f}秒)")
             return result
             
         except asyncio.TimeoutError:
@@ -820,19 +494,7 @@ class ToolRegistry:
         metadata["avg_execution_time"] = (
             (current_avg * (call_count - 1) + execution_time) / call_count
         )
-    
-    def get_tool(self, tool_name: str) -> Optional[AsyncToolWrapper]:
-        """
-        获取工具
-        
-        Args:
-            tool_name: 工具名称
-            
-        Returns:
-            Optional[AsyncToolWrapper]: 工具对象，不存在则返回None
-        """
-        return self.tools.get(tool_name)
-    
+
     def list_tools(
         self,
         category: Optional[str] = None,
@@ -887,216 +549,6 @@ class ToolRegistry:
             name for name, metadata in self.tool_metadata.items()
             if metadata.get("category") == category
         ]
-    
-    def get_tools_by_tags(self, tags: List[str]) -> List[str]:
-        """
-        按标签获取工具名称列表
-        
-        Args:
-            tags: 标签列表（满足任一标签即可）
-            
-        Returns:
-            List[str]: 工具名称列表
-        """
-        return [
-            name for name, metadata in self.tool_metadata.items()
-            if set(metadata.get("tags", [])).intersection(set(tags))
-        ]
-    
-    def has_tool(self, tool_name: str) -> bool:
-        """
-        检查工具是否存在
-        
-        Args:
-            tool_name: 工具名称
-            
-        Returns:
-            bool: 工具是否存在
-        """
-        return tool_name in self.tools
-    
-    def enable_tool(self, tool_name: str) -> bool:
-        """
-        启用工具
-        
-        Args:
-            tool_name: 工具名称
-            
-        Returns:
-            bool: 操作是否成功
-        """
-        return self.update_metadata(tool_name, enabled=True)
-    
-    def disable_tool(self, tool_name: str) -> bool:
-        """
-        禁用工具
-        
-        Args:
-            tool_name: 工具名称
-            
-        Returns:
-            bool: 操作是否成功
-        """
-        return self.update_metadata(tool_name, enabled=False)
-    
-    def get_registry_stats(self) -> Dict[str, Any]:
-        """
-        获取注册表统计信息
-        
-        Returns:
-            Dict: 统计信息
-        """
-        total_calls = sum(
-            metadata.get("call_count", 0)
-            for metadata in self.tool_metadata.values()
-        )
-        
-        categories = {}
-        for metadata in self.tool_metadata.values():
-            cat = metadata.get("category", "general")
-            categories[cat] = categories.get(cat, 0) + 1
-        
-        return {
-            "total_tools": len(self.tools),
-            "enabled_tools": sum(
-                1 for m in self.tool_metadata.values() if m.get("enabled", True)
-            ),
-            "disabled_tools": sum(
-                1 for m in self.tool_metadata.values() if not m.get("enabled", True)
-            ),
-            "total_calls": total_calls,
-            "categories": categories,
-            "cache_stats": self.get_cache_stats(),
-            "security_audit_count": len(self._security_audit_log),
-            "trace_enabled": self._call_chain_enabled,
-            "cache_enabled": self._cache_enabled,
-            "security_check_enabled": self._security_check_enabled,
-        }
-    
-    def set_cache_enabled(self, enabled: bool):
-        """设置缓存开关"""
-        self._cache_enabled = enabled
-        logger.info(f"缓存功能已{'启用' if enabled else '禁用'}")
-    
-    def set_security_check_enabled(self, enabled: bool):
-        """设置安全检查开关"""
-        self._security_check_enabled = enabled
-        logger.info(f"安全检查功能已{'启用' if enabled else '禁用'}")
-    
-    def set_trace_enabled(self, enabled: bool):
-        """设置调用链追踪开关"""
-        self._call_chain_enabled = enabled
-        logger.info(f"调用链追踪功能已{'启用' if enabled else '禁用'}")
-    
-    def add_dangerous_pattern(self, pattern: str):
-        """
-        添加危险模式
-        
-        Args:
-            pattern: 危险模式字符串
-        """
-        self._dangerous_patterns.add(pattern.lower())
-        logger.info(f"添加危险模式: {pattern}")
-    
-    def remove_dangerous_pattern(self, pattern: str) -> bool:
-        """
-        移除危险模式
-        
-        Args:
-            pattern: 危险模式字符串
-            
-        Returns:
-            bool: 是否成功移除
-        """
-        if pattern.lower() in self._dangerous_patterns:
-            self._dangerous_patterns.remove(pattern.lower())
-            logger.info(f"移除危险模式: {pattern}")
-            return True
-        return False
-
-
-def register_tool(
-    name: str,
-    description: str = "",
-    category: str = "general",
-    timeout: int = 60,
-    priority: int = 5,
-    version: str = "1.0.0",
-    author: str = "unknown",
-    dependencies: Optional[List[str]] = None,
-    applicable_scenarios: Optional[List[str]] = None,
-    permissions: Optional[List[str]] = None,
-    tags: Optional[List[str]] = None,
-    examples: Optional[List[Dict[str, Any]]] = None,
-    cache_ttl: Optional[int] = None,
-    enabled: bool = True
-):
-    """
-    工具注册装饰器（增强版）
-    
-    用于简化工具注册，使用装饰器语法:
-    
-    Examples:
-        >>> @register_tool(
-        ...     name="my_tool",
-        ...     description="我的工具",
-        ...     category="plugin",
-        ...     timeout=30,
-        ...     version="1.0.0",
-        ...     author="developer",
-        ...     tags=["scanner", "security"],
-        ...     applicable_scenarios=["漏洞扫描", "安全检测"]
-        ... )
-        ... async def my_tool_func(target: str):
-        ...     return {"result": "success"}
-    """
-    def decorator(func: Callable):
-        registry.register(
-            name=name,
-            func=func,
-            description=description,
-            category=category,
-            timeout=timeout,
-            priority=priority,
-            version=version,
-            author=author,
-            dependencies=dependencies,
-            applicable_scenarios=applicable_scenarios,
-            permissions=permissions,
-            tags=tags,
-            examples=examples,
-            cache_ttl=cache_ttl,
-            enabled=enabled
-        )
-        return func
-    return decorator
-
 
 registry = ToolRegistry()
-"""
-全局工具注册表（增强版）
 
-增强功能:
-    - 丰富的元数据管理（版本、作者、依赖、场景、标签等）
-    - 调用链追踪（start_trace/end_trace/get_call_chain）
-    - 执行安全检查（危险模式检测、权限检查）
-    - 结果缓存（支持TTL过期）
-    - 统一返回 PluginResult
-
-使用示例:
-    from ai_agents.tools import registry, register_tool
-    
-    @register_tool(
-        name="my_tool",
-        description="我的工具",
-        version="1.0.0",
-        author="developer",
-        tags=["scanner"]
-    )
-    async def my_tool(target: str):
-        return {"result": "success"}
-    
-    trace_id = registry.start_trace()
-    result = await registry.call_tool("my_tool", "https://example.com")
-    trace_summary = registry.end_trace()
-"""

@@ -24,9 +24,9 @@ shopex|index|index|<meta name="generator" content="ShopEx .*?" />
 maccms|index|index|Copyright .*? maccms\.com Inc
 dedecms|index|index|Powered by <a target="_blank" href="http://www.dedecms.com/">DedeCMS</a>
 startbbs|index|index|class=\"startbbs|Powered by <a href=\"http://www.startbbs.com\"
-drupal|headers|X-Generator|Drupal
-drupal|headers|X-Drupal-Cache|.*?
-drupal|headers|X-Drupal-Dynamic-Cache|.*?
+drupal|headers|X-Generator|drupal
+drupal|headers|X-drupal-Cache|.*?
+drupal|headers|X-drupal-Dynamic-Cache|.*?
 waikucms|index|index|Powered by <b>WaiKuCms
 yongyou_nc|index|index|src=logo/images/ufida_nc.png
 cacti|index|index|<title>.*?Cacti.*?</title>

@@ -21,6 +21,62 @@ class AgentConfig:
     默认为0.7。
     """
     
+    # = 对话实例配置 =
+    MAX_CHAT_INSTANCES_PER_USER: int = 10
+    """
+    每个用户最大对话实例数
+    
+    限制单个用户可创建的对话实例数量。
+    默认为10个。
+    """
+    
+    CHAT_INSTANCE_TIMEOUT: int = 3600
+    """
+    对话实例超时时间(秒)
+    
+    超过此时间未活动的对话实例将被自动清理。
+    默认为3600秒(1小时)。
+    """
+    
+    ENABLE_CHAT_INSTANCE_CLEANUP: bool = True
+    """
+    是否启用对话实例自动清理
+    
+    默认为True。
+    """
+    
+    # = 工作流配置 =
+    MAX_WORKFLOW_INSTANCES: int = 100
+    """
+    最大工作流实例数
+    
+    系统同时运行的最大工作流实例数量。
+    默认为100个。
+    """
+    
+    WORKFLOW_CHECKPOINT_INTERVAL: int = 30
+    """
+    工作流检查点保存间隔(秒)
+    
+    用于断点续传功能。
+    默认为30秒。
+    """
+    
+    ENABLE_WORKFLOW_RESUME: bool = True
+    """
+    是否启用工作流恢复功能
+    
+    默认为True。
+    """
+    
+    WORKFLOW_RESUME_TIMEOUT: int = 86400
+    """
+    工作流恢复超时时间(秒)
+    
+    超过此时间的工作流状态将无法恢复。
+    默认为86400秒(24小时)。
+    """
+
     # = 执行配置 =
     MAX_EXECUTION_TIME: int = settings.AGENT_MAX_EXECUTION_TIME
     """
@@ -50,6 +106,57 @@ class AgentConfig:
     ENABLE_RESPONSE_TIME_MONITORING: bool = True
     """
     是否启用响应时间监控
+    
+    默认为True。
+    """
+    
+    # = API配置 =
+    API_RATE_LIMIT: int = 100
+    """
+    API请求速率限制(每分钟)
+    
+    默认为100次/分钟。
+    """
+    
+    API_TIMEOUT: int = 30
+    """
+    API请求超时时间(秒)
+    
+    默认为30秒。
+    """
+    
+    ENABLE_API_AUTH: bool = True
+    """
+    是否启用API认证
+    
+    默认为True。
+    """
+    
+    # = WebSocket配置 =
+    WEBSOCKET_HEARTBEAT_INTERVAL: int = 30
+    """
+    WebSocket心跳间隔(秒)
+    
+    默认为30秒。
+    """
+    
+    WEBSOCKET_MAX_CONNECTIONS: int = 1000
+    """
+    WebSocket最大连接数
+    
+    默认为1000个。
+    """
+    
+    WEBSOCKET_MESSAGE_QUEUE_SIZE: int = 100
+    """
+    WebSocket消息队列大小
+    
+    默认为100条。
+    """
+    
+    ENABLE_WEBSOCKET_BROADCAST: bool = True
+    """
+    是否启用WebSocket广播
     
     默认为True。
     """

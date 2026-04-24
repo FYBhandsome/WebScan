@@ -495,30 +495,6 @@ class FalsePositiveDetector:
             pattern = features["output_pattern"]
             current_weight = self._learned_patterns.get(pattern, 0.0)
             self._learned_patterns[pattern] = min(current_weight + 0.1, 0.5)
-        
-        logger.info(f"学习数据已记录: result_id={result_id}, is_fp={is_false_positive}")
-    
-    def get_detection_summary(
-        self,
-        result: POCVerificationResult,
-        logs: List[POCExecutionLog]
-    ) -> Dict[str, Any]:
-        """获取检测摘要"""
-        is_fp, score, scores = self.detect_hybrid(result, logs)
-        
-        return {
-            "is_false_positive": is_fp,
-            "false_positive_score": score,
-            "method_scores": scores,
-            "threshold": {
-                "confidence_threshold": self.threshold.confidence_threshold,
-                "keyword_weight": self.threshold.keyword_weight,
-                "pattern_weight": self.threshold.pattern_weight,
-                "ml_weight": self.threshold.ml_weight,
-            },
-            "learned_patterns_count": len(self._learned_patterns),
-            "learning_data_count": len(self._learning_data)
-        }
 
 
 class ConfidenceCalculator:
@@ -777,12 +753,6 @@ class ConfidenceCalculator:
             "old_weights": old_weights,
             "new_weights": new_weights
         })
-        
-        logger.info(f"置信度权重已调整: {new_weights}")
-    
-    def get_weight_adjustment_history(self) -> List[Dict[str, Any]]:
-        """获取权重调整历史"""
-        return self._adjustment_history.copy()
 
 
 class SeverityAssessor:
@@ -1048,7 +1018,6 @@ class SeverityAssessor:
             "created_at": datetime.now().isoformat()
         }
         self._adjustment_rules.append(rule)
-        logger.info(f"添加严重程度调整规则: {description}")
     
     def apply_adjustment_rules(
         self,
@@ -1122,8 +1091,6 @@ class ResultAnalyzer:
         self._custom_rules: List[CustomAnalysisRule] = []
         self._manual_false_positives: Set[int] = set()
         self._analysis_cache: Dict[int, AnalysisResult] = {}
-        
-        logger.info("结果分析器初始化完成")
     
     async def analyze_single_result(
         self,
@@ -1140,8 +1107,6 @@ class ResultAnalyzer:
         Returns:
             AnalysisResult: 分析结果
         """
-        logger.info(f"开始分析结果: {result.poc_name if hasattr(result, 'poc_name') else result.id}")
-        
         logs = await POCExecutionLog.filter(
             task_id=str(result.verification_task_id) if hasattr(result, "verification_task_id") else str(result.id)
         ).order_by("created_at")
@@ -1203,7 +1168,6 @@ class ResultAnalyzer:
         
         await self._apply_custom_rules(analysis_result)
         
-        logger.info(f"结果分析完成: {analysis_result.poc_name}, 风险等级: {risk_level}")
         return analysis_result
     
     async def _detect_false_positive(
@@ -1253,8 +1217,6 @@ class ResultAnalyzer:
         Returns:
             BatchAnalysisSummary: 批量分析摘要
         """
-        logger.info(f"开始批量分析,结果数: {len(results)}")
-        
         analysis_results = []
         for result in results:
             analysis = await self.analyze_single_result(result, detection_method)
@@ -1297,7 +1259,6 @@ class ResultAnalyzer:
             recommendations=recommendations
         )
         
-        logger.info(f"批量分析完成,漏洞: {vulnerable_count}, 误报: {false_positive_count}")
         return summary
     
     def _calculate_risk_level(
@@ -1562,8 +1523,6 @@ class ResultAnalyzer:
                 is_false_positive=is_false_positive,
                 source=feedback_source
             )
-        
-        logger.info(f"手动标记误报: result_id={result_id}, is_fp={is_false_positive}")
     
     def add_custom_analysis_rule(
         self,
@@ -1597,7 +1556,6 @@ class ResultAnalyzer:
             enabled=enabled
         )
         self._custom_rules.append(rule)
-        logger.info(f"添加自定义分析规则: {name}")
     
     def remove_custom_rule(self, rule_id: str) -> bool:
         """
@@ -1612,7 +1570,6 @@ class ResultAnalyzer:
         for i, rule in enumerate(self._custom_rules):
             if rule.rule_id == rule_id:
                 self._custom_rules.pop(i)
-                logger.info(f"移除自定义分析规则: {rule_id}")
                 return True
         return False
     
@@ -1722,7 +1679,6 @@ class ResultAnalyzer:
         if file_path:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
-            logger.info(f"分析结果已导出到: {file_path}")
         
         return content
     
@@ -1997,7 +1953,6 @@ class ResultAnalyzer:
             threshold: 阈值配置
         """
         self.fp_detector.threshold = threshold
-        logger.info(f"误报检测阈值已更新: {threshold}")
     
     def configure_confidence_weights(
         self,
@@ -2010,23 +1965,6 @@ class ResultAnalyzer:
             weights: 权重配置
         """
         self.confidence_calculator.weights = weights
-        logger.info(f"置信度权重已更新: {weights}")
-    
-    def get_analysis_summary(self) -> Dict[str, Any]:
-        """获取分析器摘要信息"""
-        return {
-            "custom_rules_count": len(self._custom_rules),
-            "manual_false_positives_count": len(self._manual_false_positives),
-            "cached_results_count": len(self._analysis_cache),
-            "learned_patterns_count": len(self.fp_detector._learned_patterns),
-            "learning_data_count": len(self.fp_detector._learning_data),
-            "weight_adjustment_history": len(
-                self.confidence_calculator._adjustment_history
-            ),
-            "severity_adjustment_rules": len(
-                self.severity_assessor._adjustment_rules
-            )
-        }
 
 
 result_analyzer = ResultAnalyzer()

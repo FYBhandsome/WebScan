@@ -3,18 +3,8 @@ POC Confidence Scoring Module
 """
 import logging
 from typing import Dict, Any, Optional
-from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ConfidenceScore:
-    total_score: float
-    match_score: float
-    execution_score: float
-    output_score: float
-    details: Dict[str, Any]
 
 
 class ConfidenceScorer:
@@ -107,40 +97,6 @@ class ConfidenceScorer:
             score += 0.3
         
         return min(score, 1.0)
-    
-    def get_detailed_score(
-        self, 
-        match_result: Optional[Any], 
-        execution_result: Dict[str, Any]
-    ) -> ConfidenceScore:
-        """
-        Get detailed confidence score breakdown
-        
-        Args:
-            match_result: POC match result
-            execution_result: Execution result
-            
-        Returns:
-            ConfidenceScore: Detailed score breakdown
-        """
-        match_score = self._calculate_match_score(match_result)
-        execution_score = self._calculate_execution_score(execution_result)
-        output_score = self._calculate_output_score(execution_result)
-        
-        total_score = self.calculate_score(match_result, execution_result)
-        
-        return ConfidenceScore(
-            total_score=total_score,
-            match_score=match_score,
-            execution_score=execution_score,
-            output_score=output_score,
-            details={
-                "weights": self.weights,
-                "vulnerable": execution_result.get("vulnerable", False),
-                "has_error": bool(execution_result.get("error")),
-                "output_length": len(execution_result.get("output", ""))
-            }
-        )
 
 
 confidence_scorer = ConfidenceScorer()

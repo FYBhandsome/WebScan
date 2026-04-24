@@ -765,7 +765,7 @@ def POC_Check(url: str, CVE_id: str) -> tuple:
             result = cve_2020_14756_poc(url)
         elif CVE_id_clean == "CVE_2023_21839":
             result = cve_2023_21839_poc(url)
-        # Drupal
+        # drupal
         elif CVE_id_clean == "CVE_2018_7600":
             result = cve_2018_7600_poc.poc(url)
         # Tomcat
@@ -967,10 +967,10 @@ async def get_middleware_poc_list():
             },
             {
                 'cve_id': 'CVE-2018-7600',
-                'name': 'Drupal CVE-2018-7600',
-                'description': 'Drupal 远程代码执行漏洞',
+                'name': 'drupal CVE-2018-7600',
+                'description': 'drupal 远程代码执行漏洞',
                 'severity': '高危',
-                'middleware': 'Drupal'
+                'middleware': 'drupal'
             },
             {
                 'cve_id': 'CVE-2017-12615',
