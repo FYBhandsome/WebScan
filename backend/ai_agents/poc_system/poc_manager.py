@@ -1,8 +1,59 @@
 """
-POC 脚本管理器.
+POC 脚本管理器
 
-负责 POC 脚本的管理,包括从 Seebug 同步、本地加载、版本控制等。
-使用Seebug_Agent的SeebugClient和SeebugAgent实现。
+负责 POC 脚本的管理，包括从 Seebug 同步、本地加载、版本控制等。
+使用 Seebug_Agent 的 SeebugClient 和 SeebugAgent 实现。
+
+模块功能:
+1. POC 生命周期管理
+   - 从 Seebug 同步 POC
+   - 本地自定义 POC 脚本加载
+   - POC 版本控制
+   - POC 缓存管理
+
+2. POC 元数据管理
+   - POCMetadata: POC 元数据类
+   - POCVersion: 版本信息
+   - POCDependency: 依赖信息
+
+3. 多来源支持
+   - Seebug 在线 POC
+   - 本地 POC 文件
+   - Pocsuite3 内置 POC
+   - 动态生成的 POC
+
+简化说明（重构变更）:
+- 移除了重复的 seebug_client 和 seebug_agent 实例
+- 统一使用 seebug_utils 访问 Seebug_Agent 功能
+- 合并了 sync_from_seebug 和 search_seebug_pocs 的重复逻辑
+- 优化了缓存管理机制，减少重复代码
+- 使用 _search_seebug_pocs_internal 统一处理搜索逻辑
+
+使用示例:
+    from backend.ai_agents.poc_system.poc_manager import poc_manager
+    
+    # 从 Seebug 同步 POC
+    pocs = await poc_manager.sync_from_seebug("nginx", limit=10)
+    
+    # 获取 POC 代码
+    poc_code = await poc_manager.get_poc_code("seebug_12345")
+    
+    # 搜索本地 POC
+    results = poc_manager.search_pocs("wordpress")
+    
+    # 获取 POC 统计信息
+    stats = poc_manager.get_poc_statistics()
+    
+    # 创建验证任务
+    task = await poc_manager.create_verification_task(
+        poc_id="seebug_12345",
+        target="http://example.com"
+    )
+
+配置要求:
+    需要在 backend/config.py 或 .env 中配置:
+    - SEEBUG_API_KEY: Seebug API 密钥
+    - POC_CACHE_TTL: POC 缓存过期时间（秒）
 """
 
 import logging
@@ -19,15 +70,23 @@ from backend.Pocsuite3Agent.agent import get_pocsuite3_agent
 from backend.ai_agents.utils.cache import CacheManager
 from backend.config import settings
 from backend.models import POCVerificationTask
-from backend.utils.poc_utils import validate_poc_script_code
+from backend.ai_agents.poc_system.utils import validate_poc_script_code
 from backend.utils.seebug_utils import seebug_utils
 
 logger = logging.getLogger(__name__)
 
 
 class POCSource(Enum):
-    """POC 来源枚举."""
-
+    """
+    POC 来源枚举
+    
+    定义 POC 脚本的来源类型:
+    - SEEBUG: 从 Seebug 平台获取
+    - LOCAL: 本地文件系统
+    - POCSUITE3: Pocsuite3 内置
+    - GENERATED: 动态生成
+    - SEEBUG_AI: Seebug AI 生成
+    """
     SEEBUG = "seebug"
     LOCAL = "local"
     POCSUITE3 = "pocsuite3"
@@ -37,15 +96,25 @@ class POCSource(Enum):
 
 @dataclass
 class POCVersion:
-    """POC 版本信息.
-
-    Attributes:
-        version: 版本号.
-        release_date: 发布日期.
-        changelog: 变更日志.
-        compatible: 是否兼容.
     """
-
+    POC 版本信息
+    
+    记录 POC 的版本详情，用于版本控制和兼容性检查。
+    
+    属性:
+        version: 版本号（如 "1.0", "2.1"）
+        release_date: 发布日期
+        changelog: 变更日志
+        compatible: 是否与当前系统兼容
+    
+    使用示例:
+        version = POCVersion(
+            version="2.0",
+            release_date=datetime.now(),
+            changelog="修复了超时问题",
+            compatible=True
+        )
+    """
     version: str
     release_date: Optional[datetime] = None
     changelog: Optional[str] = None
@@ -67,15 +136,25 @@ class POCVersion:
 
 @dataclass
 class POCDependency:
-    """POC 依赖信息.
-
-    Attributes:
-        name: 依赖名称.
-        version: 依赖版本.
-        required: 是否必需.
-        description: 依赖描述.
     """
-
+    POC 依赖信息
+    
+    记录 POC 脚本的外部依赖，用于环境检查和依赖管理。
+    
+    属性:
+        name: 依赖名称（如 "requests", "beautifulsoup4"）
+        version: 依赖版本要求
+        required: 是否为必需依赖
+        description: 依赖描述
+    
+    使用示例:
+        dep = POCDependency(
+            name="requests",
+            version=">=2.28.0",
+            required=True,
+            description="HTTP 请求库"
+        )
+    """
     name: str
     version: Optional[str] = None
     required: bool = True
@@ -186,32 +265,47 @@ class POCMetadata:
 
 
 class POCManagerError(Exception):
-    """POC 管理器基础异常."""
-
+    """
+    POC 管理器基础异常
+    
+    所有 POC 管理相关异常的基类。
+    """
     pass
 
 
 class POCNotFoundError(POCManagerError):
-    """POC 未找到异常."""
-
+    """
+    POC 未找到异常
+    
+    当请求的 POC 不存在时抛出。
+    """
     pass
 
 
 class POCVersionIncompatibleError(POCManagerError):
-    """POC 版本不兼容异常."""
-
+    """
+    POC 版本不兼容异常
+    
+    当 POC 版本与当前系统不兼容时抛出。
+    """
     pass
 
 
 class POCSyncError(POCManagerError):
-    """POC 同步异常."""
-
+    """
+    POC 同步异常
+    
+    当从远程源同步 POC 失败时抛出。
+    """
     pass
 
 
 class POCValidationError(POCManagerError):
-    """POC 验证异常."""
-
+    """
+    POC 验证异常
+    
+    当 POC 脚本验证失败时抛出。
+    """
     pass
 
 
@@ -224,6 +318,12 @@ class POCManager:
     - POC 版本控制
     - POC 缓存管理
     - POC 元数据管理
+
+    简化说明:
+    - 移除了重复的 seebug_client 和 seebug_agent 实例
+    - 统一使用 seebug_utils 访问 Seebug_Agent 功能
+    - 合并了 sync_from_seebug 和 search_seebug_pocs 的重复逻辑
+    - 优化了缓存管理机制
 
     Attributes:
         CURRENT_POCSUITE_VERSION: 当前 Pocsuite 版本.
@@ -242,8 +342,6 @@ class POCManager:
         self.poc_cache = CacheManager(ttl=settings.POC_CACHE_TTL)
         self._lock = threading.RLock()
 
-        self.seebug_client = seebug_utils.get_client()
-        self.seebug_agent = seebug_utils.get_agent()
         self.pocsuite3_agent = get_pocsuite3_agent()
 
         self._init_error_recovery()
@@ -446,42 +544,50 @@ class POCManager:
             self._handle_error("_get_seebug_poc_code", e, {"poc_id": poc_id})
             return None
 
-    async def sync_from_seebug(
+    async def _search_seebug_pocs_internal(
         self,
         keyword: str = "",
-        limit: int = 100,
+        page: int = 1,
+        page_size: int = 10,
         force_refresh: bool = False,
+        cache_key_prefix: str = "search",
+        add_seebug_prefix: bool = False,
     ) -> List[POCMetadata]:
-        """从 Seebug 同步 POC.
+        """内部方法: 搜索 Seebug POC.
+
+        统一处理 sync_from_seebug 和 search_seebug_pocs 的搜索逻辑,
+        避免代码重复。直接使用 seebug_utils.search_poc 方法。
 
         Args:
             keyword: 搜索关键词.
-            limit: 返回数量限制.
+            page: 页码.
+            page_size: 每页数量.
             force_refresh: 是否强制刷新缓存.
+            cache_key_prefix: 缓存键前缀.
+            add_seebug_prefix: 是否在 poc_id 前添加 "seebug_" 前缀.
 
         Returns:
             List[POCMetadata]: POC 元数据列表.
         """
         try:
-            self._log_operation("sync_from_seebug", {"keyword": keyword, "limit": limit})
+            self._log_operation("_search_seebug_pocs_internal", {"keyword": keyword, "page": page})
 
-            cache_key = f"seebug_{keyword}_{limit}"
+            cache_key = f"{cache_key_prefix}_{keyword}_{page}_{page_size}"
 
             if not force_refresh:
-                cached_pocs = self.poc_cache.get(cache_key)
-                if cached_pocs:
+                cached_result = self.poc_cache.get(cache_key)
+                if cached_result:
                     age = self.poc_cache.get_age(cache_key)
-                    logger.info(f"✅ 使用缓存数据,缓存年龄: {age:.2f}秒")
-                    return cached_pocs
+                    logger.debug(f"使用缓存的搜索结果,缓存年龄: {age:.2f}秒")
+                    return cached_result
 
-            search_result = self.seebug_client.search_poc(keyword, page=1, page_size=limit)
+            response = await seebug_utils.search_poc(keyword, page, page_size)
 
-            if search_result.get("status") != "success":
-                error_msg = search_result.get("message", "未知错误")
-                logger.warning(f"⚠️ Seebug 搜索失败: {error_msg}")
+            if not response.success:
+                logger.warning(f"⚠️ Seebug 搜索失败: {response.message}")
                 return []
 
-            poc_list = search_result.get("data", {}).get("list", [])
+            poc_list = response.data.get("list", []) if response.data else []
 
             if not poc_list:
                 logger.info(f"📭 未找到匹配的 POC,关键词: {keyword}")
@@ -490,9 +596,12 @@ class POCManager:
             poc_metadata_list = []
             with self._lock:
                 for poc_item in poc_list:
+                    ssvid = poc_item.get("ssvid", "")
+                    poc_id = f"seebug_{ssvid}" if add_seebug_prefix else str(ssvid)
+
                     metadata = POCMetadata(
                         poc_name=poc_item.get("name", ""),
-                        poc_id=str(poc_item.get("ssvid", "")),
+                        poc_id=poc_id,
                         poc_type=poc_item.get("type", "web"),
                         severity=poc_item.get("severity", "medium"),
                         cvss_score=poc_item.get("cvss_score"),
@@ -506,17 +615,49 @@ class POCManager:
                     self.poc_registry[metadata.poc_id] = metadata
 
             self.poc_cache.set(cache_key, poc_metadata_list)
-            self._last_sync_time = datetime.now()
 
-            logger.info(f"✅ 从 Seebug 同步完成,获取 {len(poc_metadata_list)} 个 POC")
+            if cache_key_prefix == "sync":
+                self._last_sync_time = datetime.now()
+
+            logger.info(f"✅ Seebug POC搜索成功,找到 {len(poc_metadata_list)} 个POC")
             return poc_metadata_list
 
         except Exception as e:
-            self._handle_error("sync_from_seebug", e, {"keyword": keyword, "limit": limit})
+            self._handle_error("_search_seebug_pocs_internal", e, {"keyword": keyword})
             return []
+
+    async def sync_from_seebug(
+        self,
+        keyword: str = "",
+        limit: int = 100,
+        force_refresh: bool = False,
+    ) -> List[POCMetadata]:
+        """从 Seebug 同步 POC.
+
+        简化说明: 统一使用 _search_seebug_pocs_internal 方法处理搜索逻辑,
+        避免与 search_seebug_pocs 方法的重复代码。
+
+        Args:
+            keyword: 搜索关键词.
+            limit: 返回数量限制.
+            force_refresh: 是否强制刷新缓存.
+
+        Returns:
+            List[POCMetadata]: POC 元数据列表.
+        """
+        return await self._search_seebug_pocs_internal(
+            keyword=keyword,
+            page=1,
+            page_size=limit,
+            force_refresh=force_refresh,
+            cache_key_prefix="sync"
+        )
 
     async def download_poc_from_seebug(self, ssvid: int) -> Optional[str]:
         """从 Seebug 下载 POC.
+
+        简化说明: 直接使用 seebug_utils.download_poc 方法,
+        避免重复实现下载逻辑。seebug_utils 内部已包含缓存机制。
 
         Args:
             ssvid: Seebug 漏洞 ID.
@@ -530,17 +671,16 @@ class POCManager:
             cache_key = f"poc_code_{ssvid}"
             cached_code = self.poc_cache.get(cache_key)
             if cached_code:
-                logger.debug(f"使用缓存的 POC 代码: {ssvid}")
+                logger.debug(f"使用本地缓存的 POC 代码: {ssvid}")
                 return cached_code
 
-            download_result = self.seebug_client.download_poc(ssvid)
+            response = await seebug_utils.download_poc(ssvid)
 
-            if download_result.get("status") != "success":
-                error_msg = download_result.get("message", "下载失败")
-                logger.warning(f"⚠️ 从 Seebug 下载 POC 失败,SSVID: {ssvid}, 原因: {error_msg}")
+            if not response.success:
+                logger.warning(f"⚠️ 从 Seebug 下载 POC 失败,SSVID: {ssvid}, 原因: {response.message}")
                 return None
 
-            poc_code = download_result.get("data", {}).get("poc", "")
+            poc_code = response.data.get("code", "") if response.data else ""
 
             if not poc_code:
                 logger.warning(f"⚠️ POC 代码为空,SSVID: {ssvid}")
@@ -1395,6 +1535,9 @@ class POCManager:
     ) -> List[POCMetadata]:
         """搜索 Seebug POC.
 
+        简化说明: 统一使用 _search_seebug_pocs_internal 方法处理搜索逻辑,
+        避免与 sync_from_seebug 方法的重复代码。
+
         Args:
             keyword: 搜索关键词.
             page: 页码.
@@ -1403,52 +1546,14 @@ class POCManager:
         Returns:
             List[POCMetadata]: POC 元数据列表.
         """
-        try:
-            self._log_operation("search_seebug_pocs", {"keyword": keyword, "page": page})
-
-            cache_key = f"search_{keyword}_{page}_{page_size}"
-            cached_result = self.poc_cache.get(cache_key)
-            if cached_result:
-                age = self.poc_cache.get_age(cache_key)
-                logger.debug(f"使用缓存的搜索结果,缓存年龄: {age:.2f}秒")
-                return cached_result
-
-            search_result = self.seebug_client.search_poc(keyword, page, page_size)
-
-            if search_result.get("status") != "success":
-                return []
-
-            poc_list = search_result.get("data", {}).get("list", [])
-
-            if not poc_list:
-                return []
-
-            poc_metadata_list = []
-            with self._lock:
-                for poc_item in poc_list:
-                    metadata = POCMetadata(
-                        poc_name=poc_item.get("name", ""),
-                        poc_id=f"seebug_{poc_item.get('ssvid', '')}",
-                        poc_type=poc_item.get("type", "web"),
-                        severity=poc_item.get("severity", "medium"),
-                        cvss_score=poc_item.get("cvss_score"),
-                        description=poc_item.get("description"),
-                        author=poc_item.get("author"),
-                        source=POCSource.SEEBUG.value,
-                        version="1.0",
-                        tags=poc_item.get("tags", []),
-                    )
-                    poc_metadata_list.append(metadata)
-                    self.poc_registry[metadata.poc_id] = metadata
-
-            self.poc_cache.set(cache_key, poc_metadata_list)
-
-            logger.info(f"✅ Seebug POC搜索成功,找到 {len(poc_metadata_list)} 个POC")
-            return poc_metadata_list
-
-        except Exception as e:
-            self._handle_error("search_seebug_pocs", e, {"keyword": keyword})
-            return []
+        return await self._search_seebug_pocs_internal(
+            keyword=keyword,
+            page=page,
+            page_size=page_size,
+            force_refresh=False,
+            cache_key_prefix="search",
+            add_seebug_prefix=True
+        )
 
     async def batch_sync_from_seebug(
         self,

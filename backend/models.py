@@ -114,6 +114,9 @@ class Report(Model):
         report_type: 报告类型，如pdf（PDF文档）、html（HTML网页）、json（JSON数据）等
         content: 报告内容，JSON格式存储结构化数据
         file_path: 报告文件存储路径，如果报告导出为文件
+        ai_analysis: AI分析结果，JSON格式存储AI对报告的分析
+        analyzed_at: AI分析时间，记录AI分析的执行时间
+        analysis_model: 分析模型，记录使用的AI模型名称
         created_at: 报告创建时间
         updated_at: 报告最后更新时间
     """
@@ -126,6 +129,9 @@ class Report(Model):
     report_type = fields.CharField(max_length=50, description="报告类型：pdf, html, json, docx, etc.")
     content = fields.TextField(null=True, description="报告内容（JSON格式）")
     file_path = fields.CharField(max_length=500, null=True, description="报告文件存储路径")
+    ai_analysis = fields.TextField(null=True, description="AI分析结果（JSON格式）")
+    analyzed_at = fields.DatetimeField(null=True, description="AI分析时间")
+    analysis_model = fields.CharField(max_length=100, null=True, description="分析模型")
     created_at = fields.DatetimeField(auto_now_add=True, description="创建时间")
     updated_at = fields.DatetimeField(auto_now=True, description="更新时间")
     
@@ -160,6 +166,9 @@ class Vulnerability(Model):
         payload: 测试使用的Payload，用于复现漏洞
         evidence: 漏洞证据，如截图、响应数据等
         remediation: 修复建议，提供漏洞修复方案
+        ai_analysis: AI分析结果，JSON格式存储AI对漏洞的分析
+        risk_score: AI评估风险分数，0.0-10.0的数值评分
+        fix_priority: 修复优先级，数值越小优先级越高
         status: 漏洞状态，open（未修复）、fixed（已修复）、ignored（已忽略）
         created_at: 漏洞发现时间
         updated_at: 漏洞最后更新时间
@@ -177,6 +186,9 @@ class Vulnerability(Model):
     payload = fields.TextField(null=True, description="测试Payload")
     evidence = fields.TextField(null=True, description="漏洞证据（截图/响应数据等）")
     remediation = fields.TextField(null=True, description="修复建议")
+    ai_analysis = fields.TextField(null=True, description="AI分析结果（JSON格式）")
+    risk_score = fields.FloatField(null=True, description="AI评估风险分数")
+    fix_priority = fields.IntField(null=True, description="修复优先级")
     status = fields.CharField(max_length=50, default="open", description="状态：open, fixed, ignored, false_positive")
     source_id = fields.CharField(max_length=100, null=True, description="来源ID (如AWVS vuln_id)")
     source = fields.CharField(max_length=20, default="awvs", description="来源：awvs, poc")
@@ -217,6 +229,7 @@ class ScanResult(Model):
         scan_type: 扫描类型，如port_scan（端口扫描）、subdomain（子域名）、directory（目录扫描）等
         target: 扫描目标，域名、IP或URL
         result: 扫描结果，JSON格式存储结构化数据
+        ai_analysis: AI分析结果，JSON格式存储AI对扫描结果的分析
         status: 扫描状态，success（成功）、failed（失败）
         error_message: 错误信息，记录扫描失败原因
         created_at: 扫描时间
@@ -229,6 +242,7 @@ class ScanResult(Model):
     scan_type = fields.CharField(max_length=50, description="扫描类型：port_scan, subdomain, directory, etc.")
     target = fields.CharField(max_length=500, description="扫描目标（域名/IP/URL）")
     result = fields.TextField(null=True, description="扫描结果（JSON格式）")
+    ai_analysis = fields.TextField(null=True, description="AI分析结果（JSON格式）")
     status = fields.CharField(max_length=50, default="success", description="状态：success, failed")
     error_message = fields.TextField(null=True, description="错误信息")
     created_at = fields.DatetimeField(auto_now_add=True, description="创建时间")
@@ -705,6 +719,7 @@ class POCVerificationResult(Model):
         confidence: 置信度
         severity: 严重程度
         cvss_score: CVSS评分
+        analysis: AI分析结果（JSON格式）
         created_at: 创建时间
     """
     id = fields.UUIDField(pk=True, description="结果ID")
@@ -722,6 +737,7 @@ class POCVerificationResult(Model):
     confidence = fields.FloatField(default=0.0, description="置信度(0-1)")
     severity = fields.CharField(max_length=20, null=True, description="严重程度")
     cvss_score = fields.FloatField(default=0.0, description="CVSS评分")
+    analysis = fields.JSONField(null=True, default=dict, description="AI分析结果（JSON格式）")
     created_at = fields.DatetimeField(auto_now_add=True, description="创建时间")
     
     class Meta:

@@ -336,27 +336,6 @@ export function getIcon(name) {
   return iconComponent
 }
 
-export function getAllIcons() {
-  return Object.keys(iconMap)
-}
-
-export function getIconMap() {
-  return { ...iconMap }
-}
-
-export function registerIcon(name, component) {
-  iconMap[name] = name
-  iconCache.set(name, component)
-}
-
-export function clearIconCache() {
-  iconCache.clear()
-}
-
 export default {
-  getIcon,
-  getAllIcons,
-  getIconMap,
-  registerIcon,
-  clearIconCache
+  getIcon
 }

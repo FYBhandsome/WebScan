@@ -8,6 +8,11 @@ from .agent import (
     Pocsuite3Agent,
     POCResult,
     ScanResult,
+    POCExecutionError,
+    POCTimeoutError,
+    POCNotFoundError,
+    POCValidationError,
+    ErrorCode,
     get_pocsuite3_agent
 )
 
@@ -15,5 +20,10 @@ __all__ = [
     "Pocsuite3Agent",
     "POCResult",
     "ScanResult",
+    "POCExecutionError",
+    "POCTimeoutError",
+    "POCNotFoundError",
+    "POCValidationError",
+    "ErrorCode",
     "get_pocsuite3_agent"
 ]

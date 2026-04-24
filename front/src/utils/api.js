@@ -278,10 +278,12 @@ export const reportsApi = {
   },
 
   exportReport: async (reportId, format = 'json') => {
-    return request({
-      url: `/reports/${reportId}/export`,
-      method: 'get',
-      params: { format }
+    const token = localStorage.getItem('token')
+    const baseUrl = API_BASE_URL
+    return fetch(`${baseUrl}/reports/${reportId}/export?format=${format}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
     })
   },
 
@@ -309,11 +311,10 @@ export const reportsApi = {
     })
   },
 
-  compareReports: async (data) => {
+  getLatestReportByTask: async (taskId) => {
     return request({
-      url: '/reports/compare',
-      method: 'post',
-      data
+      url: `/reports/task/${taskId}/latest`,
+      method: 'get'
     })
   }
 }
@@ -852,40 +853,11 @@ export const pocVerificationApi = {
     })
   },
 
-  getTaskResults: async (taskId) => {
-    return request({
-      url: `/poc/verification/tasks/${taskId}/results`,
-      method: 'get'
-    })
-  },
-
   generateReport: async (taskId, format = 'html') => {
     return request({
       url: `/poc/verification/tasks/${taskId}/report`,
       method: 'post',
       params: { format }
-    })
-  },
-
-  getStatistics: async () => {
-    return request({
-      url: '/poc/verification/statistics',
-      method: 'get'
-    })
-  },
-
-  getPocRegistry: async () => {
-    return request({
-      url: '/poc/verification/poc/registry',
-      method: 'get'
-    })
-  },
-
-  syncPocsFromSeebug: async (params = {}) => {
-    return request({
-      url: '/poc/verification/poc/sync',
-      method: 'post',
-      params
     })
   },
 

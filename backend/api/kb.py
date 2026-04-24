@@ -17,7 +17,7 @@ from typing import List, Optional, Dict, Any
 from backend.models import VulnerabilityKB
 from tortoise.expressions import Q
 from backend.config import settings
-from backend.api.seebug_client import global_seebug_client
+from backend.utils.seebug_utils import seebug_utils
 import logging
 
 router = APIRouter()
@@ -266,7 +266,7 @@ async def validate_seebug_apikey(api_key: str) -> bool:
     Returns:
         bool: API Key 是否有效
     """
-    response = await global_seebug_client.validate_api_key(api_key)
+    response = await seebug_utils.validate_api_key(api_key)
     return response.success
 
 async def search_seebug_poc(keyword: str, page: int = 1, page_size: int = 10) -> List[Dict[str, Any]]:
@@ -281,7 +281,7 @@ async def search_seebug_poc(keyword: str, page: int = 1, page_size: int = 10) ->
     Returns:
         List[Dict]: POC 列表
     """
-    response = await global_seebug_client.search_poc(keyword, page, page_size)
+    response = await seebug_utils.search_poc(keyword, page, page_size)
     
     if response.success and response.data:
         pocs = response.data.get('list', [])
@@ -301,7 +301,7 @@ async def download_seebug_poc(ssvid: int) -> Optional[str]:
     Returns:
         Optional[str]: POC 代码，失败返回 None
     """
-    response = await global_seebug_client.download_poc(ssvid)
+    response = await seebug_utils.download_poc(ssvid)
     
     if response.success and response.data:
         poc_code = response.data.get('code')
@@ -321,7 +321,7 @@ async def get_seebug_poc_detail(ssvid: int) -> Optional[Dict[str, Any]]:
     Returns:
         Optional[Dict]: POC 详情，失败返回 None
     """
-    response = await global_seebug_client.get_poc_detail(ssvid)
+    response = await seebug_utils.get_poc_detail(ssvid)
     
     if response.success and response.data:
         logger.info(f"从 Seebug 获取POC详情成功: SSVID={ssvid}")
@@ -643,9 +643,7 @@ async def fetch_seebug_data():
         try:
             logger.info("🔍 开始从 Seebug 获取漏洞数据 (爬虫模式)")
 
-            # response = await global_seebug_client.search_poc("", page=1, page_size=20)
-            # 使用爬虫模式获取最新数据，增加limit到50
-            response = await global_seebug_client.crawl_recent_vulnerabilities(limit=50)
+            response = await seebug_utils.crawl_recent_vulnerabilities(limit=50)
 
             if response.success and response.data:
                 vulnerabilities = []

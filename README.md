@@ -329,18 +329,24 @@ AI_WebSecurity/
 │   │   ├── poc_verification.py # POC验证API
 │   │   ├── poc_files.py        # POC文件管理API
 │   │   ├── seebug_agent.py     # Seebug Agent API
-│   │   ├── seebug_client.py    # Seebug客户端API
 │   │   ├── user.py             # 用户管理API
-│   │   └── notifications.py    # 通知管理API
+│   │   ├── notifications.py    # 通知管理API
+│   │   └── workflow_schemas.py # 工作流数据标准化模块（合并自execution_optimizer.py）
 │   │
 │   ├── ai_agents/              # AI Agents智能代理系统
 │   │   ├── core/              # 核心组件
 │   │   ├── analyzers/         # 分析器模块
 │   │   ├── code_execution/     # 代码执行模块
 │   │   ├── poc_system/        # POC系统模块
+│   │   │   ├── poc_manager.py      # POC管理器（简化重构）
+│   │   │   ├── verification_engine.py # 验证引擎（简化重构）
+│   │   │   └── utils.py            # POC工具函数
 │   │   ├── tools/             # 工具模块
 │   │   ├── utils/             # 工具函数
 │   │   └── api/               # AI Agents API
+│   │
+│   ├── utils/                 # 工具模块
+│   │   └── seebug_utils.py    # Seebug工具模块（统一接口）
 │   │
 │   ├── plugins/               # 扫描插件模块
 │   │   ├── portscan/          # 端口扫描
@@ -427,6 +433,34 @@ AI_WebSecurity/
 ├── README.md                 # 项目说明文档
 └── .gitignore                # Git忽略文件
 ```
+
+### 重构变更说明
+
+#### 模块合并
+
+1. **workflow_schemas.py** (合并自 `execution_optimizer.py`)
+   - 合并了 `NodeExecutionMetrics`, `ExecutionMetricsCollector`, `NodeExecutionOptimizer`
+   - 合并了 `optimized_node` 装饰器和 `get_execution_optimizer` 函数
+   - 统一了工作流数据的格式定义和转换逻辑
+
+2. **seebug_utils.py** (统一接口)
+   - 整合了 Seebug_Agent 的导入和配置
+   - 提供统一的 `SeebugUtils` 类访问 Seebug 功能
+   - 内置缓存和统计功能
+
+#### 接口简化
+
+1. **poc_manager.py**
+   - 移除重复的 `seebug_client` 和 `seebug_agent` 实例
+   - 统一使用 `seebug_utils` 访问 Seebug_Agent 功能
+   - 合并 `sync_from_seebug` 和 `search_seebug_pocs` 的重复逻辑
+   - 使用 `_search_seebug_pocs_internal` 统一处理搜索
+
+2. **verification_engine.py**
+   - `ResourceMonitor`: 移除复杂回调，使用简单阈值检查
+   - `ExecutionQueue`: 简化队列管理，移除不必要的锁竞争
+   - `ProgressCallback`: 统一使用简单的 Callable 类型
+   - 合并 `ResourceLimits` 和 `ExecutionConfig` 的重复配置
 
 ---
 
@@ -617,6 +651,86 @@ GET /api/tasks
 GET /api/vulnerabilities
 ```
 
+### 重构后模块使用示例
+
+#### 工作流数据标准化
+```python
+from backend.api.workflow_schemas import (
+    WorkflowDataConverter,
+    StandardizedWorkflowData,
+    get_execution_optimizer
+)
+
+# 转换工作流数据
+converter = WorkflowDataConverter()
+workflow_data = converter.from_agent_state(agent_state)
+
+# 使用执行优化器
+optimizer = get_execution_optimizer()
+result, success = await optimizer.execute_with_optimization(
+    node_func, "node_name", "task_id"
+)
+```
+
+#### Seebug 工具模块
+```python
+from backend.utils.seebug_utils import seebug_utils
+
+# 检查可用性
+if seebug_utils.is_available():
+    # 搜索 POC
+    response = await seebug_utils.search_poc("nginx", page=1, page_size=10)
+    
+    # 下载 POC
+    response = await seebug_utils.download_poc(ssvid=12345)
+    
+    # 获取统计信息
+    stats = seebug_utils.get_statistics()
+```
+
+#### POC 管理器
+```python
+from backend.ai_agents.poc_system.poc_manager import poc_manager
+
+# 从 Seebug 同步 POC
+pocs = await poc_manager.sync_from_seebug("nginx", limit=10)
+
+# 获取 POC 代码
+poc_code = await poc_manager.get_poc_code("seebug_12345")
+
+# 搜索本地 POC
+results = poc_manager.search_pocs("wordpress")
+
+# 获取统计信息
+stats = poc_manager.get_poc_statistics()
+```
+
+#### 验证引擎
+```python
+from backend.ai_agents.poc_system.verification_engine import (
+    VerificationEngine,
+    ExecutionPriority
+)
+
+# 创建引擎实例
+engine = VerificationEngine(max_concurrent=10)
+await engine.start()
+
+# 执行单个验证任务
+result = await engine.execute_verification_task(verification_task)
+
+# 批量执行
+results = await engine.execute_batch_verification(
+    verification_tasks,
+    max_concurrent=5
+)
+
+# 获取执行统计
+stats = engine.get_execution_statistics()
+
+await engine.shutdown()
+```
+
 详细API文档请参考：
 - [API_DOCUMENTATION.md](API_DOCUMENTATION.md)
 - 运行 `python analyze_all_apis_fixed.py` 查看完整的API兼容性分析
@@ -716,10 +830,12 @@ GET /api/vulnerabilities
 - `POST /api/poc/verification/tasks` - 创建验证任务
 - `POST /api/poc/verification/tasks/batch` - 批量创建任务
 - `GET /api/poc/verification/tasks` - 获取任务列表
-- `GET /api/poc/verification/statistics` - 获取统计信息
-- `GET /api/poc/verification/poc/registry` - 获取POC注册表
-- `POST /api/poc/verification/poc/sync` - 同步POC
-- `GET /api/poc/verification/health` - 健康检查
+- `GET /api/poc/verification/tasks/{task_id}` - 获取任务详情(含验证结果)
+- `POST /api/poc/verification/tasks/{task_id}/pause` - 暂停任务
+- `POST /api/poc/verification/tasks/{task_id}/resume` - 继续任务
+- `POST /api/poc/verification/tasks/{task_id}/cancel` - 取消任务
+- `POST /api/poc/verification/tasks/{task_id}/report` - 生成报告
+- `GET /api/poc/verification/health` - 健康检查(含统计信息)
 
 #### POC文件管理
 - `GET /api/poc/files/list` - 获取文件列表

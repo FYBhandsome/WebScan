@@ -2,7 +2,7 @@
 Agent 状态管理
 
 定义Agent的状态结构,用于LangGraph的状态传递。
-简化版本：移除未使用属性，简化异常处理。
+支持子图模式切换、全局记忆存储
 """
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AgentState:
-    """Agent状态类 - 简化版"""
+    """Agent状态类 - 支持多子图模式"""
     
     target: str
     task_id: str
@@ -41,6 +41,17 @@ class AgentState:
     vuln_scan_results: Dict[str, Any] = field(default_factory=dict)
     scan_summary: Dict[str, Any] = field(default_factory=dict)
     report: str = ""
+    
+    # 全局记忆字段
+    user_choice: str = ""
+    chat_history: List[Dict] = field(default_factory=list)
+    chat_summary: str = "无"
+    user_name: str = "用户"
+    need_generate_script: bool = False
+    
+    # 子图模式字段
+    next_mode: str = "info"  # info / vuln / report
+    task_history: List[str] = field(default_factory=list)
     
     def update_stage_status(self, stage: str, status: str = None, sub_status: str = None, progress: int = None, log: str = None):
         """更新阶段状态"""
@@ -138,6 +149,10 @@ class AgentState:
         self.is_complete = True
         self.should_continue = False
     
+    def append_chat_history(self, role: str, content: str):
+        """统一追加聊天历史"""
+        self.chat_history.append({"role": role, "content": content})
+    
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -158,7 +173,16 @@ class AgentState:
             "progress": self.get_progress(),
             "vuln_scan_results": self.vuln_scan_results,
             "scan_summary": self.scan_summary,
-            "report": self.report
+            "report": self.report,
+            # 记忆字段
+            "user_choice": self.user_choice,
+            "chat_history": self.chat_history,
+            "chat_summary": self.chat_summary,
+            "user_name": self.user_name,
+            "need_generate_script": self.need_generate_script,
+            # 子图模式
+            "next_mode": self.next_mode,
+            "task_history": self.task_history
         }
     
     @classmethod
@@ -181,5 +205,14 @@ class AgentState:
             decision_history=data.get("decision_history", []),
             vuln_scan_results=data.get("vuln_scan_results", {}),
             scan_summary=data.get("scan_summary", {}),
-            report=data.get("report", "")
+            report=data.get("report", ""),
+            # 记忆字段
+            user_choice=data.get("user_choice", ""),
+            chat_history=data.get("chat_history", []),
+            chat_summary=data.get("chat_summary", "无"),
+            user_name=data.get("user_name", "用户"),
+            need_generate_script=data.get("need_generate_script", False),
+            # 子图模式
+            next_mode=data.get("next_mode", "info"),
+            task_history=data.get("task_history", [])
         )

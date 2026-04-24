@@ -23,7 +23,16 @@ class TargetContextUpdater:
         "webside_scan": {"side_domains": "side_domains"},
         "iplocating": {"location": "location"},
         "infoleak_scan": {"leaks": "leaks"},
-        "dirscan": {"directories": "directories"}
+        "dirscan": {"directories": "directories"},
+        "port_scan": {"open_ports": "open_ports", "services": "services", "ip": "ip"},
+        "subdomain_enum": {"subdomains": "subdomains", "subdomain_ips": "subdomain_ips"},
+        "dir_scan": {"directories": "directories", "sensitive_files": "sensitive_files"},
+        "ssl_certificate": {"certificate": "certificate", "days_remaining": "ssl_days_remaining"},
+        "sensitive_info_leak": {"leaks": "sensitive_leaks"},
+        "sqli_deep_scan": {"injection_points": "sqli_injection_points"},
+        "xss_deep_scan": {"xss_points": "xss_points"},
+        "ssrf_scan": {"ssrf_points": "ssrf_points"},
+        "file_upload_scan": {"upload_points": "upload_points"}
     }
     
     @classmethod
@@ -73,3 +82,54 @@ async def persist_task_state(task_id: str, stage_status: Dict, progress: int):
         await task.save()
     except Exception as e:
         logger.error(f"持久化任务状态失败: {task_id} - {e}")
+
+
+class NodeExecutionLogger:
+    """节点执行日志记录器"""
+    
+    @staticmethod
+    def log_start(task_id: str, node_name: str, target: str) -> None:
+        logger.info(f"[{task_id}] 🚀 [{node_name}] 开始执行 | 目标: {target}")
+    
+    @staticmethod
+    def log_success(task_id: str, node_name: str, execution_time: float, vuln_count: int = 0) -> None:
+        logger.info(
+            f"[{task_id}] ✅ [{node_name}] 执行成功 | "
+            f"耗时: {execution_time:.2f}s | "
+            f"漏洞数: {vuln_count}"
+        )
+    
+    @staticmethod
+    def log_failure(task_id: str, node_name: str, error: str) -> None:
+        logger.error(f"[{task_id}] ❌ [{node_name}] 执行失败: {error}")
+    
+    @staticmethod
+    def log_warning(task_id: str, node_name: str, message: str) -> None:
+        logger.warning(f"[{task_id}] ⚠️ [{node_name}] {message}")
+
+
+class DataFlowHelper:
+    """数据流辅助工具"""
+    
+    @staticmethod
+    def merge_results(base_result: Dict[str, Any], new_result: Dict[str, Any]) -> Dict[str, Any]:
+        """合并两个结果字典"""
+        merged = base_result.copy()
+        for key, value in new_result.items():
+            if key in merged and isinstance(merged[key], list) and isinstance(value, list):
+                merged[key].extend(value)
+            elif key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+                merged[key].update(value)
+            else:
+                merged[key] = value
+        return merged
+    
+    @staticmethod
+    def extract_vulnerabilities(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """从结果中提取漏洞列表"""
+        vulns = []
+        vuln_keys = ["vulnerabilities", "vulns", "issues", "findings"]
+        for key in vuln_keys:
+            if key in result and isinstance(result[key], list):
+                vulns.extend(result[key])
+        return vulns

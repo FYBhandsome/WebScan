@@ -31,13 +31,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["AI对话"])
 
-llm = ChatOpenAI(
-    model=settings.MODEL_ID,
-    temperature=0.7,
-    openai_api_key=settings.OPENAI_API_KEY,
-    base_url=settings.OPENAI_BASE_URL,
-    streaming=True
-)
+_llm = None
+
+def get_llm():
+    global _llm
+    if _llm is None:
+        _llm = ChatOpenAI(
+            model=settings.MODEL_ID,
+            temperature=0.7,
+            openai_api_key=settings.OPENAI_API_KEY,
+            base_url=settings.OPENAI_BASE_URL,
+            streaming=True
+        )
+    return _llm
 
 SYSTEM_PROMPT = """
 你是一个专业的Web安全顾问,名为WebScan AI。你的任务是帮助用户解决Web安全相关问题,包括漏洞分析、安全加固建议、扫描报告解读等。
@@ -284,384 +290,6 @@ async def list_chat_instances(
         raise HTTPException(status_code=500, detail=f"查询对话实例失败: {str(e)}")
 
 
-@router.get("/chat/instances/{chat_instance_id}", response_model=APIResponse)
-async def get_chat_instance(chat_instance_id: UUID):
-    """
-    获取对话实例详情
-    
-    获取指定对话实例的详细信息,包括所有历史消息。
-    
-    Args:
-        chat_instance_id: 对话实例 ID
-        
-    Returns:
-        Dict: 包含对话实例和消息列表的响应,结构如下:
-            {
-                "code": 200,
-                "message": "查询对话实例成功",
-                "data": {
-                    "chat_instance": {...},
-                    "messages": [...]
-                }
-            }
-        
-    Raises:
-        HTTPException: 当对话实例不存在时抛出 404 错误
-        
-    Examples:
-        >>> 获取对话详情
-        >>> GET /chat/instances/123e4567-e89b-12d3-a456-426614174000
-    """
-    try:
-        chat_instance = await AIChatInstance.get_or_none(id=chat_instance_id)
-        if not chat_instance:
-            raise HTTPException(status_code=404, detail="对话实例不存在")
-        
-        # 获取所有消息
-        messages = await AIChatMessage.filter(chat_instance_id=chat_instance_id) \
-            .order_by("created_at")
-        
-        message_list = [
-            {
-                "id": message.id,
-                "role": message.role,
-                "content": message.content,
-                "message_type": message.message_type,
-                "created_at": message.created_at
-            }
-            for message in messages
-        ]
-        
-        return {
-            "code": 200,
-            "message": "查询对话实例成功",
-            "data": {
-                "chat_instance": {
-                    "chat_instance_id": str(chat_instance.id),
-                    "chat_name": chat_instance.chat_name,
-                    "chat_type": chat_instance.chat_type,
-                    "status": chat_instance.status,
-                    "created_at": chat_instance.created_at,
-                    "updated_at": chat_instance.updated_at
-                },
-                "messages": message_list
-            }
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ 查询对话实例失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"查询对话实例失败: {str(e)}")
-
-
-@router.delete("/chat/instances/{chat_instance_id}", response_model=APIResponse)
-async def delete_chat_instance(chat_instance_id: UUID):
-    """
-    删除对话实例
-    
-    删除指定的对话实例及其所有消息,并清除对话历史缓存。
-    
-    Args:
-        chat_instance_id: 对话实例 ID
-        
-    Returns:
-        Dict: 删除结果,结构如下:
-            {
-                "code": 200,
-                "message": "对话实例删除成功"
-            }
-        
-    Raises:
-        HTTPException: 当对话实例不存在时抛出 404 错误
-        
-    Examples:
-        >>> 删除对话
-        >>> DELETE /chat/instances/123e4567-e89b-12d3-a456-426614174000
-    """
-    try:
-        chat_instance = await AIChatInstance.get_or_none(id=chat_instance_id)
-        if not chat_instance:
-            raise HTTPException(status_code=404, detail="对话实例不存在")
-        
-        # 删除所有消息
-        await AIChatMessage.filter(chat_instance_id=chat_instance_id).delete()
-        # 删除对话实例
-        await chat_instance.delete()
-        # 清除历史缓存
-        await clear_history(chat_instance_id)
-        
-        return {
-            "code": 200,
-            "message": "对话实例删除成功"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ 删除对话实例失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"删除对话实例失败: {str(e)}")
-
-
-class MessageRequest(BaseModel):
-    """
-    消息请求模型
-    
-    Attributes:
-        content: 消息内容
-        message_type: 消息类型,默认为 'text'
-        user_id: 用户 ID,可选
-    """
-    content: str
-    message_type: Optional[str] = "text"
-    user_id: Optional[str] = None
-
-
-@router.post("/chat/instances/{chat_instance_id}/messages", response_model=APIResponse)
-async def send_message(
-    chat_instance_id: UUID,
-    request: MessageRequest
-):
-    """
-    发送消息到对话实例
-    
-    向指定对话实例发送用户消息,并获取 AI 的响应。
-    
-    Args:
-        chat_instance_id: 对话实例 ID
-        request: 消息请求,包含消息内容
-        
-    Returns:
-        Dict: 包含用户消息和 AI 响应的响应,结构如下:
-            {
-                "code": 200,
-                "message": "消息发送成功",
-                "data": {
-                    "user_message": {...},
-                    "assistant_message": {...}
-                }
-            }
-        
-    Raises:
-        HTTPException: 当对话实例不存在或已关闭时抛出错误
-        
-    Examples:
-        >>> 发送消息
-        >>> POST /chat/instances/123/messages
-        >>> {
-        ...     "content": "如何修复 SQL 注入漏洞？",
-        ...     "message_type": "text"
-        ... }
-    """
-    try:
-        chat_instance = await AIChatInstance.get_or_none(id=chat_instance_id)
-        if not chat_instance:
-            logger.error(f"❌ 对话实例不存在: {chat_instance_id}")
-            raise HTTPException(status_code=404, detail="对话实例不存在")
-        
-        if chat_instance.status != "active":
-            logger.warning(f"⚠️ 对话实例已关闭: {chat_instance_id}")
-            raise HTTPException(status_code=400, detail="对话实例已关闭")
-        
-        # 保存用户消息
-        user_message = await AIChatMessage.create(
-            chat_instance_id=chat_instance_id,
-            role="user",
-            content=request.content,
-            message_type=request.message_type
-        )
-        
-        # 获取对话历史
-        history = await get_or_create_history(chat_instance_id)
-        
-        # 添加用户消息到历史
-        history.add_message(HumanMessage(content=request.content))
-        
-        # 构建提示模板
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", SYSTEM_PROMPT),
-            MessagesPlaceholder(variable_name="history"),
-            ("human", "{input}")
-        ])
-        
-        # 获取历史消息
-        history_messages = await history.aget_messages()
-        
-        # 调用 LLM 获取响应
-        chain = prompt | llm
-        response = await chain.ainvoke({
-            "history": history_messages,
-            "input": request.content
-        })
-        
-        response_content = response.content
-        
-        # 添加 AI 响应到历史
-        history.add_message(AIMessage(content=response_content))
-        
-        # 保存 AI 响应
-        ai_message = await AIChatMessage.create(
-            chat_instance_id=chat_instance_id,
-            role="assistant",
-            content=response_content,
-            message_type="text"
-        )
-        
-        # 更新对话实例时间
-        chat_instance.updated_at = datetime.now()
-        await chat_instance.save()
-        
-        logger.info(f"✅ 消息发送成功: {chat_instance_id}")
-        
-        return {
-            "code": 200,
-            "message": "消息发送成功",
-            "data": {
-                "user_message": {
-                    "id": user_message.id,
-                    "role": user_message.role,
-                    "content": user_message.content,
-                    "created_at": user_message.created_at
-                },
-                "assistant_message": {
-                    "id": ai_message.id,
-                    "role": ai_message.role,
-                    "content": ai_message.content,
-                    "created_at": ai_message.created_at
-                }
-            }
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ 发送消息失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"发送消息失败: {str(e)}")
-
-
-@router.get("/chat/instances/{chat_instance_id}/messages", response_model=APIResponse)
-async def get_chat_messages(
-    chat_instance_id: UUID,
-    page: int = 1,
-    page_size: int = 50
-):
-    """
-    获取对话消息历史
-    
-    获取指定对话实例的消息历史,支持分页查询。
-    
-    Args:
-        chat_instance_id: 对话实例 ID
-        page: 页码,从 1 开始
-        page_size: 每页数量
-        
-    Returns:
-        Dict: 包含消息列表的响应,结构如下:
-            {
-                "code": 200,
-                "message": "获取消息历史成功",
-                "data": {
-                    "messages": [...],
-                    "total": 总数,
-                    "page": 当前页,
-                    "page_size": 每页数量,
-                    "total_pages": 总页数
-                }
-            }
-        
-    Raises:
-        HTTPException: 当对话实例不存在时抛出 404 错误
-        
-    Examples:
-        >>> 获取消息历史
-        >>> GET /chat/instances/123/messages?page=1&page_size=20
-    """
-    try:
-        chat_instance = await AIChatInstance.get_or_none(id=chat_instance_id)
-        if not chat_instance:
-            raise HTTPException(status_code=404, detail="对话实例不存在")
-        
-        messages = await AIChatMessage.filter(chat_instance_id=chat_instance_id) \
-            .order_by("created_at") \
-            .offset((page - 1) * page_size) \
-            .limit(page_size)
-        
-        total = await AIChatMessage.filter(chat_instance_id=chat_instance_id).count()
-        
-        message_list = [
-            {
-                "id": message.id,
-                "role": message.role,
-                "content": message.content,
-                "message_type": message.message_type,
-                "created_at": message.created_at
-            }
-            for message in messages
-        ]
-        
-        return {
-            "code": 200,
-            "message": "获取消息历史成功",
-            "data": {
-                "messages": message_list,
-                "total": total,
-                "page": page,
-                "page_size": page_size,
-                "total_pages": (total + page_size - 1) // page_size
-            }
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ 获取消息历史失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"获取消息历史失败: {str(e)}")
-
-
-@router.post("/chat/instances/{chat_instance_id}/close", response_model=APIResponse)
-async def close_chat_instance(chat_instance_id: UUID):
-    """
-    关闭对话实例
-    
-    关闭指定的对话实例,并清除对话历史缓存。
-    
-    Args:
-        chat_instance_id: 对话实例 ID
-        
-    Returns:
-        Dict: 关闭结果,结构如下:
-            {
-                "code": 200,
-                "message": "对话实例关闭成功"
-            }
-        
-    Raises:
-        HTTPException: 当对话实例不存在时抛出 404 错误
-        
-    Examples:
-        >>> 关闭对话
-        >>> POST /chat/instances/123/close
-    """
-    try:
-        chat_instance = await AIChatInstance.get_or_none(id=chat_instance_id)
-        if not chat_instance:
-            raise HTTPException(status_code=404, detail="对话实例不存在")
-        
-        chat_instance.status = "closed"
-        await chat_instance.save()
-        
-        # 清除历史缓存
-        await clear_history(chat_instance_id)
-        
-        logger.info(f"✅ 关闭对话实例: {chat_instance_id}")
-        
-        return {
-            "code": 200,
-            "message": "对话实例关闭成功"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ 关闭对话实例失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"关闭对话实例失败: {str(e)}")
-
-
 class SimpleChatRequest(BaseModel):
     """简单聊天请求模型"""
     message: str
@@ -716,7 +344,7 @@ async def simple_chat(request: SimpleChatRequest):
         
         messages = [HumanMessage(content=request.message)]
         
-        response = await llm.ainvoke(messages)
+        response = await get_llm().ainvoke(messages)
         
         ai_response = response.content
         
@@ -781,7 +409,7 @@ async def get_ai_connection_status():
             logger.info("🔍 测试AI连接...")
             from langchain_core.messages import HumanMessage
             
-            test_response = await llm.ainvoke([
+            test_response = await get_llm().ainvoke([
                 HumanMessage(content="你好，请回复'连接成功'")
             ])
             
@@ -932,7 +560,7 @@ async def process_chat_message(chat_instance_id: str, message: str) -> Dict[str,
         
         history_messages = await history.aget_messages()
         
-        chain = prompt | llm
+        chain = prompt | get_llm()
         response = await chain.ainvoke({
             "history": history_messages,
             "input": message

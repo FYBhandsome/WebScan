@@ -20,10 +20,6 @@ from backend.models import Task
 from backend.api.common import APIResponse
 from backend.task_executor import task_executor
 from ..core.state import AgentState
-from ..code_execution.executor import UnifiedExecutor
-from ..code_execution.environment import EnvironmentAwareness
-from ..code_execution.code_generator import CodeGenerator
-from ..code_execution.capability_enhancer import CapabilityEnhancer
 from ..agent_config import agent_config
 
 logger = logging.getLogger(__name__)
@@ -77,35 +73,6 @@ class AgentScanResponse(BaseModel):
     task_id: str
     status: str
     message: str
-
-
-class CodeGenerationRequest(BaseModel):
-    """
-    代码生成请求模型
-    """
-    scan_type: str
-    target: str
-    requirements: str = ""
-    language: str = "python"
-    additional_params: Dict[str, Any] = {}
-
-
-class CodeExecutionRequest(BaseModel):
-    """
-    代码执行请求模型
-    """
-    code: str
-    language: str = "python"
-    target: Optional[str] = None
-
-
-class CapabilityEnhancementRequest(BaseModel):
-    """
-    功能补充请求模型
-    """
-    requirement: str
-    target: str
-    capability_name: Optional[str] = None
 
 
 @router.post("/scan", response_model=AgentScanResponse)
@@ -571,311 +538,6 @@ async def update_config(
     )
 
 
-@router.post("/code/generate", response_model=APIResponse)
-async def generate_code(request: CodeGenerationRequest):
-    """
-    生成扫描代码
-    
-    Args:
-        request: 代码生成请求
-        
-    Returns:
-        Dict: 代码生成结果
-    """
-    try:
-        logger.info(f"🔧 生成代码: scan_type={request.scan_type}, target={request.target}")
-        
-        code_generator = CodeGenerator()
-        result = await code_generator.generate_code(
-            scan_type=request.scan_type,
-            target=request.target,
-            requirements=request.requirements,
-            language=request.language,
-            additional_params=request.additional_params
-        )
-        
-
-        return {
-            "status": "success",
-            "data": result.to_dict()
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ 代码生成失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/code/execute", response_model=APIResponse)
-async def execute_code(request: CodeExecutionRequest):
-    """
-    执行代码
-    
-    Args:
-        request: 代码执行请求
-        
-    Returns:
-        Dict: 执行结果
-    """
-    try:
-        logger.info(f"⚡ 执行代码: language={request.language}")
-        
-        executor = UnifiedExecutor(
-            timeout=agent_config.TOOL_TIMEOUT,
-            enable_sandbox=True
-        )
-        result = await executor.execute_code(
-            code=request.code,
-            language=request.language,
-            target=request.target
-        )
-        
-        logger.info(f"✅ 代码执行完成: status={result.status}")
-        return {
-            "status": "success",
-            "data": result.to_dict()
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ 代码执行失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/code/generate-and-execute", response_model=APIResponse)
-async def generate_and_execute_code(request: CodeGenerationRequest):
-    """
-    生成并执行代码
-    
-    Args:
-        request: 代码生成请求
-        
-    Returns:
-        Dict: 执行结果
-    """
-    try:
-        logger.info(f"🔧 生成并执行代码: scan_type={request.scan_type}, target={request.target}")
-        
-        executor = UnifiedExecutor(
-            timeout=agent_config.TOOL_TIMEOUT,
-            enable_sandbox=True
-        )
-        result = await executor.generate_and_execute(
-            scan_type=request.scan_type,
-            target=request.target,
-            requirements=request.requirements,
-            language=request.language,
-            additional_params=request.additional_params
-        )
-        
-
-        return {
-            "status": "success",
-            "data": result
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ 生成并执行代码失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/capabilities/enhance", response_model=APIResponse)
-async def enhance_capability(request: CapabilityEnhancementRequest):
-    """
-    增强功能
-    
-    Args:
-        request: 功能补充请求
-        
-    Returns:
-        Dict: 增强结果
-    """
-    try:
-        logger.info(f"🚀 增强功能: requirement={request.requirement}")
-        
-        executor = UnifiedExecutor(
-            timeout=agent_config.TOOL_TIMEOUT,
-            enable_sandbox=True
-        )
-        result = await executor.enhance_and_execute(
-            requirement=request.requirement,
-            target=request.target,
-            capability_name=request.capability_name
-        )
-        
-
-        return {
-            "status": "success",
-            "data": result
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ 功能增强失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/capabilities/list", response_model=APIResponse)
-async def list_capabilities():
-    """
-    列出所有能力
-    
-    Returns:
-        APIResponse: 能力列表
-    """
-    try:
-        capability_enhancer = CapabilityEnhancer()
-        capabilities = capability_enhancer.list_capabilities()
-        
-        return APIResponse(
-            code=200,
-            message="获取成功",
-            data={
-                "total": len(capabilities),
-                "capabilities": capabilities
-            }
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ 获取能力列表失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/capabilities/{capability_name}", response_model=APIResponse)
-async def get_capability(capability_name: str):
-    """
-    获取能力详情
-    
-    Args:
-        capability_name: 能力名称
-        
-    Returns:
-        Dict: 能力详情
-    """
-    try:
-        capability_enhancer = CapabilityEnhancer()
-        capability = capability_enhancer.get_capability(capability_name)
-        
-        if not capability:
-            raise HTTPException(status_code=404, detail=f"能力不存在: {capability_name}")
-        
-        return {
-            "status": "success",
-            "data": capability.to_dict()
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ 获取能力详情失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/capabilities/{capability_name}", response_model=APIResponse)
-async def remove_capability(capability_name: str):
-    """
-    移除能力
-    
-    Args:
-        capability_name: 能力名称
-        
-    Returns:
-        Dict: 移除结果
-    """
-    try:
-        capability_enhancer = CapabilityEnhancer()
-        success = capability_enhancer.remove_capability(capability_name)
-        
-        if not success:
-            raise HTTPException(status_code=404, detail=f"能力不存在: {capability_name}")
-        
-        logger.info(f"✅ 能力已移除: {capability_name}")
-        return {
-            "status": "success",
-            "message": f"能力已移除: {capability_name}"
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ 移除能力失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/environment/info", response_model=APIResponse)
-async def get_environment_info():
-    """
-    获取环境信息
-    
-    Returns:
-        APIResponse: 环境信息
-    """
-    try:
-        env_awareness = EnvironmentAwareness()
-        env_info = env_awareness.get_environment_report()
-        
-        return APIResponse(
-            code=200,
-            message="获取成功",
-            data=env_info
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ 获取环境信息失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/environment/tools", response_model=APIResponse)
-async def get_available_tools():
-    """
-    获取可用工具列表
-    
-    Returns:
-        APIResponse: 可用工具列表
-    """
-    try:
-        env_awareness = EnvironmentAwareness()
-        tools = env_awareness.available_tools
-        
-        return APIResponse(
-            code=200,
-            message="获取成功",
-            data={
-                "total": len(tools),
-                "tools": tools
-            }
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ 获取可用工具失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/environment/tools/{tool_name}")
-async def check_tool(tool_name: str) -> Dict[str, Any]:
-    """
-    检查工具是否可用
-    
-    Args:
-        tool_name: 工具名称
-        
-    Returns:
-        Dict: 工具可用性
-    """
-    try:
-        env_awareness = EnvironmentAwareness()
-        is_available = env_awareness.is_tool_available(tool_name)
-        
-        return {
-            "status": "success",
-            "data": {
-                "tool_name": tool_name,
-                "available": is_available
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ 检查工具可用性失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/resources/usage", response_model=APIResponse)
 async def get_resource_usage():
     """
@@ -1290,7 +952,7 @@ async def get_execution_metrics(task_id: Optional[str] = None):
     try:
         logger.info(f"[WORKFLOW_METRICS] 获取执行指标 - 任务ID: {task_id}")
         
-        from backend.ai_agents.core.execution_optimizer import get_execution_optimizer
+        from backend.api.workflow_schemas import get_execution_optimizer
         
         optimizer = get_execution_optimizer()
         summary = optimizer.get_execution_summary(task_id)
@@ -1625,12 +1287,13 @@ async def get_execution_details(task_id: int):
     获取任务执行详情
     
     获取任务的子图和节点执行详情，包括执行时间、状态、结果等。
+    使用标准化工作流数据格式返回。
     
     Args:
         task_id: 任务ID
         
     Returns:
-        APIResponse: 执行详情
+        APIResponse: 标准化的执行详情数据
     """
     try:
         logger.info(f"[EXEC_DETAILS] 获取执行详情 - 任务ID: {task_id}")
@@ -1639,28 +1302,87 @@ async def get_execution_details(task_id: int):
         if not task:
             return APIResponse(code=404, message="任务不存在")
         
+        from backend.api.workflow_schemas import WorkflowDataConverter
+        
         execution_history = []
+        graph_flow = None
+        tool_results = {}
+        vulnerabilities = []
+        start_time = None
+        end_time = None
+        duration = None
+        
         if task.config:
             try:
                 config = json.loads(task.config) if isinstance(task.config, str) else task.config
                 execution_history = config.get("execution_history", [])
-            except:
-                pass
+                graph_flow = config.get("graph_flow")
+                tool_results = config.get("tool_results", {})
+                vulnerabilities = config.get("vulnerabilities", [])
+                start_time = config.get("start_time")
+                end_time = config.get("end_time")
+            except Exception as e:
+                logger.warning(f"[EXEC_DETAILS] 解析任务配置失败: {e}")
+        
+        if task.result:
+            try:
+                result = json.loads(task.result) if isinstance(task.result, str) else task.result
+                if isinstance(result, dict):
+                    if result.get("execution_history"):
+                        execution_history = result["execution_history"]
+                    if result.get("graph_flow"):
+                        graph_flow = result["graph_flow"]
+                    if result.get("tool_results"):
+                        tool_results.update(result["tool_results"])
+                    if result.get("vulnerabilities"):
+                        vulnerabilities = result["vulnerabilities"]
+                    if result.get("start_time"):
+                        start_time = result["start_time"]
+                    if result.get("end_time"):
+                        end_time = result["end_time"]
+            except Exception as e:
+                logger.warning(f"[EXEC_DETAILS] 解析任务结果失败: {e}")
+        
+        normalized_history = []
+        for idx, record in enumerate(execution_history):
+            normalized = WorkflowDataConverter.normalize_execution_record(record, idx)
+            normalized_history.append(normalized)
+        
+        normalized_graph_flow = None
+        if graph_flow:
+            normalized_graph_flow = WorkflowDataConverter.normalize_graph_flow(graph_flow)
+        
+        if start_time:
+            if end_time:
+                duration = end_time - start_time
+            else:
+                import time
+                duration = time.time() - start_time
+        
+        workflow_data = {
+            "task_id": str(task_id),
+            "target": task.target,
+            "status": WorkflowDataConverter.normalize_status(task.status),
+            "progress": task.progress or 0,
+            "start_time": start_time,
+            "end_time": end_time,
+            "duration": duration,
+            "execution_history": normalized_history,
+            "graph_flow": normalized_graph_flow,
+            "vulnerabilities": vulnerabilities,
+            "tool_results": tool_results,
+            "created_at": task.created_at.strftime("%Y-%m-%dT%H:%M:%SZ") if task.created_at else None,
+            "updated_at": task.updated_at.strftime("%Y-%m-%dT%H:%M:%SZ") if task.updated_at else None
+        }
+        
+        logger.info(f"[EXEC_DETAILS] 获取成功 - 任务ID: {task_id}, 执行步骤: {len(normalized_history)}")
         
         return APIResponse(
             code=200,
             message="获取成功",
-            data={
-                "task_id": task_id,
-                "target": task.target,
-                "status": task.status,
-                "progress": task.progress,
-                "execution_history": execution_history,
-                "created_at": task.created_at,
-                "updated_at": task.updated_at
-            }
+            data=workflow_data
         )
         
     except Exception as e:
-        logger.error(f"[EXEC_DETAILS_ERROR] 获取执行详情失败 - 错误: {str(e)}")
+        logger.error(f"[EXEC_DETAILS_ERROR] 获取执行详情失败 - 错误: {str(e)}", exc_info=True)
         return APIResponse(code=500, message=f"获取执行详情失败: {str(e)}")

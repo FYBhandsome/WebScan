@@ -21,12 +21,7 @@ from .nodes import (
     ToolExecutionNode,
     ResultVerificationNode,
     VulnerabilityAnalysisNode,
-    ReportGenerationNode,
-    EnvironmentAwarenessNode,
-    # CodeGenerationNode,
-    # CapabilityEnhancementNode,
-    # CodeExecutionNode,
-    # IntelligentDecisionNode
+    ReportGenerationNode
 )
 
 from ..agent_config import agent_config
@@ -192,13 +187,8 @@ class ScanAgentGraph:
         initialize_tools()
         
         # 创建核心节点实例
-        self.env_awareness_node = EnvironmentAwarenessNode()
         self.planning_node = TaskPlanningNode()
-        # self.intelligent_decision_node = IntelligentDecisionNode()
         self.execution_node = ToolExecutionNode()
-        # self.code_generation_node = CodeGenerationNode()
-        # self.code_execution_node = CodeExecutionNode()
-        # self.capability_enhancement_node = CapabilityEnhancementNode()
         self.verification_node = ResultVerificationNode()
         self.analysis_node = VulnerabilityAnalysisNode()
         self.report_node = ReportGenerationNode()

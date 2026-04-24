@@ -72,20 +72,30 @@ def initialize_tools() -> None:
     注册所有信息收集和漏洞扫描工具到全局注册表。
     """
     from .registry import registry
+    from .adapters import PluginAdapter
+    from .wrappers import AsyncToolWrapper
     
     logger.info("开始初始化工具...")
+    
+    adapters = PluginAdapter.get_adapters()
     
     info_count = 0
     for tool_name in INFO_COLLECTION_TOOLS:
         metadata = get_info_tool_metadata(tool_name)
-        if metadata:
+        if metadata and tool_name in adapters:
+            # 注册工具到注册表
+            wrapper = AsyncToolWrapper(adapters[tool_name], timeout=metadata.get('timeout', 60))
+            registry.tools[tool_name] = wrapper
             registry.tool_metadata[tool_name] = metadata
             info_count += 1
     
     vuln_count = 0
     for tool_name in VULN_SCAN_TOOLS:
         metadata = get_vuln_tool_metadata(tool_name)
-        if metadata:
+        if metadata and tool_name in adapters:
+            # 注册工具到注册表
+            wrapper = AsyncToolWrapper(adapters[tool_name], timeout=metadata.get('timeout', 60))
+            registry.tools[tool_name] = wrapper
             registry.tool_metadata[tool_name] = metadata
             vuln_count += 1
     

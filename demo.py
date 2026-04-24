@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-# ==================== 系统基础配置 ====================
+# ==================== 系统基础配置 ===================
 sys.stdin.reconfigure(encoding='utf-8')
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')

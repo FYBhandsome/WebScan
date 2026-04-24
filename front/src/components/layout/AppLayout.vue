@@ -62,25 +62,28 @@
           :collapse="sidebarCollapsed && !isMobile"
           class="sidebar"
         >
-          <el-menu
-            :default-active="activeMenu"
-            :collapse="sidebarCollapsed && !isMobile"
-            :unique-opened="true"
-            router
-            class="sidebar-menu"
-          >
-            <el-menu-item
-              v-for="item in menuItems"
-              :key="item.name"
-              :index="item.path"
-              @click="closeMobileMenu"
+          <div class="sidebar-content">
+            <el-menu
+              :default-active="activeMenu"
+              :collapse="sidebarCollapsed && !isMobile"
+              :unique-opened="true"
+              router
+              class="sidebar-menu"
             >
-              <AppIcon :name="item.icon" :size="18" />
-              <template #title>
-                {{ item.label }}
-              </template>
-            </el-menu-item>
-          </el-menu>
+              <el-menu-item
+                v-for="item in menuItems"
+                :key="item.name"
+                :index="item.path"
+                @click="closeMobileMenu"
+              >
+                <AppIcon :name="item.icon" :size="18" />
+                <template #title>
+                  {{ item.label }}
+                </template>
+              </el-menu-item>
+            </el-menu>
+            <AIChatSidebar v-if="!sidebarCollapsed && !isMobile" />
+          </div>
         </el-aside>
 
         <el-drawer
@@ -167,7 +170,7 @@
       </div>
     </el-popover>
 
-    <AIChatFloater />
+    <AIChatFloater v-if="isMobile" />
   </div>
 </template>
 
@@ -177,6 +180,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Bell, User, Setting, SwitchButton } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import AIChatFloater from '@/components/common/AIChatFloater.vue'
+import AIChatSidebar from '@/components/common/AIChatSidebar.vue'
 import { userApi, notificationsApi } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 
@@ -185,6 +189,7 @@ export default {
   components: {
     AppIcon,
     AIChatFloater,
+    AIChatSidebar,
     Bell,
     User,
     Setting,
@@ -461,10 +466,20 @@ export default {
   border-right: 1px solid var(--el-border-color-light);
   transition: width var(--transition-base);
   overflow-x: hidden;
+  position: relative;
+}
+
+.sidebar-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
 }
 
 .sidebar-menu {
   border-right: none;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .sidebar-menu :deep(.el-menu-item) {

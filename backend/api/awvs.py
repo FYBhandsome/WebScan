@@ -4,6 +4,7 @@ AWVS 漏洞扫描相关的 API 路由
 """
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, HttpUrl
 from typing import Optional, List, Dict, Any
 
@@ -12,12 +13,16 @@ import json
 import re
 import asyncio
 import time
+import os
+import requests
+from datetime import datetime
+from io import BytesIO
 
 from functools import partial
 from tortoise.functions import Count
 from urllib.parse import urlparse
 from backend.config import settings
-from backend.models import Task, Vulnerability
+from backend.models import Task, Vulnerability, Report
 from backend.api.common import APIResponse
 
 # 导入 AWVS API 类
@@ -26,6 +31,7 @@ from backend.AVWS.API.Scan import Scan
 from backend.AVWS.API.Base import Base as AWVSBase
 from backend.AVWS.API.Vuln import Vuln
 from backend.AVWS.API.Dashboard import Dashboard
+from backend.AVWS.API.Report import Report as AWVSReport
 
 # 导入 POC 函数
 from backend.poc.weblogic.cve_2020_2551_poc import poc as cve_2020_2551_poc
@@ -61,6 +67,19 @@ class AWVSScanRequest(BaseModel):
 class AWVSTargetRequest(BaseModel):
     address: str
     description: Optional[str] = None
+
+
+class AWVSReportRequest(BaseModel):
+    scan_id: str
+    template_id: str = "developer"
+    report_format: str = "html"
+
+
+class AWVSReportGenerateRequest(BaseModel):
+    task_id: int
+    template_id: str = "developer"
+    report_format: str = "html"
+    enable_ai_analysis: bool = True
 
 
 def get_awvs_client():
@@ -421,24 +440,6 @@ async def get_all_scans():
         return APIResponse(code=200, message="获取成功", data=data)
     except Exception as e:
         logger.error(f"获取扫描任务列表失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ====== 自动同步AWVS数据 ======
-@router.post("/sync", response_model=APIResponse)
-async def sync_awvs_data(background_tasks: BackgroundTasks):
-    """
-    自动触发AWVS数据同步
-    
-    每次同步最多10条数据，避免数据量过大。
-    """
-    try:
-        # 在后台执行同步，避免阻塞请求
-        background_tasks.add_task(sync_scans_from_awvs)
-        logger.info("[AWVS同步] 已触发后台同步任务")
-        return APIResponse(code=200, message="同步任务已启动，请稍后刷新查看", data={"status": "syncing"})
-    except Exception as e:
-        logger.error(f"启动AWVS同步失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1012,6 +1013,624 @@ async def get_middleware_poc_list():
         return APIResponse(code=200, message="获取成功", data=poc_list)
     except Exception as e:
         logger.error(f"获取中间件POC列表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ====== AWVS 报告管理相关 ======
+
+REPORT_TEMPLATES = {
+    "developer": {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "name": "Developer（开发人员报告）",
+        "description": "详细的技术报告，包含漏洞复现和修复建议"
+    },
+    "quick": {
+        "id": "11111111-1111-1111-1111-111111111112",
+        "name": "Quick（快速报告）",
+        "description": "精简的快速报告"
+    },
+    "executive_summary": {
+        "id": "11111111-1111-1111-1111-111111111113",
+        "name": "Executive Summary（管理层摘要报告）",
+        "description": "面向管理层的执行摘要，无技术细节"
+    },
+    "hipaa": {
+        "id": "11111111-1111-1111-1111-111111111114",
+        "name": "HIPAA 合规报告",
+        "description": "HIPAA 合规性审计报告"
+    },
+    "affected_items": {
+        "id": "11111111-1111-1111-1111-111111111115",
+        "name": "Affected Items（受影响项报告）",
+        "description": "仅列出受漏洞影响的资产"
+    },
+    "cwe_2011": {
+        "id": "11111111-1111-1111-1111-111111111116",
+        "name": "CWE 2011 报告",
+        "description": "CWE 分类报告"
+    },
+    "iso_27001": {
+        "id": "11111111-1111-1111-1111-111111111117",
+        "name": "ISO 27001 合规报告",
+        "description": "ISO 27001 合规报告"
+    },
+    "nist_SP800_53": {
+        "id": "11111111-1111-1111-1111-111111111118",
+        "name": "NIST SP800 53 合规报告",
+        "description": "NIST 合规报告"
+    },
+    "owasp_top_10_2013": {
+        "id": "11111111-1111-1111-1111-111111111119",
+        "name": "OWASP Top 10 2013",
+        "description": "OWASP Top10 2013 报告"
+    },
+    "pci_dss_3.2": {
+        "id": "11111111-1111-1111-1111-111111111120",
+        "name": "PCI DSS 3.2 合规报告",
+        "description": "PCI DSS 支付行业合规报告"
+    }
+}
+
+REPORT_FORMATS = ["html", "pdf", "json"]
+
+
+async def generate_ai_analysis_for_report(task_id: int, vulnerabilities: list) -> dict:
+    """
+    为报告生成AI分析结果
+    
+    Args:
+        task_id: 任务ID
+        vulnerabilities: 漏洞列表
+    
+    Returns:
+        AI分析结果字典
+    """
+    try:
+        from langchain_openai import ChatOpenAI
+        
+        task = await Task.get_or_none(id=task_id)
+        if not task:
+            return {}
+        
+        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        vuln_types = set()
+        
+        for vuln in vulnerabilities:
+            sev = str(vuln.get('severity', 'info')).lower()
+            if sev in severity_counts:
+                severity_counts[sev] += 1
+            vuln_types.add(vuln.get('vuln_type', vuln.get('vt_name', 'Unknown')))
+        
+        prompt = f"""请分析以下Web安全扫描结果并提供专业建议：
+
+扫描目标: {task.target}
+扫描时间: {task.created_at.strftime('%Y-%m-%d %H:%M:%S')}
+
+漏洞统计:
+- 严重: {severity_counts['critical']} 个
+- 高危: {severity_counts['high']} 个
+- 中危: {severity_counts['medium']} 个
+- 低危: {severity_counts['low']} 个
+- 信息: {severity_counts['info']} 个
+
+发现漏洞类型: {', '.join(list(vuln_types)[:10])}
+
+请提供:
+1. 整体安全风险评估（简要）
+2. 优先修复建议（Top 3）
+3. 长期安全改进建议
+
+请用简洁专业的语言回答，不超过500字。"""
+
+        if settings.OPENAI_API_KEY:
+            llm = ChatOpenAI(
+                model=settings.MODEL_ID,
+                temperature=0.7,
+                openai_api_key=settings.OPENAI_API_KEY,
+                base_url=settings.OPENAI_BASE_URL
+            )
+            
+            from langchain_core.messages import HumanMessage, SystemMessage
+            messages = [
+                SystemMessage(content="你是一位专业的网络安全分析师，擅长Web安全漏洞分析和风险评估。"),
+                HumanMessage(content=prompt)
+            ]
+            
+            response = await asyncio.to_thread(llm.invoke, messages)
+            ai_content = response.content
+            
+            return {
+                "summary": ai_content,
+                "severity_distribution": severity_counts,
+                "vuln_types": list(vuln_types),
+                "risk_level": "critical" if severity_counts['critical'] > 0 or severity_counts['high'] > 3 else 
+                              "high" if severity_counts['high'] > 0 else 
+                              "medium" if severity_counts['medium'] > 0 else "low",
+                "generated_at": datetime.now().isoformat(),
+                "model": settings.MODEL_ID
+            }
+        
+        return {
+            "summary": "AI分析服务暂不可用，请检查API配置",
+            "severity_distribution": severity_counts,
+            "vuln_types": list(vuln_types),
+            "risk_level": "unknown",
+            "generated_at": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"生成AI分析失败: {str(e)}")
+        return {
+            "summary": f"AI分析生成失败: {str(e)}",
+            "error": str(e),
+            "generated_at": datetime.now().isoformat()
+        }
+
+
+@router.get("/report/templates", response_model=APIResponse)
+async def get_report_templates():
+    """
+    获取可用的报告模板列表
+    """
+    try:
+        templates = []
+        for key, value in REPORT_TEMPLATES.items():
+            templates.append({
+                "id": key,
+                "template_id": value["id"],
+                "name": value["name"],
+                "description": value["description"]
+            })
+        
+        logger.info("获取报告模板列表成功")
+        return APIResponse(code=200, message="获取成功", data={
+            "templates": templates,
+            "formats": REPORT_FORMATS
+        })
+    except Exception as e:
+        logger.error(f"获取报告模板列表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/report/generate", response_model=APIResponse)
+async def generate_awvs_report(request: AWVSReportGenerateRequest, background_tasks: BackgroundTasks):
+    """
+    生成AWVS扫描报告并保存到数据库
+    
+    Args:
+        request: 包含task_id, template_id, report_format, enable_ai_analysis
+    
+    Returns:
+        报告ID和状态
+    """
+    try:
+        logger.info(f"[AWVS报告生成] 开始处理 | 任务ID: {request.task_id} | 模板: {request.template_id}")
+        
+        task = await Task.get_or_none(id=request.task_id).prefetch_related('vulnerabilities')
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        
+        config = json.loads(task.config) if task.config else {}
+        scan_id = config.get('scan_id')
+        
+        if not scan_id:
+            raise HTTPException(status_code=400, detail="该任务未关联AWVS扫描ID")
+        
+        template_info = REPORT_TEMPLATES.get(request.template_id)
+        if not template_info:
+            raise HTTPException(status_code=400, detail=f"不支持的报告模板: {request.template_id}")
+        
+        if request.report_format not in REPORT_FORMATS:
+            raise HTTPException(status_code=400, detail=f"不支持的报告格式: {request.report_format}")
+        
+        report_record = await Report.create(
+            task_id=task.id,
+            report_name=f"AWVS Report - {task.target}",
+            report_type=request.report_format,
+            content=json.dumps({
+                "status": "generating",
+                "scan_id": scan_id,
+                "template_id": request.template_id,
+                "format": request.report_format
+            })
+        )
+        
+        async def generate_report_background():
+            try:
+                client = get_awvs_client()
+                awvs_report = AWVSReport(client['api_url'], client['api_key'])
+                
+                template_uuid = template_info["id"]
+                
+                generate_data = {
+                    "template_id": template_uuid,
+                    "source": {
+                        "list_type": "scans",
+                        "id_list": [scan_id]
+                    }
+                }
+                
+                headers = {
+                    'X-Auth': client['api_key'],
+                    'content-type': 'application/json'
+                }
+                
+                report_api = f"{client['api_url']}/api/v1/reports"
+                
+                response = await asyncio.to_thread(
+                    requests.post,
+                    report_api,
+                    json=generate_data,
+                    headers=headers,
+                    verify=False,
+                    timeout=60
+                )
+                
+                if response.status_code not in [200, 201]:
+                    raise Exception(f"AWVS报告生成失败: HTTP {response.status_code}")
+                
+                location = response.headers.get('Location', '')
+                awvs_report_id = location.split('/')[-1] if location else None
+                
+                if not awvs_report_id:
+                    raise Exception("无法获取AWVS报告ID")
+                
+                logger.info(f"[AWVS报告生成] AWVS报告ID: {awvs_report_id}")
+                
+                await asyncio.sleep(5)
+                
+                download_url = f"{client['api_url']}/reports/download/{awvs_report_id}.{request.report_format}"
+                
+                report_response = await asyncio.to_thread(
+                    requests.get,
+                    download_url,
+                    headers=headers,
+                    verify=False,
+                    timeout=120
+                )
+                
+                if report_response.status_code != 200:
+                    raise Exception(f"报告下载失败: HTTP {report_response.status_code}")
+                
+                report_content = report_response.content
+                
+                reports_dir = os.path.join(settings.UPLOAD_DIR, "awvs_reports")
+                os.makedirs(reports_dir, exist_ok=True)
+                
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"awvs_report_{task.id}_{timestamp}.{request.report_format}"
+                file_path = os.path.join(reports_dir, filename)
+                
+                with open(file_path, 'wb') as f:
+                    f.write(report_content)
+                
+                logger.info(f"[AWVS报告生成] 报告文件已保存: {file_path}")
+                
+                vulnerabilities = await Vulnerability.filter(task_id=task.id).all()
+                vuln_list = []
+                for v in vulnerabilities:
+                    vuln_list.append({
+                        "vuln_type": v.vuln_type,
+                        "severity": v.severity,
+                        "title": v.title,
+                        "url": v.url,
+                        "description": v.description,
+                        "remediation": v.remediation
+                    })
+                
+                ai_analysis_result = None
+                if request.enable_ai_analysis:
+                    logger.info(f"[AWVS报告生成] 开始AI分析")
+                    ai_analysis_result = await generate_ai_analysis_for_report(task.id, vuln_list)
+                
+                report_data = {
+                    "status": "completed",
+                    "scan_id": scan_id,
+                    "awvs_report_id": awvs_report_id,
+                    "template_id": request.template_id,
+                    "template_name": template_info["name"],
+                    "format": request.report_format,
+                    "vulnerabilities": vuln_list,
+                    "vulnerability_count": len(vuln_list),
+                    "target": task.target,
+                    "scan_time": task.created_at.isoformat(),
+                    "generated_at": datetime.now().isoformat()
+                }
+                
+                report_record.content = json.dumps(report_data, ensure_ascii=False)
+                report_record.file_path = file_path
+                if ai_analysis_result:
+                    report_record.ai_analysis = json.dumps(ai_analysis_result, ensure_ascii=False)
+                    report_record.analyzed_at = datetime.now()
+                    report_record.analysis_model = ai_analysis_result.get("model", "unknown")
+                await report_record.save()
+                
+                logger.info(f"[AWVS报告生成] 报告生成完成 | 报告ID: {report_record.id}")
+                
+            except Exception as e:
+                logger.error(f"[AWVS报告生成] 后台任务失败: {str(e)}")
+                report_record.content = json.dumps({
+                    "status": "failed",
+                    "error": str(e)
+                })
+                await report_record.save()
+        
+        background_tasks.add_task(generate_report_background)
+        
+        return APIResponse(
+            code=200, 
+            message="报告生成任务已启动，请稍后查询", 
+            data={
+                "report_id": report_record.id,
+                "status": "generating"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[AWVS报告生成] 请求处理失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/reports", response_model=APIResponse)
+async def get_all_reports(
+    task_id: Optional[int] = None,
+    report_type: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0
+):
+    """
+    获取报告列表
+    
+    Args:
+        task_id: 可选，筛选指定任务的报告
+        report_type: 可选，筛选指定类型的报告
+        limit: 返回数量限制
+        offset: 偏移量
+    """
+    try:
+        query = Report.all()
+        
+        if task_id:
+            query = query.filter(task_id=task_id)
+        if report_type:
+            query = query.filter(report_type=report_type)
+        
+        total = await query.count()
+        reports = await query.order_by('-created_at').limit(limit).offset(offset)
+        
+        data = []
+        for report in reports:
+            report_data = {
+                "id": report.id,
+                "task_id": report.task_id,
+                "report_name": report.report_name,
+                "report_type": report.report_type,
+                "has_file": report.file_path is not None,
+                "has_ai_analysis": report.ai_analysis is not None,
+                "analyzed_at": report.analyzed_at.isoformat() if report.analyzed_at else None,
+                "analysis_model": report.analysis_model,
+                "created_at": report.created_at.isoformat(),
+                "updated_at": report.updated_at.isoformat()
+            }
+            
+            if report.content:
+                try:
+                    content = json.loads(report.content)
+                    report_data["status"] = content.get("status", "unknown")
+                    report_data["vulnerability_count"] = content.get("vulnerability_count", 0)
+                    report_data["target"] = content.get("target", "")
+                except:
+                    report_data["status"] = "unknown"
+            
+            data.append(report_data)
+        
+        return APIResponse(
+            code=200, 
+            message="获取成功", 
+            data={
+                "total": total,
+                "reports": data,
+                "limit": limit,
+                "offset": offset
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取报告列表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/report/{report_id}", response_model=APIResponse)
+async def get_report_detail(report_id: int):
+    """
+    获取报告详情
+    
+    Args:
+        report_id: 报告ID
+    """
+    try:
+        report = await Report.get_or_none(id=report_id).prefetch_related('task')
+        if not report:
+            raise HTTPException(status_code=404, detail="报告不存在")
+        
+        report_data = {
+            "id": report.id,
+            "task_id": report.task_id,
+            "report_name": report.report_name,
+            "report_type": report.report_type,
+            "file_path": report.file_path,
+            "created_at": report.created_at.isoformat(),
+            "updated_at": report.updated_at.isoformat()
+        }
+        
+        if report.content:
+            try:
+                report_data["content"] = json.loads(report.content)
+            except:
+                report_data["content"] = report.content
+        
+        if report.ai_analysis:
+            try:
+                report_data["ai_analysis"] = json.loads(report.ai_analysis)
+            except:
+                report_data["ai_analysis"] = report.ai_analysis
+        
+        if report.analyzed_at:
+            report_data["analyzed_at"] = report.analyzed_at.isoformat()
+        
+        if report.analysis_model:
+            report_data["analysis_model"] = report.analysis_model
+        
+        return APIResponse(code=200, message="获取成功", data=report_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取报告详情失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/report/{report_id}/download")
+async def download_report(report_id: int):
+    """
+    下载报告文件
+    
+    Args:
+        report_id: 报告ID
+    """
+    try:
+        report = await Report.get_or_none(id=report_id)
+        if not report:
+            raise HTTPException(status_code=404, detail="报告不存在")
+        
+        if not report.file_path or not os.path.exists(report.file_path):
+            raise HTTPException(status_code=404, detail="报告文件不存在")
+        
+        file_ext = report.report_type
+        filename = f"{report.report_name}.{file_ext}"
+        
+        with open(report.file_path, 'rb') as f:
+            file_content = f.read()
+        
+        media_types = {
+            "html": "text/html",
+            "pdf": "application/pdf",
+            "json": "application/json"
+        }
+        media_type = media_types.get(file_ext, "application/octet-stream")
+        
+        logger.info(f"[AWVS报告下载] 下载报告 | 报告ID: {report_id} | 文件: {filename}")
+        
+        return StreamingResponse(
+            BytesIO(file_content),
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"下载报告失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/report/{report_id}", response_model=APIResponse)
+async def delete_report(report_id: int):
+    """
+    删除报告
+    
+    Args:
+        report_id: 报告ID
+    """
+    try:
+        report = await Report.get_or_none(id=report_id)
+        if not report:
+            raise HTTPException(status_code=404, detail="报告不存在")
+        
+        if report.file_path and os.path.exists(report.file_path):
+            try:
+                os.remove(report.file_path)
+                logger.info(f"[AWVS报告删除] 删除文件: {report.file_path}")
+            except Exception as e:
+                logger.warning(f"删除报告文件失败: {str(e)}")
+        
+        await report.delete()
+        
+        logger.info(f"[AWVS报告删除] 报告已删除 | 报告ID: {report_id}")
+        return APIResponse(code=200, message="删除成功", data={"report_id": report_id})
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除报告失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/scan/{task_id}/report", response_model=APIResponse)
+async def get_scan_report(task_id: int):
+    """
+    获取指定扫描任务的报告
+    
+    Args:
+        task_id: 任务ID
+    """
+    try:
+        task = await Task.get_or_none(id=task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        
+        reports = await Report.filter(task_id=task_id).order_by('-created_at').all()
+        
+        if not reports:
+            return APIResponse(
+                code=200, 
+                message="该任务暂无报告", 
+                data={
+                    "task_id": task_id,
+                    "reports": [],
+                    "has_report": False
+                }
+            )
+        
+        data = []
+        for report in reports:
+            report_data = {
+                "id": report.id,
+                "report_name": report.report_name,
+                "report_type": report.report_type,
+                "has_file": report.file_path is not None,
+                "has_ai_analysis": report.ai_analysis is not None,
+                "created_at": report.created_at.isoformat()
+            }
+            
+            if report.content:
+                try:
+                    content = json.loads(report.content)
+                    report_data["status"] = content.get("status", "unknown")
+                    report_data["vulnerability_count"] = content.get("vulnerability_count", 0)
+                except:
+                    pass
+            
+            data.append(report_data)
+        
+        return APIResponse(
+            code=200, 
+            message="获取成功", 
+            data={
+                "task_id": task_id,
+                "reports": data,
+                "has_report": True,
+                "total": len(data)
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取扫描报告失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -1,0 +1,1367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TOSKill 功能测试页面</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #e4e4e4;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            text-align: center;
+            padding: 30px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            margin-bottom: 30px;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+
+        header p {
+            color: #888;
+            font-size: 1rem;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .tab-btn {
+            padding: 12px 24px;
+            border: none;
+            background: rgba(255,255,255,0.05);
+            color: #aaa;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .tab-btn:hover {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+
+        .tab-btn.active {
+            background: linear-gradient(135deg, #00d4ff, #7b2cbf);
+            color: #fff;
+            border-color: transparent;
+        }
+
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .card {
+            background: rgba(255,255,255,0.03);
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .card h2 {
+            font-size: 1.3rem;
+            margin-bottom: 20px;
+            color: #00d4ff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card h2::before {
+            content: '';
+            width: 4px;
+            height: 20px;
+            background: linear-gradient(180deg, #00d4ff, #7b2cbf);
+            border-radius: 2px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #bbb;
+            font-size: 0.9rem;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px 15px;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-size: 0.95rem;
+            transition: all 0.3s ease;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #00d4ff;
+            box-shadow: 0 0 0 3px rgba(0,212,255,0.1);
+        }
+
+        .form-group textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #00d4ff, #0099cc);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0,212,255,0.3);
+        }
+
+        .btn-secondary {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.15);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ff4757, #c0392b);
+            color: #fff;
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(255,71,87,0.3);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #2ed573, #1e8449);
+            color: #fff;
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(46,213,115,0.3);
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, #ffa502, #e67e22);
+            color: #fff;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .task-list {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .task-item {
+            background: rgba(0,0,0,0.2);
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+            border: 1px solid rgba(255,255,255,0.05);
+            transition: all 0.3s ease;
+        }
+
+        .task-item:hover {
+            border-color: rgba(0,212,255,0.3);
+        }
+
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .task-name {
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .task-status {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .status-pending { background: rgba(255,165,0,0.2); color: #ffa502; }
+        .status-running { background: rgba(0,212,255,0.2); color: #00d4ff; }
+        .status-completed { background: rgba(46,213,115,0.2); color: #2ed573; }
+        .status-failed { background: rgba(255,71,87,0.2); color: #ff4757; }
+        .status-cancelled { background: rgba(128,128,128,0.2); color: #888; }
+        .status-timeout { background: rgba(255,71,87,0.2); color: #ff4757; }
+
+        .task-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-bottom: 10px;
+            font-size: 0.85rem;
+            color: #aaa;
+        }
+
+        .task-info span {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .progress-bar {
+            height: 6px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+
+        .task-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .task-actions .btn {
+            padding: 8px 16px;
+            font-size: 0.85rem;
+        }
+
+        .result-box {
+            background: rgba(0,0,0,0.3);
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.85rem;
+            max-height: 400px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .health-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+
+        .health-card {
+            background: rgba(0,0,0,0.2);
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .health-card h3 {
+            font-size: 1rem;
+            color: #888;
+            margin-bottom: 10px;
+        }
+
+        .health-value {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .health-value.healthy { color: #2ed573; }
+        .health-value.degraded { color: #ffa502; }
+        .health-value.unhealthy { color: #ff4757; }
+
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 25px;
+            border-radius: 8px;
+            color: #fff;
+            font-weight: 500;
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+            max-width: 400px;
+        }
+
+        .toast.success { background: linear-gradient(135deg, #2ed573, #1e8449); }
+        .toast.error { background: linear-gradient(135deg, #ff4757, #c0392b); }
+        .toast.info { background: linear-gradient(135deg, #00d4ff, #0099cc); }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .vuln-list {
+            margin-top: 15px;
+        }
+
+        .vuln-item {
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-left: 4px solid;
+        }
+
+        .vuln-item.critical { border-left-color: #dc3545; }
+        .vuln-item.high { border-left-color: #fd7e14; }
+        .vuln-item.medium { border-left-color: #ffc107; }
+        .vuln-item.low { border-left-color: #17a2b8; }
+        .vuln-item.info { border-left-color: #28a745; }
+
+        .vuln-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .vuln-meta {
+            display: flex;
+            gap: 15px;
+            font-size: 0.85rem;
+            color: #aaa;
+            flex-wrap: wrap;
+        }
+
+        .severity-badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .severity-critical { background: rgba(220,53,69,0.2); color: #dc3545; }
+        .severity-high { background: rgba(253,126,20,0.2); color: #fd7e14; }
+        .severity-medium { background: rgba(255,193,7,0.2); color: #ffc107; }
+        .severity-low { background: rgba(23,162,184,0.2); color: #17a2b8; }
+        .severity-info { background: rgba(40,167,69,0.2); color: #28a745; }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .empty-state svg {
+            width: 60px;
+            height: 60px;
+            margin-bottom: 15px;
+            opacity: 0.5;
+        }
+
+        .report-preview {
+            background: #fff;
+            color: #333;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .report-preview h1 { color: #333; }
+        .report-preview h2 { color: #007bff; }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: #1a1a2e;
+            border-radius: 12px;
+            max-width: 900px;
+            width: 100%;
+            max-height: 90vh;
+            overflow: auto;
+            padding: 25px;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: #888;
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+
+        .modal-close:hover {
+            color: #fff;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+
+            header h1 {
+                font-size: 1.8rem;
+            }
+
+            .tabs {
+                flex-direction: column;
+            }
+
+            .tab-btn {
+                width: 100%;
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+
+            .task-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>TOSKill 功能测试页面</h1>
+            <p>用于验证 TOSKill 扫描系统的各项功能</p>
+        </header>
+
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="create">任务创建测试</button>
+            <button class="tab-btn" data-tab="execute">任务执行测试</button>
+            <button class="tab-btn" data-tab="report">报告查看测试</button>
+            <button class="tab-btn" data-tab="health">健康检查测试</button>
+        </div>
+
+        <div id="tab-create" class="tab-content active">
+            <div class="card">
+                <h2>创建新扫描任务</h2>
+                <form id="createTaskForm">
+                    <div class="form-group">
+                        <label for="taskName">任务名称 *</label>
+                        <input type="text" id="taskName" placeholder="输入任务名称" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="target">扫描目标 *</label>
+                        <input type="text" id="target" placeholder="输入目标URL、IP或域名 (例如: https://example.com)" required>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="scanMode">扫描模式</label>
+                            <select id="scanMode">
+                                <option value="full">完整扫描 (full)</option>
+                                <option value="info">信息收集 (info)</option>
+                                <option value="vuln">漏洞扫描 (vuln)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="timeout">超时时间 (秒)</label>
+                            <input type="number" id="timeout" value="3600" min="60" max="7200">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="config">任务配置 (JSON格式，可选)</label>
+                        <textarea id="config" placeholder='{"key": "value"}'></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="autoReport" checked> 自动生成报告
+                        </label>
+                    </div>
+                    <div class="btn-group">
+                        <button type="submit" class="btn btn-primary">
+                            <span class="btn-text">创建任务</span>
+                        </button>
+                        <button type="button" class="btn btn-secondary" onclick="clearCreateForm()">清空表单</button>
+                    </div>
+                </form>
+                <div id="createResult" class="result-box" style="display: none;"></div>
+            </div>
+        </div>
+
+        <div id="tab-execute" class="tab-content">
+            <div class="card">
+                <h2>任务列表</h2>
+                <div class="btn-group" style="margin-bottom: 20px;">
+                    <button class="btn btn-primary" onclick="refreshTaskList()">
+                        <span>刷新列表</span>
+                    </button>
+                    <button class="btn btn-secondary" onclick="autoRefreshToggle()">
+                        <span id="autoRefreshText">开启自动刷新</span>
+                    </button>
+                </div>
+                <div class="form-row" style="margin-bottom: 20px;">
+                    <div class="form-group">
+                        <label for="filterStatus">状态筛选</label>
+                        <select id="filterStatus" onchange="refreshTaskList()">
+                            <option value="">全部状态</option>
+                            <option value="pending">等待中</option>
+                            <option value="running">执行中</option>
+                            <option value="completed">已完成</option>
+                            <option value="failed">失败</option>
+                            <option value="cancelled">已取消</option>
+                            <option value="timeout">超时</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="taskList" class="task-list">
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                        </svg>
+                        <p>暂无任务数据，请先创建任务</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="tab-report" class="tab-content">
+            <div class="card">
+                <h2>报告列表</h2>
+                <div class="btn-group" style="margin-bottom: 20px;">
+                    <button class="btn btn-primary" onclick="loadCompletedTasks()">
+                        <span>加载已完成任务</span>
+                    </button>
+                </div>
+                <div id="reportTaskList" class="task-list">
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        <p>暂无已完成的任务</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="tab-health" class="tab-content">
+            <div class="card">
+                <h2>系统健康状态</h2>
+                <div class="btn-group" style="margin-bottom: 20px;">
+                    <button class="btn btn-primary" onclick="checkHealth()">
+                        <span>执行健康检查</span>
+                    </button>
+                    <button class="btn btn-secondary" onclick="loadStatistics()">
+                        <span>加载统计信息</span>
+                    </button>
+                </div>
+                <div id="healthStatus" class="health-grid">
+                    <div class="health-card">
+                        <h3>系统状态</h3>
+                        <div class="health-value" id="systemStatus">--</div>
+                    </div>
+                    <div class="health-card">
+                        <h3>总任务数</h3>
+                        <div class="health-value" id="totalTasks">--</div>
+                    </div>
+                    <div class="health-card">
+                        <h3>活跃任务</h3>
+                        <div class="health-value" id="activeTasks">--</div>
+                    </div>
+                    <div class="health-card">
+                        <h3>运行时间</h3>
+                        <div class="health-value" id="uptime">--</div>
+                    </div>
+                </div>
+                <div id="healthDetails" class="result-box" style="display: none; margin-top: 20px;"></div>
+            </div>
+
+            <div class="card">
+                <h2>组件状态</h2>
+                <div id="componentsStatus">
+                    <div class="empty-state">
+                        <p>点击"执行健康检查"查看组件状态</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>统计信息</h2>
+                <div id="statisticsDetails" class="result-box" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="taskModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">任务详情</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div id="modalBody"></div>
+        </div>
+    </div>
+
+    <div id="reportModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="reportModalTitle">报告详情</h2>
+                <button class="modal-close" onclick="closeReportModal()">&times;</button>
+            </div>
+            <div id="reportModalBody"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/toskill';
+        let autoRefreshInterval = null;
+        let isAutoRefresh = false;
+
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        function formatDateTime(dateStr) {
+            if (!dateStr) return 'N/A';
+            try {
+                const date = new Date(dateStr);
+                return date.toLocaleString('zh-CN');
+            } catch {
+                return dateStr;
+            }
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds) return 'N/A';
+            if (seconds < 60) return `${Math.round(seconds)}秒`;
+            if (seconds < 3600) return `${Math.round(seconds / 60)}分钟`;
+            return `${Math.round(seconds / 3600)}小时`;
+        }
+
+        function getStatusClass(status) {
+            const statusMap = {
+                'pending': 'status-pending',
+                'running': 'status-running',
+                'completed': 'status-completed',
+                'failed': 'status-failed',
+                'cancelled': 'status-cancelled',
+                'timeout': 'status-timeout'
+            };
+            return statusMap[status] || 'status-pending';
+        }
+
+        function getStatusText(status) {
+            const statusMap = {
+                'pending': '等待中',
+                'running': '执行中',
+                'completed': '已完成',
+                'failed': '失败',
+                'cancelled': '已取消',
+                'timeout': '超时'
+            };
+            return statusMap[status] || status;
+        }
+
+        function getSeverityClass(severity) {
+            return `severity-${severity.toLowerCase()}`;
+        }
+
+        async function apiCall(endpoint, options = {}) {
+            const defaultOptions = {
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            };
+            
+            const mergedOptions = { ...defaultOptions, ...options };
+            if (options.body && typeof options.body === 'object') {
+                mergedOptions.body = JSON.stringify(options.body);
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`, mergedOptions);
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.detail || data.message || '请求失败');
+                }
+                
+                return data;
+            } catch (error) {
+                console.error('API调用错误:', error);
+                throw error;
+            }
+        }
+
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
+            });
+        });
+
+        document.getElementById('createTaskForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const taskName = document.getElementById('taskName').value;
+            const target = document.getElementById('target').value;
+            const scanMode = document.getElementById('scanMode').value;
+            const timeout = parseInt(document.getElementById('timeout').value);
+            const autoReport = document.getElementById('autoReport').checked;
+            const configStr = document.getElementById('config').value;
+            
+            let config = {};
+            if (configStr.trim()) {
+                try {
+                    config = JSON.parse(configStr);
+                } catch {
+                    showToast('配置JSON格式错误', 'error');
+                    return;
+                }
+            }
+
+            const submitBtn = e.target.querySelector('button[type="submit"]');
+            const btnText = submitBtn.querySelector('.btn-text');
+            const originalText = btnText.textContent;
+            
+            try {
+                submitBtn.disabled = true;
+                btnText.innerHTML = '<span class="loading"></span> 创建中...';
+
+                const result = await apiCall('/tasks', {
+                    method: 'POST',
+                    body: {
+                        task_name: taskName,
+                        target: target,
+                        scan_mode: scanMode,
+                        timeout: timeout,
+                        auto_report: autoReport,
+                        config: config
+                    }
+                });
+
+                showToast('任务创建成功！', 'success');
+                
+                const resultBox = document.getElementById('createResult');
+                resultBox.style.display = 'block';
+                resultBox.textContent = JSON.stringify(result, null, 2);
+                
+                e.target.reset();
+                document.getElementById('timeout').value = '3600';
+                document.getElementById('autoReport').checked = true;
+                
+            } catch (error) {
+                showToast(`创建失败: ${error.message}`, 'error');
+            } finally {
+                submitBtn.disabled = false;
+                btnText.textContent = originalText;
+            }
+        });
+
+        function clearCreateForm() {
+            document.getElementById('createTaskForm').reset();
+            document.getElementById('timeout').value = '3600';
+            document.getElementById('autoReport').checked = true;
+            document.getElementById('createResult').style.display = 'none';
+        }
+
+        async function refreshTaskList() {
+            const status = document.getElementById('filterStatus').value;
+            const params = new URLSearchParams();
+            if (status) params.append('status', status);
+            
+            try {
+                const result = await apiCall(`/tasks?${params.toString()}`);
+                renderTaskList(result.data.tasks);
+            } catch (error) {
+                showToast(`加载失败: ${error.message}`, 'error');
+            }
+        }
+
+        function renderTaskList(tasks) {
+            const container = document.getElementById('taskList');
+            
+            if (!tasks || tasks.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                        </svg>
+                        <p>暂无任务数据</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = tasks.map(task => `
+                <div class="task-item" data-task-id="${task.task_id}">
+                    <div class="task-header">
+                        <span class="task-name">${task.task_name || '未命名任务'}</span>
+                        <span class="task-status ${getStatusClass(task.status)}">${getStatusText(task.status)}</span>
+                    </div>
+                    <div class="task-info">
+                        <span>目标: ${task.target}</span>
+                        <span>模式: ${task.scan_mode}</span>
+                        <span>进度: ${task.progress}%</span>
+                        <span>创建: ${formatDateTime(task.created_at)}</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${task.progress}%"></div>
+                    </div>
+                    <div class="task-actions">
+                        <button class="btn btn-secondary" onclick="viewTaskDetail('${task.task_id}')">查看详情</button>
+                        ${task.status === 'pending' || task.status === 'failed' || task.status === 'timeout' ? 
+                            `<button class="btn btn-primary" onclick="executeTask('${task.task_id}')">执行</button>` : ''}
+                        ${task.status === 'running' ? 
+                            `<button class="btn btn-warning" onclick="cancelTask('${task.task_id}')">取消</button>` : ''}
+                        ${task.status === 'completed' ? 
+                            `<button class="btn btn-success" onclick="viewTaskResults('${task.task_id}')">查看结果</button>` : ''}
+                        <button class="btn btn-danger" onclick="deleteTask('${task.task_id}')">删除</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function viewTaskDetail(taskId) {
+            try {
+                const result = await apiCall(`/tasks/${taskId}`);
+                const task = result.data;
+                
+                document.getElementById('modalTitle').textContent = `任务详情 - ${task.task_name || taskId}`;
+                document.getElementById('modalBody').innerHTML = `
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>任务ID</label>
+                            <input type="text" value="${task.task_id}" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label>状态</label>
+                            <input type="text" value="${getStatusText(task.status)}" readonly>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>目标</label>
+                            <input type="text" value="${task.target}" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label>扫描模式</label>
+                            <input type="text" value="${task.scan_mode}" readonly>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>进度</label>
+                            <input type="text" value="${task.progress}%" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label>当前阶段</label>
+                            <input type="text" value="${task.current_stage}" readonly>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>创建时间</label>
+                            <input type="text" value="${formatDateTime(task.created_at)}" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label>更新时间</label>
+                            <input type="text" value="${formatDateTime(task.updated_at)}" readonly>
+                        </div>
+                    </div>
+                    ${task.duration ? `
+                    <div class="form-group">
+                        <label>执行时长</label>
+                        <input type="text" value="${formatDuration(task.duration)}" readonly>
+                    </div>
+                    ` : ''}
+                    ${task.vulnerabilities && task.vulnerabilities.length > 0 ? `
+                    <div class="form-group">
+                        <label>发现的漏洞 (${task.vulnerabilities.length})</label>
+                        <div class="vuln-list">
+                            ${task.vulnerabilities.map(vuln => `
+                                <div class="vuln-item ${vuln.severity?.toLowerCase() || 'info'}">
+                                    <div class="vuln-title">${vuln.title || vuln.type || '未知漏洞'}</div>
+                                    <div class="vuln-meta">
+                                        <span class="severity-badge ${getSeverityClass(vuln.severity || 'info')}">${vuln.severity || 'info'}</span>
+                                        <span>类型: ${vuln.type || 'N/A'}</span>
+                                        <span>URL: ${vuln.url || 'N/A'}</span>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
+                    ${task.errors && task.errors.length > 0 ? `
+                    <div class="form-group">
+                        <label>错误信息</label>
+                        <div class="result-box">${task.errors.join('\n')}</div>
+                    </div>
+                    ` : ''}
+                    <div class="form-group">
+                        <label>完整数据</label>
+                        <div class="result-box">${JSON.stringify(task, null, 2)}</div>
+                    </div>
+                `;
+                
+                document.getElementById('taskModal').classList.add('active');
+            } catch (error) {
+                showToast(`获取详情失败: ${error.message}`, 'error');
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('taskModal').classList.remove('active');
+        }
+
+        async function executeTask(taskId) {
+            try {
+                const result = await apiCall(`/tasks/${taskId}/execute`, { method: 'POST' });
+                showToast('任务执行已启动', 'success');
+                setTimeout(refreshTaskList, 1000);
+            } catch (error) {
+                showToast(`执行失败: ${error.message}`, 'error');
+            }
+        }
+
+        async function cancelTask(taskId) {
+            if (!confirm('确定要取消此任务吗？')) return;
+            
+            try {
+                await apiCall(`/tasks/${taskId}/cancel`, { method: 'POST' });
+                showToast('任务已取消', 'success');
+                refreshTaskList();
+            } catch (error) {
+                showToast(`取消失败: ${error.message}`, 'error');
+            }
+        }
+
+        async function deleteTask(taskId) {
+            if (!confirm('确定要删除此任务吗？此操作不可恢复。')) return;
+            
+            try {
+                await apiCall(`/tasks/${taskId}`, { method: 'DELETE' });
+                showToast('任务已删除', 'success');
+                refreshTaskList();
+            } catch (error) {
+                showToast(`删除失败: ${error.message}`, 'error');
+            }
+        }
+
+        async function viewTaskResults(taskId) {
+            try {
+                const result = await apiCall(`/tasks/${taskId}/results`);
+                const data = result.data;
+                
+                document.getElementById('modalTitle').textContent = `任务结果 - ${data.task_name || taskId}`;
+                document.getElementById('modalBody').innerHTML = `
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>目标</label>
+                            <input type="text" value="${data.target}" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label>状态</label>
+                            <input type="text" value="${getStatusText(data.status)}" readonly>
+                        </div>
+                    </div>
+                    ${data.scan_summary ? `
+                    <div class="form-group">
+                        <label>扫描摘要</label>
+                        <div class="result-box">${JSON.stringify(data.scan_summary, null, 2)}</div>
+                    </div>
+                    ` : ''}
+                    ${data.vulnerabilities && data.vulnerabilities.length > 0 ? `
+                    <div class="form-group">
+                        <label>漏洞列表 (${data.vulnerabilities.length})</label>
+                        <div class="vuln-list">
+                            ${data.vulnerabilities.map(vuln => `
+                                <div class="vuln-item ${vuln.severity?.toLowerCase() || 'info'}">
+                                    <div class="vuln-title">${vuln.title || vuln.type || '未知漏洞'}</div>
+                                    <div class="vuln-meta">
+                                        <span class="severity-badge ${getSeverityClass(vuln.severity || 'info')}">${vuln.severity || 'info'}</span>
+                                        <span>类型: ${vuln.type || 'N/A'}</span>
+                                    </div>
+                                    ${vuln.description ? `<p style="margin-top: 8px; color: #aaa;">${vuln.description}</p>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
+                    <div class="form-group">
+                        <label>完整结果</label>
+                        <div class="result-box">${JSON.stringify(data, null, 2)}</div>
+                    </div>
+                `;
+                
+                document.getElementById('taskModal').classList.add('active');
+            } catch (error) {
+                showToast(`获取结果失败: ${error.message}`, 'error');
+            }
+        }
+
+        function autoRefreshToggle() {
+            isAutoRefresh = !isAutoRefresh;
+            const text = document.getElementById('autoRefreshText');
+            
+            if (isAutoRefresh) {
+                text.textContent = '停止自动刷新';
+                autoRefreshInterval = setInterval(refreshTaskList, 3000);
+            } else {
+                text.textContent = '开启自动刷新';
+                if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+                }
+            }
+        }
+
+        async function loadCompletedTasks() {
+            try {
+                const result = await apiCall('/tasks?status=completed');
+                renderReportTaskList(result.data.tasks);
+            } catch (error) {
+                showToast(`加载失败: ${error.message}`, 'error');
+            }
+        }
+
+        function renderReportTaskList(tasks) {
+            const container = document.getElementById('reportTaskList');
+            
+            if (!tasks || tasks.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        <p>暂无已完成的任务</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = tasks.map(task => `
+                <div class="task-item">
+                    <div class="task-header">
+                        <span class="task-name">${task.task_name || '未命名任务'}</span>
+                        <span class="task-status ${getStatusClass(task.status)}">${getStatusText(task.status)}</span>
+                    </div>
+                    <div class="task-info">
+                        <span>目标: ${task.target}</span>
+                        <span>模式: ${task.scan_mode}</span>
+                        <span>完成: ${formatDateTime(task.updated_at)}</span>
+                    </div>
+                    <div class="task-actions">
+                        <button class="btn btn-primary" onclick="generateReport('${task.task_id}', 'json')">生成JSON报告</button>
+                        <button class="btn btn-secondary" onclick="generateReport('${task.task_id}', 'html')">生成HTML报告</button>
+                        <button class="btn btn-secondary" onclick="generateReport('${task.task_id}', 'markdown')">生成Markdown报告</button>
+                        <button class="btn btn-success" onclick="viewVulnerabilities('${task.task_id}')">查看漏洞</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function generateReport(taskId, format) {
+            try {
+                const result = await apiCall('/reports', {
+                    method: 'POST',
+                    body: {
+                        task_id: taskId,
+                        report_format: format,
+                        include_evidence: true,
+                        include_remediation: true
+                    }
+                });
+
+                const data = result.data;
+                
+                if (format === 'json') {
+                    document.getElementById('reportModalTitle').textContent = 'JSON报告';
+                    document.getElementById('reportModalBody').innerHTML = `
+                        <div class="btn-group" style="margin-bottom: 15px;">
+                            <button class="btn btn-primary" onclick="downloadReport('${taskId}', 'json')">下载JSON</button>
+                        </div>
+                        <div class="result-box">${JSON.stringify(data, null, 2)}</div>
+                    `;
+                } else if (format === 'html') {
+                    document.getElementById('reportModalTitle').textContent = 'HTML报告';
+                    document.getElementById('reportModalBody').innerHTML = `
+                        <div class="btn-group" style="margin-bottom: 15px;">
+                            <button class="btn btn-primary" onclick="downloadReport('${taskId}', 'html')">下载HTML</button>
+                        </div>
+                        <div class="report-preview">${data.report}</div>
+                    `;
+                } else if (format === 'markdown') {
+                    document.getElementById('reportModalTitle').textContent = 'Markdown报告';
+                    document.getElementById('reportModalBody').innerHTML = `
+                        <div class="btn-group" style="margin-bottom: 15px;">
+                            <button class="btn btn-primary" onclick="downloadReport('${taskId}', 'markdown')">下载Markdown</button>
+                        </div>
+                        <div class="result-box">${data.report}</div>
+                    `;
+                }
+                
+                document.getElementById('reportModal').classList.add('active');
+            } catch (error) {
+                showToast(`生成报告失败: ${error.message}`, 'error');
+            }
+        }
+
+        function downloadReport(taskId, format) {
+            const content = document.querySelector('#reportModalBody .result-box, #reportModalBody .report-preview');
+            if (!content) return;
+            
+            let mimeType = 'text/plain';
+            let extension = format;
+            
+            if (format === 'json') {
+                mimeType = 'application/json';
+            } else if (format === 'html') {
+                mimeType = 'text/html';
+            } else if (format === 'markdown') {
+                mimeType = 'text/markdown';
+                extension = 'md';
+            }
+            
+            const blob = new Blob([content.textContent || content.innerHTML], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `toskill_report_${taskId}.${extension}`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            showToast('报告已下载', 'success');
+        }
+
+        async function viewVulnerabilities(taskId) {
+            try {
+                const result = await apiCall(`/tasks/${taskId}/vulnerabilities`);
+                const vulns = result.data.vulnerabilities;
+                
+                document.getElementById('reportModalTitle').textContent = `漏洞列表 (${vulns.length})`;
+                
+                if (vulns.length === 0) {
+                    document.getElementById('reportModalBody').innerHTML = `
+                        <div class="empty-state">
+                            <p>未发现漏洞</p>
+                        </div>
+                    `;
+                } else {
+                    document.getElementById('reportModalBody').innerHTML = `
+                        <div class="vuln-list">
+                            ${vulns.map((vuln, i) => `
+                                <div class="vuln-item ${vuln.severity?.toLowerCase() || 'info'}">
+                                    <div class="vuln-title">${i + 1}. ${vuln.title || vuln.type || '未知漏洞'}</div>
+                                    <div class="vuln-meta">
+                                        <span class="severity-badge ${getSeverityClass(vuln.severity || 'info')}">${vuln.severity || 'info'}</span>
+                                        <span>类型: ${vuln.type || 'N/A'}</span>
+                                        <span>URL: ${vuln.url || 'N/A'}</span>
+                                    </div>
+                                    ${vuln.description ? `<p style="margin-top: 10px; color: #bbb;">${vuln.description}</p>` : ''}
+                                    ${vuln.evidence ? `<div class="result-box" style="margin-top: 10px;">证据: ${vuln.evidence}</div>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                }
+                
+                document.getElementById('reportModal').classList.add('active');
+            } catch (error) {
+                showToast(`获取漏洞列表失败: ${error.message}`, 'error');
+            }
+        }
+
+        function closeReportModal() {
+            document.getElementById('reportModal').classList.remove('active');
+        }
+
+        async function checkHealth() {
+            try {
+                const result = await apiCall('/health');
+                const data = result.data;
+                
+                const statusEl = document.getElementById('systemStatus');
+                statusEl.textContent = data.status.toUpperCase();
+                statusEl.className = `health-value ${data.status}`;
+                
+                document.getElementById('totalTasks').textContent = data.total_tasks;
+                document.getElementById('activeTasks').textContent = data.active_tasks;
+                document.getElementById('uptime').textContent = formatDuration(data.uptime);
+                
+                const componentsHtml = Object.entries(data.components).map(([name, info]) => `
+                    <div class="health-card">
+                        <h3>${name}</h3>
+                        <div class="health-value ${info.status}">${info.status.toUpperCase()}</div>
+                        ${info.message ? `<p style="color: #888; font-size: 0.85rem; margin-top: 5px;">${info.message}</p>` : ''}
+                        ${info.tools_count ? `<p style="color: #aaa; font-size: 0.85rem;">工具数: ${info.tools_count}</p>` : ''}
+                        ${info.total_tasks ? `<p style="color: #aaa; font-size: 0.85rem;">总任务: ${info.total_tasks}</p>` : ''}
+                    </div>
+                `).join('');
+                
+                document.getElementById('componentsStatus').innerHTML = `<div class="health-grid">${componentsHtml}</div>`;
+                
+                document.getElementById('healthDetails').style.display = 'block';
+                document.getElementById('healthDetails').textContent = JSON.stringify(data, null, 2);
+                
+                showToast('健康检查完成', 'success');
+            } catch (error) {
+                showToast(`健康检查失败: ${error.message}`, 'error');
+                
+                document.getElementById('systemStatus').textContent = 'ERROR';
+                document.getElementById('systemStatus').className = 'health-value unhealthy';
+            }
+        }
+
+        async function loadStatistics() {
+            try {
+                const result = await apiCall('/statistics');
+                const data = result.data;
+                
+                document.getElementById('statisticsDetails').style.display = 'block';
+                document.getElementById('statisticsDetails').textContent = JSON.stringify(data, null, 2);
+                
+                showToast('统计信息已加载', 'success');
+            } catch (error) {
+                showToast(`加载统计信息失败: ${error.message}`, 'error');
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshTaskList();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeModal();
+                closeReportModal();
+            }
+        });
+
+        document.getElementById('taskModal').addEventListener('click', (e) => {
+            if (e.target.id === 'taskModal') closeModal();
+        });
+
+        document.getElementById('reportModal').addEventListener('click', (e) => {
+            if (e.target.id === 'reportModal') closeReportModal();
+        });
+    </script>
+</body>
+</html>

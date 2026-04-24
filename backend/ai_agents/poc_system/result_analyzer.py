@@ -14,11 +14,12 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from backend.ai_agents.poc_system.utils import (
     calculate_severity_distribution,
     calculate_statistics,
-    get_high_risk_targets
+    get_false_positive_keywords,
+    get_high_risk_targets,
+    get_success_keywords
 )
 from backend.config import settings
 from backend.models import POCExecutionLog, POCVerificationResult
-from backend.utils.poc_utils import get_false_positive_keywords, get_success_keywords
 
 logger = logging.getLogger(__name__)
 

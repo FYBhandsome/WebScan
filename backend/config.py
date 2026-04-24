@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     AWVS_API_URL: str = "https://127.0.0.1:3443"
     AWVS_API_KEY: Optional[str] = None
     
+    UPLOAD_DIR: str = "uploads"
+    
     SEEBUG_API_KEY: Optional[str] = None
     SEEBUG_API_BASE_URL: str = "https://www.seebug.org/api"
     

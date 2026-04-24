@@ -7,7 +7,7 @@
       </div>
     </el-card>
 
-    <template v-else-if="executionData">
+    <template v-else-if="processedData">
       <el-card class="summary-card">
         <template #header>
           <div class="card-header">
@@ -15,8 +15,8 @@
               <el-icon><DataLine /></el-icon>
               执行概览
             </span>
-            <el-tag :type="getStatusType(executionData.status)">
-              {{ getStatusLabel(executionData.status) }}
+            <el-tag :type="getStatusType(processedData.status)">
+              {{ getStatusLabel(processedData.status) }}
             </el-tag>
           </div>
         </template>
@@ -24,26 +24,53 @@
         <el-row :gutter="20">
           <el-col :span="6">
             <div class="stat-item">
-              <span class="stat-value">{{ executionData.progress || 0 }}%</span>
+              <span class="stat-value">{{ processedData.progress || 0 }}%</span>
               <span class="stat-label">进度</span>
             </div>
           </el-col>
           <el-col :span="6">
             <div class="stat-item">
-              <span class="stat-value">{{ executionData.execution_history?.length || 0 }}</span>
+              <span class="stat-value">{{ processedData.execution_history?.length || 0 }}</span>
               <span class="stat-label">执行步骤</span>
             </div>
           </el-col>
           <el-col :span="6">
             <div class="stat-item">
-              <span class="stat-value">{{ formatDuration(executionData.duration) }}</span>
+              <span class="stat-value">{{ formatDuration(processedData.duration) }}</span>
               <span class="stat-label">总耗时</span>
             </div>
           </el-col>
           <el-col :span="6">
             <div class="stat-item">
-              <span class="stat-value">{{ executionData.target || '-' }}</span>
+              <span class="stat-value">{{ processedData.target || '-' }}</span>
               <span class="stat-label">扫描目标</span>
+            </div>
+          </el-col>
+        </el-row>
+        
+        <el-row v-if="executionSummary" :gutter="20" style="margin-top: 16px;">
+          <el-col :span="6">
+            <div class="stat-item">
+              <span class="stat-value" style="color: #67C23A;">{{ executionSummary.completed_steps }}</span>
+              <span class="stat-label">已完成</span>
+            </div>
+          </el-col>
+          <el-col :span="6">
+            <div class="stat-item">
+              <span class="stat-value" style="color: #F56C6C;">{{ executionSummary.failed_steps }}</span>
+              <span class="stat-label">失败</span>
+            </div>
+          </el-col>
+          <el-col :span="6">
+            <div class="stat-item">
+              <span class="stat-value" style="color: #409EFF;">{{ executionSummary.running_steps }}</span>
+              <span class="stat-label">运行中</span>
+            </div>
+          </el-col>
+          <el-col :span="6">
+            <div class="stat-item">
+              <span class="stat-value" style="color: #909399;">{{ executionSummary.pending_steps }}</span>
+              <span class="stat-label">等待中</span>
             </div>
           </el-col>
         </el-row>
@@ -61,7 +88,7 @@
 
         <el-timeline>
           <el-timeline-item
-            v-for="(step, index) in executionData.execution_history"
+            v-for="(step, index) in processedData.execution_history"
             :key="index"
             :type="getStepType(step.status)"
             :timestamp="formatTimestamp(step.timestamp || step.timestamp_iso)"
@@ -76,32 +103,32 @@
               </div>
               <div class="step-content">
                 <div class="step-info">
-                  <span class="step-task">{{ step.task || step.tool_name || '未知任务' }}</span>
+                  <span class="step-task">{{ step.task || step.tool_name || step.node_name || '未知任务' }}</span>
                   <span v-if="step.execution_time" class="step-time">
                     耗时: {{ step.execution_time.toFixed(2) }}s
                   </span>
                 </div>
-                <div v-if="step.input_params" class="step-params">
+                <div v-if="step.input_params && Object.keys(step.input_params).length > 0" class="step-params">
                   <span class="label">输入参数:</span>
                   <pre>{{ JSON.stringify(step.input_params, null, 2) }}</pre>
                 </div>
-                <div v-if="step.output_data" class="step-output">
+                <div v-if="step.output_data && Object.keys(step.output_data).length > 0" class="step-output">
                   <span class="label">输出数据:</span>
                   <pre>{{ JSON.stringify(step.output_data, null, 2) }}</pre>
                 </div>
-                <div v-if="step.error" class="step-error">
+                <div v-if="step.error || step.error_message" class="step-error">
                   <el-icon color="#F56C6C"><CircleCloseFilled /></el-icon>
-                  <span>{{ step.error }}</span>
+                  <span>{{ step.error || step.error_message }}</span>
                 </div>
               </div>
             </el-card>
           </el-timeline-item>
         </el-timeline>
 
-        <el-empty v-if="!executionData.execution_history?.length" description="暂无执行记录" />
+        <el-empty v-if="!processedData.execution_history?.length" description="暂无执行记录" />
       </el-card>
 
-      <el-card v-if="executionData.graph_flow" class="graph-card">
+      <el-card v-if="processedData.graph_flow" class="graph-card">
         <template #header>
           <div class="card-header">
             <span class="title">
@@ -112,23 +139,50 @@
         </template>
 
         <div class="graph-flow">
-          <div v-for="(subgraph, index) in executionData.graph_flow?.subgraphs" :key="index" class="subgraph-item">
+          <div v-for="(subgraph, index) in processedData.graph_flow?.subgraphs" :key="index" class="subgraph-item">
             <div class="subgraph-header">
               <el-icon><FolderOpened /></el-icon>
               <span>{{ subgraph.subgraph_name || `子图 ${subgraph.subgraph_id}` }}</span>
+              <el-tag :type="getStatusType(subgraph.status)" size="small">
+                {{ getStatusLabel(subgraph.status) }}
+              </el-tag>
             </div>
             <div class="nodes-list">
               <div v-for="node in subgraph.nodes" :key="node.node_id" class="node-item">
                 <el-tag :type="getStatusType(node.status)" size="small">
-                  {{ node.status || 'pending' }}
+                  {{ getStatusLabel(node.status) }}
                 </el-tag>
                 <span class="node-name">{{ node.node_name || node.node_id }}</span>
+                <span v-if="node.execution_time" class="node-time">{{ node.execution_time.toFixed(2) }}s</span>
               </div>
             </div>
           </div>
         </div>
 
-        <el-empty v-if="!executionData.graph_flow?.subgraphs?.length" description="暂无图流程数据" />
+        <el-empty v-if="!processedData.graph_flow?.subgraphs?.length" description="暂无图流程数据" />
+      </el-card>
+      
+      <el-card v-if="processedData.vulnerabilities && processedData.vulnerabilities.length > 0" class="vuln-card">
+        <template #header>
+          <div class="card-header">
+            <span class="title">
+              <el-icon><Warning /></el-icon>
+              发现漏洞 ({{ processedData.vulnerabilities.length }})
+            </span>
+          </div>
+        </template>
+        
+        <div class="vuln-list">
+          <div v-for="(vuln, index) in processedData.vulnerabilities" :key="index" class="vuln-item">
+            <div class="vuln-header">
+              <span class="vuln-title">{{ vuln.title || vuln.type || '未知漏洞' }}</span>
+              <el-tag :type="getSeverityType(vuln.severity)" size="small">
+                {{ vuln.severity || 'Unknown' }}
+              </el-tag>
+            </div>
+            <div v-if="vuln.url" class="vuln-url">{{ vuln.url }}</div>
+          </div>
+        </div>
       </el-card>
     </template>
 
@@ -138,7 +192,13 @@
 
 <script setup>
 import { computed } from 'vue'
-import { Loading, DataLine, Clock, Share, FolderOpened, CircleCloseFilled } from '@element-plus/icons-vue'
+import { Loading, DataLine, Clock, Share, FolderOpened, CircleCloseFilled, Warning } from '@element-plus/icons-vue'
+import { 
+  WorkflowStatus, 
+  WorkflowDataProcessor, 
+  formatDuration as formatDurationUtil,
+  formatTimestamp as formatTimestampUtil
+} from '@/utils/workflowData'
 
 const props = defineProps({
   executionData: {
@@ -151,60 +211,45 @@ const props = defineProps({
   }
 })
 
+const processedData = computed(() => {
+  if (!props.executionData) return null
+  return WorkflowDataProcessor.processWorkflowData(props.executionData)
+})
+
+const executionSummary = computed(() => {
+  if (!processedData.value) return null
+  return WorkflowDataProcessor.getExecutionSummary(processedData.value)
+})
+
 const getStatusType = (status) => {
-  const statusMap = {
-    'success': 'success',
-    'completed': 'success',
-    'running': 'primary',
-    'pending': 'info',
-    'failed': 'danger',
-    'error': 'danger',
-    'cancelled': 'warning'
-  }
-  return statusMap[status?.toLowerCase()] || 'info'
+  return WorkflowStatus.getType(status)
 }
 
 const getStatusLabel = (status) => {
-  const labelMap = {
-    'success': '成功',
-    'completed': '已完成',
-    'running': '运行中',
-    'pending': '等待中',
-    'failed': '失败',
-    'error': '错误',
-    'cancelled': '已取消'
-  }
-  return labelMap[status?.toLowerCase()] || status || '未知'
+  return WorkflowStatus.getLabel(status)
 }
 
 const getStepType = (status) => {
-  const typeMap = {
-    'success': 'success',
-    'completed': 'success',
-    'running': 'primary',
-    'pending': 'info',
-    'failed': 'danger',
-    'error': 'danger'
+  return WorkflowStatus.getType(status)
+}
+
+const getSeverityType = (severity) => {
+  const severityMap = {
+    'critical': 'danger',
+    'high': 'danger',
+    'medium': 'warning',
+    'low': 'info',
+    'info': 'info'
   }
-  return typeMap[status?.toLowerCase()] || 'info'
+  return severityMap[severity?.toLowerCase()] || 'info'
 }
 
 const formatTimestamp = (timestamp) => {
-  if (!timestamp) return '-'
-  try {
-    const date = new Date(timestamp)
-    return date.toLocaleString('zh-CN')
-  } catch {
-    return timestamp
-  }
+  return formatTimestampUtil(timestamp)
 }
 
 const formatDuration = (seconds) => {
-  if (!seconds) return '-'
-  if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const minutes = Math.floor(seconds / 60)
-  const secs = (seconds % 60).toFixed(0)
-  return `${minutes}m ${secs}s`
+  return formatDurationUtil(seconds)
 }
 </script>
 
@@ -226,7 +271,7 @@ const formatDuration = (seconds) => {
   gap: 16px;
 }
 
-.summary-card, .timeline-card, .graph-card {
+.summary-card, .timeline-card, .graph-card, .vuln-card {
   margin-bottom: 16px;
 }
 
@@ -368,5 +413,46 @@ const formatDuration = (seconds) => {
 
 .node-name {
   font-size: 13px;
+}
+
+.node-time {
+  font-size: 12px;
+  color: #909399;
+  margin-left: 4px;
+}
+
+.vuln-card {
+  border-left: 3px solid #F56C6C;
+}
+
+.vuln-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vuln-item {
+  padding: 12px;
+  background: #fef0f0;
+  border-radius: 4px;
+  border-left: 3px solid #F56C6C;
+}
+
+.vuln-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.vuln-title {
+  font-weight: 600;
+  color: #303133;
+}
+
+.vuln-url {
+  font-size: 13px;
+  color: #606266;
+  word-break: break-all;
 }
 </style>

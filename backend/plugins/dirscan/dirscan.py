@@ -293,6 +293,6 @@ def get_dirscan(target: str, config: Dict = None, dict_path: str = None) -> Dict
 
 
 if __name__ == '__main__':
-    test_url = "http://example.com"
+    test_url = "http://testasp.vulnweb.com"
     result = get_dirscan(test_url)
     print(json.dumps(result, ensure_ascii=False, indent=2))

@@ -1,8 +1,14 @@
 """
-工具注册表
+工具注册表模块
 
-管理所有扫描工具的注册和调用,提供统一的工具接口。
-增强功能：元数据管理、调用链追踪、安全检查、结果缓存。
+管理所有扫描工具的注册和调用，提供统一的工具接口。
+
+增强功能：
+- 丰富的元数据管理（版本、作者、依赖、场景、标签等）
+- 调用链追踪（start_trace/end_trace/get_call_chain）
+- 执行安全检查（危险模式检测、权限检查）
+- 结果缓存（支持TTL过期）
+- 统一返回 PluginResult 格式
 """
 import asyncio
 import logging
@@ -14,13 +20,18 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 
+from .result_types import PluginResult, ToolStatus
 from .wrappers import AsyncToolWrapper
 
 logger = logging.getLogger(__name__)
 
 
 class ToolPermission(Enum):
-    """工具权限枚举"""
+    """
+    工具权限枚举
+    
+    定义工具执行所需的权限类型。
+    """
     READ = "read"
     WRITE = "write"
     EXECUTE = "execute"
@@ -34,7 +45,19 @@ class CallChainNode:
     """
     调用链节点
     
-    记录单次工具调用的详细信息。
+    记录单次工具调用的详细信息，用于追踪和调试。
+    
+    Attributes:
+        tool_name: 工具名称
+        target: 目标地址
+        start_time: 开始时间
+        end_time: 结束时间
+        status: 执行状态
+        params: 调用参数
+        result: 执行结果
+        error: 错误信息
+        parent_id: 父节点ID
+        node_id: 节点ID
     """
     tool_name: str
     target: str
@@ -42,7 +65,7 @@ class CallChainNode:
     end_time: Optional[datetime] = None
     status: str = "pending"
     params: Dict[str, Any] = field(default_factory=dict)
-    result: Optional[Dict[str, Any]] = None
+    result: Optional[PluginResult] = None
     error: Optional[str] = None
     parent_id: Optional[str] = None
     node_id: str = field(default_factory=lambda: str(id(object())))
@@ -54,8 +77,14 @@ class CacheEntry:
     缓存条目
     
     存储工具执行结果的缓存数据。
+    
+    Attributes:
+        result: 缓存的结果
+        created_at: 创建时间
+        ttl_seconds: 过期时间(秒)
+        cache_key: 缓存键
     """
-    result: Dict[str, Any]
+    result: PluginResult
     created_at: datetime
     ttl_seconds: int
     cache_key: str
@@ -77,9 +106,10 @@ class ToolRegistry:
         - 调用链追踪
         - 执行安全检查
         - 结果缓存
+        - 统一返回 PluginResult
     
     Attributes:
-        tools: 工具字典,键为工具名称,值为工具对象
+        tools: 工具字典，键为工具名称，值为工具对象
         tool_metadata: 工具元数据字典
         _call_chain: 调用链记录列表
         _result_cache: 结果缓存字典
@@ -87,6 +117,7 @@ class ToolRegistry:
     """
     
     def __init__(self):
+        """初始化工具注册表"""
         self.tools: Dict[str, AsyncToolWrapper] = {}
         self.tool_metadata: Dict[str, Dict[str, Any]] = {}
         
@@ -122,7 +153,10 @@ class ToolRegistry:
             "os.system",
         }
         
-        logger.info("工具注册表初始化完成（增强版：支持元数据管理、调用链追踪、安全检查、结果缓存）")
+        logger.info(
+            "工具注册表初始化完成 "
+            "（增强版：支持元数据管理、调用链追踪、安全检查、结果缓存）"
+        )
     
     def register(
         self,
@@ -151,7 +185,7 @@ class ToolRegistry:
             description: 工具描述，详细说明工具的功能
             category: 工具分类(plugin/poc/general/scanner/exploit)
             timeout: 超时时间(秒)
-            priority: 工具优先级(1-10,数字越大优先级越高)
+            priority: 工具优先级(1-10，数字越大优先级越高)
             version: 工具版本号，遵循语义化版本规范
             author: 工具作者
             dependencies: 工具依赖的其他工具名称列表
@@ -163,12 +197,12 @@ class ToolRegistry:
             enabled: 工具是否启用
         """
         if name in self.tools:
-            logger.warning(f"工具 {name} 已存在,将被覆盖")
+            logger.warning(f"工具 {name} 已存在，将被覆盖")
         
         if isinstance(func, AsyncToolWrapper):
             wrapper = func
         else:
-            wrapper = AsyncToolWrapper(func, timeout=timeout)
+            wrapper = AsyncToolWrapper(func, timeout=timeout, tool_name=name)
         
         self.tools[name] = wrapper
         
@@ -192,7 +226,10 @@ class ToolRegistry:
             "avg_execution_time": 0.0,
         }
         
-        logger.info(f"✅ 注册工具: {name} (分类: {category}, 版本: {version}, 作者: {author}, 优先级: {priority})")
+        logger.info(
+            f"✅ 注册工具: {name} "
+            f"(分类: {category}, 版本: {version}, 作者: {author}, 优先级: {priority})"
+        )
     
     def get_tool_metadata(self, tool_name: str) -> Optional[Dict[str, Any]]:
         """
@@ -297,7 +334,10 @@ class ToolRegistry:
             ]
         }
         
-        logger.info(f"🔍 结束调用链追踪: {self._current_trace_id}, 共调用 {len(self._call_chain)} 个工具")
+        logger.info(
+            f"🔍 结束调用链追踪: {self._current_trace_id}, "
+            f"共调用 {len(self._call_chain)} 个工具"
+        )
         
         self._current_trace_id = None
         return trace_summary
@@ -512,7 +552,7 @@ class ToolRegistry:
     def _get_cached_result(
         self,
         cache_key: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[PluginResult]:
         """
         获取缓存结果
         
@@ -520,7 +560,7 @@ class ToolRegistry:
             cache_key: 缓存键
             
         Returns:
-            Optional[Dict]: 缓存的结果，不存在或已过期则返回None
+            Optional[PluginResult]: 缓存的结果，不存在或已过期则返回None
         """
         if not self._cache_enabled:
             return None
@@ -541,7 +581,7 @@ class ToolRegistry:
     def _cache_result(
         self,
         cache_key: str,
-        result: Dict[str, Any],
+        result: PluginResult,
         ttl_seconds: int
     ):
         """
@@ -591,8 +631,8 @@ class ToolRegistry:
             logger.info("清除所有缓存")
         else:
             keys_to_remove = [
-                key for key in self._result_cache
-                if tool_name in str(self._result_cache[key].result.get("tool_name", ""))
+                key for key, entry in self._result_cache.items()
+                if entry.result.tool_name == tool_name
             ]
             for key in keys_to_remove:
                 del self._result_cache[key]
@@ -625,7 +665,7 @@ class ToolRegistry:
         target: str,
         use_cache: bool = True,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> PluginResult:
         """
         调用工具（增强版）
         
@@ -634,6 +674,7 @@ class ToolRegistry:
             - 调用链追踪
             - 结果缓存
             - 执行统计
+            - 统一返回 PluginResult
         
         Args:
             tool_name: 工具名称
@@ -642,7 +683,7 @@ class ToolRegistry:
             **kwargs: 工具参数
             
         Returns:
-            Dict: 工具执行结果,包含status、data、error等字段
+            PluginResult: 统一格式的执行结果
             
         Raises:
             ValueError: 工具不存在
@@ -652,19 +693,19 @@ class ToolRegistry:
         
         security_result = self._security_check(tool_name, target, **kwargs)
         if not security_result["passed"]:
-            return {
-                "status": "security_blocked",
-                "error": "安全检查未通过",
-                "security_issues": security_result["errors"],
-                "tool_name": tool_name
-            }
+            return PluginResult.security_blocked(
+                error="安全检查未通过",
+                security_issues=security_result["errors"],
+                tool_name=tool_name,
+                target=target
+            )
         
         cache_key = self._generate_cache_key(tool_name, target, **kwargs)
         
         if use_cache:
             cached_result = self._get_cached_result(cache_key)
             if cached_result:
-                cached_result["from_cache"] = True
+                cached_result.metadata["from_cache"] = True
                 return cached_result
         
         call_node = CallChainNode(
@@ -696,21 +737,27 @@ class ToolRegistry:
             
             self._update_tool_stats(tool_name, execution_time)
             
-            ttl = metadata.get("cache_ttl", self._default_cache_ttl)
-            success_result = {
-                "status": "success",
-                "data": result,
-                "tool_name": tool_name,
-                "execution_time": execution_time,
-                "from_cache": False,
-                "security_warnings": security_result.get("warnings", [])
-            }
+            if not isinstance(result, PluginResult):
+                result = PluginResult.success(
+                    data=result,
+                    execution_time=execution_time,
+                    tool_name=tool_name,
+                    target=target
+                )
+            else:
+                result.execution_time = execution_time
+                result.tool_name = tool_name
+                result.target = target
             
+            result.metadata["security_warnings"] = security_result.get("warnings", [])
+            result.metadata["from_cache"] = False
+            
+            ttl = metadata.get("cache_ttl", self._default_cache_ttl)
             if use_cache:
-                self._cache_result(cache_key, success_result.copy(), ttl)
+                self._cache_result(cache_key, result, ttl)
             
             logger.info(f"✅ 工具 {tool_name} 执行成功 (耗时: {execution_time:.2f}秒)")
-            return success_result
+            return result
             
         except asyncio.TimeoutError:
             execution_time = time.time() - start_time
@@ -722,12 +769,12 @@ class ToolRegistry:
             self._update_tool_stats(tool_name, execution_time, success=False)
             
             logger.error(f"⏱️ 工具 {tool_name} 执行超时")
-            return {
-                "status": "timeout",
-                "error": f"工具执行超时({tool.timeout}秒)",
-                "tool_name": tool_name,
-                "execution_time": execution_time
-            }
+            return PluginResult.timeout(
+                timeout_seconds=tool.timeout,
+                execution_time=execution_time,
+                tool_name=tool_name,
+                target=target
+            )
             
         except Exception as e:
             execution_time = time.time() - start_time
@@ -739,12 +786,12 @@ class ToolRegistry:
             self._update_tool_stats(tool_name, execution_time, success=False)
             
             logger.error(f"❌ 工具 {tool_name} 执行失败: {str(e)}")
-            return {
-                "status": "failed",
-                "error": str(e),
-                "tool_name": tool_name,
-                "execution_time": execution_time
-            }
+            return PluginResult.failed(
+                error=str(e),
+                execution_time=execution_time,
+                tool_name=tool_name,
+                target=target
+            )
     
     def _update_tool_stats(
         self,
@@ -782,7 +829,7 @@ class ToolRegistry:
             tool_name: 工具名称
             
         Returns:
-            Optional[AsyncToolWrapper]: 工具对象,不存在则返回None
+            Optional[AsyncToolWrapper]: 工具对象，不存在则返回None
         """
         return self.tools.get(tool_name)
     
@@ -801,7 +848,7 @@ class ToolRegistry:
             enabled_only: 只返回启用的工具
             
         Returns:
-            List[Dict]: 工具列表,包含名称和元数据
+            List[Dict]: 工具列表，包含名称和元数据
         """
         tools_list = []
         
@@ -987,7 +1034,7 @@ def register_tool(
     """
     工具注册装饰器（增强版）
     
-    用于简化工具注册,使用装饰器语法:
+    用于简化工具注册，使用装饰器语法:
     
     Examples:
         >>> @register_tool(
@@ -1034,6 +1081,7 @@ registry = ToolRegistry()
     - 调用链追踪（start_trace/end_trace/get_call_chain）
     - 执行安全检查（危险模式检测、权限检查）
     - 结果缓存（支持TTL过期）
+    - 统一返回 PluginResult
 
 使用示例:
     from ai_agents.tools import registry, register_tool

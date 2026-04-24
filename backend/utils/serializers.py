@@ -1,42 +1,79 @@
 """
-Serialization utilities
-"""
-from typing import Any, Dict, List, Set, Tuple
+序列化工具模块
 
-def sanitize_json_data(data: Any, seen: Set[int] = None) -> Any:
+提供 JSON 数据清理和序列化功能。
+"""
+import datetime
+import decimal
+from typing import Any, Dict, List, Set, Union
+
+
+def sanitize_json_data(data: Any, max_depth: int = 10) -> Any:
     """
-    Sanitize data to prevent circular references in JSON serialization.
+    清理数据使其可以安全地 JSON 序列化
     
     Args:
-        data: The data to sanitize
-        seen: Set of object IDs that have been visited (for recursion detection)
+        data: 需要清理的数据
+        max_depth: 最大递归深度，防止循环引用
         
     Returns:
-        Sanitized data safe for JSON serialization
+        清理后的数据
     """
-    if seen is None:
-        seen = set()
+    if max_depth <= 0:
+        return str(data)
     
-    # Primitives
-    if isinstance(data, (str, int, float, bool, type(None))):
+    if data is None:
+        return None
+    
+    if isinstance(data, (str, int, float, bool)):
         return data
-        
-    # Check cycle
-    obj_id = id(data)
-    if obj_id in seen:
-        return f"<Circular Reference {type(data).__name__}>"
     
-    # Add to seen path
-    new_seen = seen | {obj_id}
+    if isinstance(data, bytes):
+        try:
+            return data.decode('utf-8')
+        except UnicodeDecodeError:
+            return data.hex()
+    
+    if isinstance(data, datetime.datetime):
+        return data.isoformat()
+    
+    if isinstance(data, datetime.date):
+        return data.isoformat()
+    
+    if isinstance(data, datetime.time):
+        return data.isoformat()
+    
+    if isinstance(data, decimal.Decimal):
+        return float(data)
+    
+    if isinstance(data, set):
+        return [sanitize_json_data(item, max_depth - 1) for item in data]
+    
+    if isinstance(data, (list, tuple)):
+        return [sanitize_json_data(item, max_depth - 1) for item in data]
     
     if isinstance(data, dict):
-        return {str(k): sanitize_json_data(v, new_seen) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [sanitize_json_data(i, new_seen) for i in data]
-    elif isinstance(data, tuple):
-        return tuple(sanitize_json_data(i, new_seen) for i in data)
-        
-    # For other objects, return as is (let json.dumps default=str handle them)
-    # Or convert to string representation if it's a known problematic type
-    # But for now we rely on json.dumps default=str
-    return data
+        return {
+            str(k): sanitize_json_data(v, max_depth - 1)
+            for k, v in data.items()
+        }
+    
+    if hasattr(data, '__dict__'):
+        return sanitize_json_data(data.__dict__, max_depth - 1)
+    
+    if hasattr(data, 'to_dict'):
+        try:
+            return sanitize_json_data(data.to_dict(), max_depth - 1)
+        except Exception:
+            pass
+    
+    if hasattr(data, 'model_dump'):
+        try:
+            return sanitize_json_data(data.model_dump(), max_depth - 1)
+        except Exception:
+            pass
+    
+    return str(data)
+
+
+__all__ = ["sanitize_json_data"]

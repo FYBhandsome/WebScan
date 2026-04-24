@@ -23,7 +23,7 @@
 - **Tortoise-ORM**：数据持久化
 - **asyncio**：异步任务执行
 
----
+***
 
 ## 目录结构
 
@@ -65,7 +65,7 @@ ai_agents/
 └── PERFORMANCE_REPORT.md    # 性能测试报告
 ```
 
----
+***
 
 ## 图工作流节点详解
 
@@ -73,18 +73,18 @@ AIAgent工作流包含**10个功能节点**，形成完整的扫描链路：
 
 ### 节点列表
 
-| 序号 | 节点名称 | 节点类 | 功能描述 |
-|------|----------|--------|----------|
-| 1 | environment_awareness | EnvironmentAwarenessNode | 环境感知，检测操作系统、Python版本、可用工具等 |
-| 2 | task_planning | TaskPlanningNode | 任务规划，支持规则化和LLM增强两种模式 |
-| 3 | intelligent_decision | IntelligentDecisionNode | 智能决策，基于环境信息和目标特征决定扫描策略 |
-| 4 | tool_execution | ToolExecutionNode | 工具执行，调用插件和POC进行扫描 |
-| 5 | code_generation | CodeGenerationNode | 代码生成，根据需求动态生成扫描脚本 |
-| 6 | code_execution | CodeExecutionNode | 代码执行，在沙箱环境中执行生成的代码 |
-| 7 | capability_enhancement | CapabilityEnhancementNode | 功能增强，动态安装依赖和扩展能力 |
-| 8 | result_verification | ResultVerificationNode | 结果验证，验证扫描结果并补充任务 |
-| 9 | vulnerability_analysis | VulnerabilityAnalysisNode | 漏洞分析，去重、排序和严重度评估 |
-| 10 | report_generation | ReportGenerationNode | 报告生成，生成JSON/HTML格式报告 |
+| 序号 | 节点名称                    | 节点类                       | 功能描述                       |
+| -- | ----------------------- | ------------------------- | -------------------------- |
+| 1  | environment\_awareness  | EnvironmentAwarenessNode  | 环境感知，检测操作系统、Python版本、可用工具等 |
+| 2  | task\_planning          | TaskPlanningNode          | 任务规划，支持规则化和LLM增强两种模式       |
+| 3  | intelligent\_decision   | IntelligentDecisionNode   | 智能决策，基于环境信息和目标特征决定扫描策略     |
+| 4  | tool\_execution         | ToolExecutionNode         | 工具执行，调用插件和POC进行扫描          |
+| 5  | code\_generation        | CodeGenerationNode        | 代码生成，根据需求动态生成扫描脚本          |
+| 6  | code\_execution         | CodeExecutionNode         | 代码执行，在沙箱环境中执行生成的代码         |
+| 7  | capability\_enhancement | CapabilityEnhancementNode | 功能增强，动态安装依赖和扩展能力           |
+| 8  | result\_verification    | ResultVerificationNode    | 结果验证，验证扫描结果并补充任务           |
+| 9  | vulnerability\_analysis | VulnerabilityAnalysisNode | 漏洞分析，去重、排序和严重度评估           |
+| 10 | report\_generation      | ReportGenerationNode      | 报告生成，生成JSON/HTML格式报告       |
 
 ### 工作流程图
 
@@ -164,6 +164,7 @@ AIAgent工作流包含**10个功能节点**，形成完整的扫描链路：
 **功能**：检测运行环境信息，为后续决策提供依据
 
 **输出**：
+
 - 操作系统信息（Windows/Linux/Darwin）
 - Python版本
 - 可用工具列表（nmap、masscan等）
@@ -175,10 +176,12 @@ AIAgent工作流包含**10个功能节点**，形成完整的扫描链路：
 **功能**：根据目标特征生成扫描任务列表
 
 **两种模式**：
+
 - **规则化规划**：基于预设规则快速生成任务
 - **LLM增强规划**：使用大语言模型智能规划
 
 **输出**：
+
 - 规划的任务列表
 - 任务优先级
 
@@ -187,6 +190,7 @@ AIAgent工作流包含**10个功能节点**，形成完整的扫描链路：
 **功能**：基于环境信息和目标特征智能决定下一步操作
 
 **决策依据**：
+
 - 操作系统类型
 - 可用工具
 - 目标CMS类型
@@ -197,6 +201,7 @@ AIAgent工作流包含**10个功能节点**，形成完整的扫描链路：
 **功能**：执行插件和POC工具
 
 **特性**：
+
 - 并发控制（最大并发数可配置）
 - 超时控制
 - 重试机制
@@ -207,12 +212,14 @@ AIAgent工作流包含**10个功能节点**，形成完整的扫描链路：
 **功能**：根据扫描需求动态生成扫描脚本
 
 **特性**：
+
 - 支持多种语言（Python、Bash、PowerShell）
 - LLM驱动的代码生成
 - 自动保存生成的代码文件
 - 支持Pocsuite3 POC生成
 
 **输出**：
+
 - 生成的代码
 - 代码语言
 - 依赖列表
@@ -223,12 +230,14 @@ AIAgent工作流包含**10个功能节点**，形成完整的扫描链路：
 **功能**：在沙箱环境中执行生成的代码
 
 **特性**：
+
 - 沙箱隔离执行
 - 超时控制
 - 输出捕获
 - 错误处理
 
 **安全措施**：
+
 - 启用沙箱模式
 - 限制执行时间
 - 限制资源使用
@@ -238,6 +247,7 @@ AIAgent工作流包含**10个功能节点**，形成完整的扫描链路：
 **功能**：动态增强AI Agent能力
 
 **特性**：
+
 - 自动安装缺失依赖
 - 动态加载新功能
 - 能力版本管理
@@ -247,6 +257,7 @@ AIAgent工作流包含**10个功能节点**，形成完整的扫描链路：
 **功能**：验证扫描结果，决定是否继续执行
 
 **特性**：
+
 - 基于CMS补充POC任务
 - 基于端口补充POC任务
 - 迭代验证支持
@@ -256,6 +267,7 @@ AIAgent工作流包含**10个功能节点**，形成完整的扫描链路：
 **功能**：分析发现的漏洞
 
 **特性**：
+
 - 漏洞去重
 - 按严重度排序
 - AI智能POC匹配
@@ -266,11 +278,12 @@ AIAgent工作流包含**10个功能节点**，形成完整的扫描链路：
 **功能**：生成最终扫描报告
 
 **输出格式**：
+
 - JSON格式报告
 - HTML格式报告
 - 执行轨迹报告
 
----
+***
 
 ## 节点参数详解
 
@@ -374,7 +387,7 @@ state.poc_verification_tasks    # 生成的POC验证任务
 
 ### 条件路由逻辑
 
-#### result_verification → 3种分支
+#### result\_verification → 3种分支
 
 ```python
 def _should_continue_or_verify(state):
@@ -383,7 +396,7 @@ def _should_continue_or_verify(state):
     # 3. 所有任务完成 → analyze
 ```
 
-#### vulnerability_analysis → 1种分支
+#### vulnerability\_analysis → 1种分支
 
 ```python
 def _post_analysis_routing(state):
@@ -391,7 +404,7 @@ def _post_analysis_routing(state):
     # → report_generation
 ```
 
----
+***
 
 ## 数据流转路径
 
@@ -448,65 +461,69 @@ def _post_analysis_routing(state):
    └─→ tool_results["html_execution_trace"]: HTML报告
 ```
 
----
+***
 
 ## 工具列表
 
 ### 插件工具
 
-| 工具名称 | 功能描述 | 类别 |
-|----------|----------|------|
-| baseinfo | 基础信息收集（服务器、IP、域名等） | 信息收集 |
-| portscan | 端口扫描，识别开放端口和服务 | 端口扫描 |
-| waf_detect | WAF检测，识别Web应用防火墙 | 安全检测 |
-| cdn_detect | CDN检测，判断是否使用CDN | 网络分析 |
-| cms_identify | CMS识别，识别网站使用的CMS系统 | 指纹识别 |
-| infoleak_scan | 信息泄露扫描，检测敏感信息泄露 | 安全检测 |
-| subdomain_scan | 子域名扫描，枚举子域名 | 域名分析 |
-| webside_scan | 站点信息收集，获取网站基本信息 | 信息收集 |
-| webweight_scan | 网站权重查询，获取网站权重信息 | 信息收集 |
-| iplocating | IP定位，获取IP地理位置信息 | 信息收集 |
+| 工具名称            | 功能描述               | 类别   |
+| --------------- | ------------------ | ---- |
+| baseinfo        | 基础信息收集（服务器、IP、域名等） | 信息收集 |
+| portscan        | 端口扫描，识别开放端口和服务     | 端口扫描 |
+| waf\_detect     | WAF检测，识别Web应用防火墙   | 安全检测 |
+| cdn\_detect     | CDN检测，判断是否使用CDN    | 网络分析 |
+| cms\_identify   | CMS识别，识别网站使用的CMS系统 | 指纹识别 |
+| infoleak\_scan  | 信息泄露扫描，检测敏感信息泄露    | 安全检测 |
+| subdomain\_scan | 子域名扫描，枚举子域名        | 域名分析 |
+| webside\_scan   | 站点信息收集，获取网站基本信息    | 信息收集 |
+| webweight\_scan | 网站权重查询，获取网站权重信息    | 信息收集 |
+| iplocating      | IP定位，获取IP地理位置信息    | 信息收集 |
 
 ### POC工具
 
 #### WebLogic POC
-| POC名称 | CVE编号 | 漏洞类型 | 严重度 |
-|---------|---------|----------|--------|
-| poc_weblogic_2020_2551 | CVE-2020-2551 | RCE | Critical |
-| poc_weblogic_2018_2628 | CVE-2018-2628 | RCE | Critical |
-| poc_weblogic_2018_2894 | CVE-2018-2894 | 任意文件上传 | High |
-| poc_weblogic_2020_14756 | CVE-2020-14756 | RCE | Critical |
-| poc_weblogic_2023_21839 | CVE-2023-21839 | RCE | Critical |
+
+| POC名称                      | CVE编号          | 漏洞类型   | 严重度      |
+| -------------------------- | -------------- | ------ | -------- |
+| poc\_weblogic\_2020\_2551  | CVE-2020-2551  | RCE    | Critical |
+| poc\_weblogic\_2018\_2628  | CVE-2018-2628  | RCE    | Critical |
+| poc\_weblogic\_2018\_2894  | CVE-2018-2894  | 任意文件上传 | High     |
+| poc\_weblogic\_2020\_14756 | CVE-2020-14756 | RCE    | Critical |
+| poc\_weblogic\_2023\_21839 | CVE-2023-21839 | RCE    | Critical |
 
 #### Struts2 POC
-| POC名称 | CVE编号 | 漏洞类型 | 严重度 |
-|---------|---------|----------|--------|
-| struts2_009_poc | CVE-2013-1965 | RCE | Critical |
-| struts2_032_poc | CVE-2016-3081 | RCE | Critical |
+
+| POC名称             | CVE编号         | 漏洞类型 | 严重度      |
+| ----------------- | ------------- | ---- | -------- |
+| struts2\_009\_poc | CVE-2013-1965 | RCE  | Critical |
+| struts2\_032\_poc | CVE-2016-3081 | RCE  | Critical |
 
 #### Tomcat POC
-| POC名称 | CVE编号 | 漏洞类型 | 严重度 |
-|---------|---------|----------|--------|
-| cve_2017_12615_poc | CVE-2017-12615 | 任意文件写入 | High |
-| CVE-2022-22965 | CVE-2022-22965 | Spring4Shell RCE | Critical |
-| CVE-2022-47986 | CVE-2022-47986 | RCE | Critical |
+
+| POC名称                 | CVE编号          | 漏洞类型             | 严重度      |
+| --------------------- | -------------- | ---------------- | -------- |
+| cve\_2017\_12615\_poc | CVE-2017-12615 | 任意文件写入           | High     |
+| CVE-2022-22965        | CVE-2022-22965 | Spring4Shell RCE | Critical |
+| CVE-2022-47986        | CVE-2022-47986 | RCE              | Critical |
 
 #### 其他POC
-| POC名称 | CVE编号 | 漏洞类型 | 严重度 |
-|---------|---------|----------|--------|
-| cve_2017_12149_poc | CVE-2017-12149 | JBoss RCE | Critical |
-| cve_2020_10199_poc | CVE-2020-10199 | Nexus RCE | High |
-| cve_2018_7600_poc | CVE-2018-7600 | Drupal RCE | Critical |
+
+| POC名称                 | CVE编号          | 漏洞类型       | 严重度      |
+| --------------------- | -------------- | ---------- | -------- |
+| cve\_2017\_12149\_poc | CVE-2017-12149 | JBoss RCE  | Critical |
+| cve\_2020\_10199\_poc | CVE-2020-10199 | Nexus RCE  | High     |
+| cve\_2018\_7600\_poc  | CVE-2018-7600  | Drupal RCE | Critical |
 
 ### 代码生成能力
 
-| 扫描类型 | 支持语言 | 功能描述 |
-|----------|----------|----------|
-| vuln_scan | Python | 漏洞扫描脚本生成 |
-| pocsuite3_poc | Python | Pocsuite3 POC生成 |
-| custom_scan | Python/Bash/PowerShell | 自定义扫描脚本 |
+| 扫描类型           | 支持语言                   | 功能描述            |
+| -------------- | ---------------------- | --------------- |
+| vuln\_scan     | Python                 | 漏洞扫描脚本生成        |
+| pocsuite3\_poc | Python                 | Pocsuite3 POC生成 |
+| custom\_scan   | Python/Bash/PowerShell | 自定义扫描脚本         |
 
----
+***
 
 ## 代码生成与执行节点
 
@@ -574,7 +591,7 @@ assert "code_execution" in result.tool_results
 3. **资源限制**：限制内存和CPU使用
 4. **网络隔离**：可选的网络隔离执行
 
----
+***
 
 ## 快速开始
 
@@ -634,7 +651,7 @@ curl -X POST "http://127.0.0.1:8888/api/ai_agents/scan" \
 curl "http://127.0.0.1:8888/api/ai_agents/tasks/{task_id}"
 ```
 
----
+***
 
 ## API接口
 
@@ -643,6 +660,7 @@ curl "http://127.0.0.1:8888/api/ai_agents/tasks/{task_id}"
 **端点**：`POST /api/ai_agents/scan`
 
 **请求示例**：
+
 ```json
 {
   "target": "https://www.baidu.com",
@@ -652,6 +670,7 @@ curl "http://127.0.0.1:8888/api/ai_agents/tasks/{task_id}"
 ```
 
 **响应示例**：
+
 ```json
 {
   "task_id": "123e4567-e89b-12d3-a456-426614174000",
@@ -665,6 +684,7 @@ curl "http://127.0.0.1:8888/api/ai_agents/tasks/{task_id}"
 **端点**：`GET /api/ai_agents/tasks/{task_id}`
 
 **响应示例**：
+
 ```json
 {
   "task_id": "123e4567-e89b-12d3-a456-426614174000",
@@ -689,7 +709,7 @@ curl "http://127.0.0.1:8888/api/ai_agents/tasks/{task_id}"
 - `GET /api/ai_agents/config`：获取配置
 - `POST /api/ai_agents/config`：更新配置
 
----
+***
 
 ## 测试
 
@@ -728,36 +748,38 @@ pytest ai_agents/ --cov=ai_agents --cov-report=html
 - 测试覆盖率应不低于70%
 - 涉及外部服务的测试使用`@pytest.mark.integration`标记
 
----
+***
 
 ## 配置说明
 
 ### 核心配置
 
-| 配置项 | 默认值 | 说明 |
-|--------|----------|------|
-| MAX_EXECUTION_TIME | 300 | Agent最大执行时间（秒） |
-| MAX_RETRIES | 3 | 工具执行最大重试次数 |
-| MAX_CONCURRENT_TOOLS | 5 | 最大并发工具执行数 |
-| TOOL_TIMEOUT | 60 | 单个工具执行超时时间（秒） |
-| ENABLE_LLM_PLANNING | true | 是否启用LLM增强任务规划 |
-| DEFAULT_SCAN_TASKS | [...] | 默认扫描任务列表 |
-| ENABLE_MEMORY | true | 是否启用记忆机制 |
-| ENABLE_KB_INTEGRATION | true | 是否启用漏洞知识库集成 |
+| 配置项                     | 默认值    | 说明             |
+| ----------------------- | ------ | -------------- |
+| MAX\_EXECUTION\_TIME    | 300    | Agent最大执行时间（秒） |
+| MAX\_RETRIES            | 3      | 工具执行最大重试次数     |
+| MAX\_CONCURRENT\_TOOLS  | 5      | 最大并发工具执行数      |
+| TOOL\_TIMEOUT           | 60     | 单个工具执行超时时间（秒）  |
+| ENABLE\_LLM\_PLANNING   | true   | 是否启用LLM增强任务规划  |
+| DEFAULT\_SCAN\_TASKS    | \[...] | 默认扫描任务列表       |
+| ENABLE\_MEMORY          | true   | 是否启用记忆机制       |
+| ENABLE\_KB\_INTEGRATION | true   | 是否启用漏洞知识库集成    |
 
----
+***
 
 ## 扩展开发
 
 ### 添加新工具
 
 1. 创建工具函数：
+
 ```python
 async def my_scan_tool(target: str) -> dict:
     return {"status": "success", "data": {...}}
 ```
 
-2. 注册工具：
+1. 注册工具：
+
 ```python
 from ai_agents.tools import register_tool
 
@@ -774,6 +796,7 @@ async def my_tool(target: str):
 ### 添加新节点
 
 1. 创建节点类：
+
 ```python
 from ai_agents.core.state import AgentState
 
@@ -782,7 +805,8 @@ class MyCustomNode:
         return state
 ```
 
-2. 在graph.py中添加节点：
+1. 在graph.py中添加节点：
+
 ```python
 from my_node import MyCustomNode
 
@@ -792,7 +816,7 @@ def _build_graph(self) -> StateGraph:
     return workflow
 ```
 
----
+***
 
 ## 故障排查
 
@@ -802,17 +826,14 @@ def _build_graph(self) -> StateGraph:
    - 检查工具是否正确注册
    - 检查目标URL/IP是否可访问
    - 查看日志中的详细错误信息
-
 2. **LLM规划失败**
-   - 检查OPENAI_API_KEY和OPENAI_BASE_URL配置
+   - 检查OPENAI\_API\_KEY和OPENAI\_BASE\_URL配置
    - 检查网络连接
    - 可以禁用LLM规划使用规则化规划
-
 3. **任务超时**
-   - 增加MAX_EXECUTION_TIME配置
+   - 增加MAX\_EXECUTION\_TIME配置
    - 减少扫描任务数量
    - 优化工具超时时间
-
 4. **代码执行失败**
    - 检查生成的代码语法是否正确
    - 检查依赖是否已安装
@@ -830,33 +851,33 @@ tail -f logs/app.log
 grep "task_id: 123e4567" logs/app.log
 ```
 
----
+***
 
 ## 性能指标
 
 根据性能测试报告：
 
-| 指标 | 数值 | 说明 |
-|--------|------|------|
-| 单目标扫描时间 | 45.2秒 | 比传统扫描快34% |
-| 多目标并发效率 | 42.9秒/目标 | 比传统扫描快26% |
-| 漏洞发现准确率 | 92% | 比传统扫描高18% |
-| 内存占用 | 245MB | 比传统扫描低21% |
-| 自动化程度 | 95% | 比传统扫描高111% |
+| 指标      | 数值       | 说明         |
+| ------- | -------- | ---------- |
+| 单目标扫描时间 | 45.2秒    | 比传统扫描快34%  |
+| 多目标并发效率 | 42.9秒/目标 | 比传统扫描快26%  |
+| 漏洞发现准确率 | 92%      | 比传统扫描高18%  |
+| 内存占用    | 245MB    | 比传统扫描低21%  |
+| 自动化程度   | 95%      | 比传统扫描高111% |
 
----
+***
 
 ## 许可证
 
 本项目遵循原项目的许可证。
 
----
+***
 
 ## 贡献
 
 欢迎提交Issue和Pull Request来改进本项目。
 
----
+***
 
 ## 总结
 

@@ -15,13 +15,45 @@ import os
 import tempfile
 import sys
 import asyncio
+import time
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict
+from enum import Enum
+from typing import Optional, List, Dict, Tuple
 
-from backend.utils.poc_utils import parse_pocsuite_output
+from backend.ai_agents.poc_system.utils import parse_pocsuite_output
 
 
 logger = logging.getLogger(__name__)
+
+
+class POCExecutionError(Exception):
+    """POC 执行错误基类"""
+    pass
+
+
+class POCTimeoutError(POCExecutionError):
+    """POC 执行超时错误"""
+    pass
+
+
+class POCNotFoundError(POCExecutionError):
+    """POC 未找到错误"""
+    pass
+
+
+class POCValidationError(POCExecutionError):
+    """POC 验证错误"""
+    pass
+
+
+class ErrorCode(Enum):
+    """错误代码枚举"""
+    SUCCESS = 0
+    TIMEOUT = 1
+    NOT_FOUND = 2
+    VALIDATION_ERROR = 3
+    EXECUTION_ERROR = 4
+    UNKNOWN_ERROR = 99
 
 
 @dataclass
@@ -37,6 +69,7 @@ class POCResult:
         output: 完整输出
         error: 错误信息
         execution_time: 执行时间(秒)
+        error_code: 错误代码
     """
     poc_name: str
     target: str
@@ -45,6 +78,7 @@ class POCResult:
     output: str
     error: Optional[str] = None
     execution_time: float = 0.0
+    error_code: ErrorCode = ErrorCode.SUCCESS
 
 
 @dataclass
@@ -71,7 +105,14 @@ class Pocsuite3Agent:
     Pocsuite3 代理类
     
     负责管理和执行 Pocsuite3 POC 脚本。
+    
+    优化内容:
+    - 简化 POC 加载逻辑,使用统一的目录收集方法
+    - 提取公共执行逻辑到 _execute_poc_command 方法
+    - 增强错误处理,添加错误分类和超时机制
     """
+    
+    DEFAULT_TIMEOUT = 60
     
     def __init__(self, pocsuite_path: Optional[str] = None):
         """
@@ -82,7 +123,7 @@ class Pocsuite3Agent:
         """
         self.pocsuite_path = pocsuite_path
         self.poc_registry: Dict[str, str] = {}
-        self._check_pocsuite_installation()
+        self._pocsuite_available = self._check_pocsuite_installation()
         self._load_pocs()
         
     def _check_pocsuite_installation(self) -> bool:
@@ -96,40 +137,56 @@ class Pocsuite3Agent:
             import pocsuite3
             logger.info("Pocsuite3 已安装")
             return True
-        except (ImportError, OSError):
-            logger.warning("Pocsuite3 未安装或安装损坏,部分功能将不可用")
+        except (ImportError, OSError) as e:
+            logger.warning(f"Pocsuite3 未安装或安装损坏: {e}, 部分功能将不可用")
             return False
+    
+    def _get_poc_directories(self) -> List[str]:
+        """
+        获取 POC 目录列表
+        
+        Returns:
+            List[str]: POC 目录路径列表
+        """
+        poc_dirs = []
+        
+        try:
+            from pocsuite3.lib.core.data import paths as pocsuite_paths
+            if hasattr(pocsuite_paths, 'POCSUITE_ROOT_PATH') and pocsuite_paths.POCSUITE_ROOT_PATH:
+                poc_dirs.append(pocsuite_paths.POCSUITE_ROOT_PATH)
+        except ImportError:
+            pass
+        
+        try:
+            import pocsuite3
+            pocsuite_module_path = os.path.dirname(pocsuite3.__file__)
+            built_in_poc_dir = os.path.join(pocsuite_module_path, 'pocs')
+            if os.path.isdir(built_in_poc_dir):
+                poc_dirs.append(built_in_poc_dir)
+        except ImportError:
+            pass
+        
+        user_poc_dir = os.path.join(os.getcwd(), 'pocs')
+        if os.path.isdir(user_poc_dir):
+            poc_dirs.append(user_poc_dir)
+            
+        return poc_dirs
     
     def _load_pocs(self):
         """
         加载可用的 POC 脚本
         
         从 Pocsuite3 的 POC 目录和用户自定义目录加载所有可用的 POC 脚本。
+        优化: 使用 _get_poc_directories 统一收集目录,简化加载逻辑
         """
+        if not self._pocsuite_available:
+            logger.warning("Pocsuite3 未安装,POC 自动加载功能不可用")
+            return
+            
         loaded_count = 0
         
         try:
-            from pocsuite3.lib.core.data import paths as pocsuite_paths
-            
-            poc_dirs = []
-            
-            if hasattr(pocsuite_paths, 'POCSUITE_ROOT_PATH') and pocsuite_paths.POCSUITE_ROOT_PATH:
-                poc_dirs.append(pocsuite_paths.POCSUITE_ROOT_PATH)
-            
-            try:
-                import pocsuite3
-                pocsuite_module_path = os.path.dirname(pocsuite3.__file__)
-                built_in_poc_dir = os.path.join(pocsuite_module_path, 'pocs')
-                if os.path.isdir(built_in_poc_dir):
-                    poc_dirs.append(built_in_poc_dir)
-            except Exception:
-                pass
-            
-            user_poc_dir = os.path.join(os.getcwd(), 'pocs')
-            if os.path.isdir(user_poc_dir):
-                poc_dirs.append(user_poc_dir)
-            
-            for poc_dir in poc_dirs:
+            for poc_dir in self._get_poc_directories():
                 if not os.path.isdir(poc_dir):
                     continue
                     
@@ -147,12 +204,109 @@ class Pocsuite3Agent:
             
             logger.info(f"加载了 {loaded_count} 个 POC 脚本")
             
-        except ImportError:
-            logger.warning("Pocsuite3 未安装,POC 自动加载功能不可用")
         except Exception as e:
             logger.error(f"加载 POC 脚本失败: {e}")
 
-    async def execute_poc(self, poc_name: str, target: str, verify: bool = True) -> POCResult:
+    def _resolve_poc_path(self, poc_name: str) -> Tuple[str, Optional[ErrorCode]]:
+        """
+        解析 POC 路径
+        
+        Args:
+            poc_name: POC 名称或路径
+            
+        Returns:
+            Tuple[str, Optional[ErrorCode]]: (POC路径, 错误代码)
+        """
+        poc_path = self.poc_registry.get(poc_name, poc_name)
+        
+        if os.path.isabs(poc_path) and os.path.exists(poc_path):
+            return poc_path, None
+            
+        if os.path.exists(poc_path):
+            return poc_path, None
+            
+        for registered_name, registered_path in self.poc_registry.items():
+            if registered_name == poc_name or os.path.basename(registered_path) == f"{poc_name}.py":
+                return registered_path, None
+        
+        if not os.path.exists(poc_path):
+            return poc_path, ErrorCode.NOT_FOUND
+            
+        return poc_path, None
+
+    async def _execute_poc_command(
+        self,
+        poc_path: str,
+        target: str,
+        verify: bool = True,
+        timeout: Optional[float] = None
+    ) -> Tuple[str, str, float, Optional[ErrorCode]]:
+        """
+        执行 POC 命令的公共方法
+        
+        优化: 提取公共执行逻辑,减少代码重复
+        
+        Args:
+            poc_path: POC 文件路径
+            target: 目标 URL 或 IP
+            verify: 是否仅验证(不攻击)
+            timeout: 超时时间(秒)
+            
+        Returns:
+            Tuple[str, str, float, Optional[ErrorCode]]: (标准输出, 错误输出, 执行时间, 错误代码)
+        """
+        start_time = time.time()
+        
+        cmd = [
+            sys.executable,
+            "-m",
+            "pocsuite3.cli",
+            "-r", poc_path,
+            "-u", target
+        ]
+        
+        if verify:
+            cmd.append("--verify")
+        else:
+            cmd.append("--attack")
+        
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            actual_timeout = timeout or self.DEFAULT_TIMEOUT
+            
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=actual_timeout
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                execution_time = time.time() - start_time
+                return "", f"执行超时 ({actual_timeout}秒)", execution_time, ErrorCode.TIMEOUT
+            
+            output = stdout.decode('utf-8', errors='ignore')
+            error = stderr.decode('utf-8', errors='ignore')
+            execution_time = time.time() - start_time
+            
+            return output, error, execution_time, None
+            
+        except Exception as e:
+            execution_time = time.time() - start_time
+            return "", str(e), execution_time, ErrorCode.EXECUTION_ERROR
+
+    async def execute_poc(
+        self,
+        poc_name: str,
+        target: str,
+        verify: bool = True,
+        timeout: Optional[float] = None
+    ) -> POCResult:
         """
         执行单个 POC
         
@@ -160,56 +314,36 @@ class Pocsuite3Agent:
             poc_name: POC 名称或 POC 文件路径
             target: 目标 URL 或 IP
             verify: 是否仅验证(不攻击)
+            timeout: 超时时间(秒)
             
         Returns:
             POCResult: 执行结果
         """
-        import time
         start_time = time.time()
         
         try:
             logger.info(f"执行 POC: {poc_name}, 目标: {target}")
             
-            poc_path = self.poc_registry.get(poc_name, poc_name)
+            poc_path, error_code = self._resolve_poc_path(poc_name)
             
-            if not os.path.isabs(poc_path) and not os.path.exists(poc_path):
-                found = False
-                for registered_name, registered_path in self.poc_registry.items():
-                    if registered_name == poc_name or os.path.basename(registered_path) == f"{poc_name}.py":
-                        poc_path = registered_path
-                        found = True
-                        break
-                
-                if not found and not os.path.exists(poc_path):
-                    logger.warning(f"POC 文件不存在: {poc_name}, 尝试直接使用")
+            if error_code == ErrorCode.NOT_FOUND:
+                logger.warning(f"POC 文件不存在: {poc_name}")
             
-            cmd = [
-                sys.executable,
-                "-m",
-                "pocsuite3.cli",
-                "-r",
-                poc_path,
-                "-u",
-                target
-            ]
-            
-            if verify:
-                cmd.append("--verify")
-            else:
-                cmd.append("--attack")
-            
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+            output, error, execution_time, cmd_error_code = await self._execute_poc_command(
+                poc_path, target, verify, timeout
             )
             
-            stdout, stderr = await process.communicate()
-            
-            output = stdout.decode('utf-8', errors='ignore')
-            error = stderr.decode('utf-8', errors='ignore')
-            
-            execution_time = time.time() - start_time
+            if cmd_error_code == ErrorCode.TIMEOUT:
+                return POCResult(
+                    poc_name=poc_name,
+                    target=target,
+                    vulnerable=False,
+                    message=f"执行超时",
+                    output=output,
+                    error=error,
+                    execution_time=execution_time,
+                    error_code=ErrorCode.TIMEOUT
+                )
             
             vulnerable = parse_pocsuite_output(output)
             message = "Vulnerable" if vulnerable else "Not Vulnerable"
@@ -221,7 +355,8 @@ class Pocsuite3Agent:
                 message=message,
                 output=output,
                 error=error if error else None,
-                execution_time=execution_time
+                execution_time=execution_time,
+                error_code=ErrorCode.SUCCESS if not error else ErrorCode.EXECUTION_ERROR
             )
             
             logger.info(f"POC 执行完成: {poc_name}, 结果: {message}, 耗时: {execution_time:.2f}s")
@@ -238,14 +373,16 @@ class Pocsuite3Agent:
                 message=f"Execution failed: {str(e)}",
                 output="",
                 error=str(e),
-                execution_time=execution_time
+                execution_time=execution_time,
+                error_code=ErrorCode.UNKNOWN_ERROR
             )
     
     async def scan_target(
         self,
         target: str,
         poc_names: Optional[List[str]] = None,
-        max_concurrent: int = 5
+        max_concurrent: int = 5,
+        timeout: Optional[float] = None
     ) -> ScanResult:
         """
         扫描目标,执行多个 POC
@@ -254,14 +391,13 @@ class Pocsuite3Agent:
             target: 目标 URL 或 IP
             poc_names: 要执行的 POC 名称列表,如果为 None 则执行所有 POC
             max_concurrent: 最大并发数
+            timeout: 单个 POC 超时时间(秒)
             
         Returns:
             ScanResult: 扫描结果
         """
-        import time
         start_time = time.time()
         
-        # 确定要执行的 POC 列表
         if poc_names is None:
             poc_names = list(self.poc_registry.keys())
         
@@ -276,20 +412,17 @@ class Pocsuite3Agent:
         
         logger.info(f"开始扫描目标: {target}, POC 数量: {len(poc_names)}")
         
-        # 限制并发数
         semaphore = asyncio.Semaphore(max_concurrent)
         
         async def execute_with_semaphore(poc_name: str) -> POCResult:
             async with semaphore:
-                return await self.execute_poc(poc_name, target)
+                return await self.execute_poc(poc_name, target, timeout=timeout)
         
-        # 并发执行所有 POC
         results = await asyncio.gather(
             *[execute_with_semaphore(poc_name) for poc_name in poc_names],
             return_exceptions=True
         )
         
-        # 处理结果
         valid_results = []
         vulnerable_count = 0
         
@@ -326,7 +459,8 @@ class Pocsuite3Agent:
         self,
         poc_code: str,
         target: str,
-        verify: bool = True
+        verify: bool = True,
+        timeout: Optional[float] = None
     ) -> POCResult:
         """
         执行自定义 POC 代码
@@ -335,16 +469,15 @@ class Pocsuite3Agent:
             poc_code: POC 代码字符串
             target: 目标 URL 或 IP
             verify: 是否仅验证(不攻击)
+            timeout: 超时时间(秒)
             
         Returns:
             POCResult: 执行结果
         """
-        import time
         start_time = time.time()
         tmp_path = None
         
         try:
-            # 写入临时文件
             with tempfile.NamedTemporaryFile(
                 mode='w',
                 suffix='.py',
@@ -356,37 +489,22 @@ class Pocsuite3Agent:
             
             logger.info(f"执行自定义 POC, 目标: {target}")
             
-            # 构建命令
-            cmd = [
-                sys.executable,
-                "-m",
-                "pocsuite3.cli",
-                "-r",
-                tmp_path,
-                "-u",
-                target
-            ]
-            
-            if verify:
-                cmd.append("--verify")
-            else:
-                cmd.append("--attack")
-            
-            # 执行命令
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+            output, error, execution_time, error_code = await self._execute_poc_command(
+                tmp_path, target, verify, timeout
             )
             
-            stdout, stderr = await process.communicate()
+            if error_code == ErrorCode.TIMEOUT:
+                return POCResult(
+                    poc_name="custom_poc",
+                    target=target,
+                    vulnerable=False,
+                    message="执行超时",
+                    output=output,
+                    error=error,
+                    execution_time=execution_time,
+                    error_code=ErrorCode.TIMEOUT
+                )
             
-            output = stdout.decode('utf-8', errors='ignore')
-            error = stderr.decode('utf-8', errors='ignore')
-            
-            execution_time = time.time() - start_time
-            
-            # 解析结果
             vulnerable = parse_pocsuite_output(output)
             message = "Vulnerable" if vulnerable else "Not Vulnerable"
             
@@ -397,7 +515,8 @@ class Pocsuite3Agent:
                 message=message,
                 output=output,
                 error=error if error else None,
-                execution_time=execution_time
+                execution_time=execution_time,
+                error_code=ErrorCode.SUCCESS if not error else ErrorCode.EXECUTION_ERROR
             )
             
             logger.info(f"自定义 POC 执行完成, 结果: {message}, 耗时: {execution_time:.2f}s")
@@ -414,11 +533,15 @@ class Pocsuite3Agent:
                 message=f"Execution failed: {str(e)}",
                 output="",
                 error=str(e),
-                execution_time=execution_time
+                execution_time=execution_time,
+                error_code=ErrorCode.UNKNOWN_ERROR
             )
         finally:
             if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+                try:
+                    os.unlink(tmp_path)
+                except OSError as e:
+                    logger.warning(f"删除临时文件失败: {tmp_path}, 错误: {e}")
     
     def get_available_pocs(self) -> List[str]:
         """
@@ -444,9 +567,28 @@ class Pocsuite3Agent:
             poc_name for poc_name in self.poc_registry.keys()
             if keyword_lower in poc_name.lower()
         ]
+    
+    def reload_pocs(self) -> int:
+        """
+        重新加载 POC 脚本
+        
+        Returns:
+            int: 加载的 POC 数量
+        """
+        self.poc_registry.clear()
+        self._load_pocs()
+        return len(self.poc_registry)
+    
+    def is_pocsuite_available(self) -> bool:
+        """
+        检查 Pocsuite3 是否可用
+        
+        Returns:
+            bool: 是否可用
+        """
+        return self._pocsuite_available
 
 
-# 全局实例
 _pocsuite3_agent_instance: Optional[Pocsuite3Agent] = None
 
 

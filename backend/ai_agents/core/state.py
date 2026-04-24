@@ -9,8 +9,220 @@ from datetime import datetime
 import asyncio
 import logging
 import json
+import time
+from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+class NodeStatus(Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+@dataclass
+class NodeExecutionRecord:
+    node_name: str
+    node_type: str
+    status: NodeStatus = NodeStatus.PENDING
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+    duration_ms: Optional[float] = None
+    input_data: Dict[str, Any] = field(default_factory=dict)
+    output_data: Dict[str, Any] = field(default_factory=dict)
+    error_message: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def start(self, input_data: Dict[str, Any] = None):
+        self.status = NodeStatus.RUNNING
+        self.start_time = time.time()
+        if input_data:
+            self.input_data = input_data
+    
+    def complete(self, output_data: Dict[str, Any] = None, metadata: Dict[str, Any] = None):
+        self.status = NodeStatus.SUCCESS
+        self.end_time = time.time()
+        self.duration_ms = (self.end_time - self.start_time) * 1000 if self.start_time else None
+        if output_data:
+            self.output_data = output_data
+        if metadata:
+            self.metadata.update(metadata)
+    
+    def fail(self, error_message: str, output_data: Dict[str, Any] = None):
+        self.status = NodeStatus.FAILED
+        self.end_time = time.time()
+        self.duration_ms = (self.end_time - self.start_time) * 1000 if self.start_time else None
+        self.error_message = error_message
+        if output_data:
+            self.output_data = output_data
+    
+    def skip(self, reason: str = None):
+        self.status = NodeStatus.SKIPPED
+        self.end_time = time.time()
+        self.duration_ms = 0
+        if reason:
+            self.metadata["skip_reason"] = reason
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "node_name": self.node_name,
+            "node_type": self.node_type,
+            "status": self.status.value,
+            "start_time": self.start_time,
+            "start_time_iso": datetime.fromtimestamp(self.start_time).isoformat() if self.start_time else None,
+            "end_time": self.end_time,
+            "end_time_iso": datetime.fromtimestamp(self.end_time).isoformat() if self.end_time else None,
+            "duration_ms": self.duration_ms,
+            "input_data": self.input_data,
+            "output_data": self.output_data,
+            "error_message": self.error_message,
+            "metadata": self.metadata
+        }
+
+
+@dataclass
+class WorkflowTrace:
+    workflow_id: str
+    task_id: str
+    target: str
+    start_time: float = field(default_factory=time.time)
+    end_time: Optional[float] = None
+    total_duration_ms: Optional[float] = None
+    nodes: List[NodeExecutionRecord] = field(default_factory=list)
+    current_node_index: int = -1
+    workflow_status: NodeStatus = NodeStatus.PENDING
+    summary: Dict[str, Any] = field(default_factory=dict)
+    
+    def start_workflow(self):
+        self.workflow_status = NodeStatus.RUNNING
+        self.start_time = time.time()
+    
+    def start_node(self, node_name: str, node_type: str, input_data: Dict[str, Any] = None) -> int:
+        node = NodeExecutionRecord(node_name=node_name, node_type=node_type)
+        node.start(input_data)
+        self.nodes.append(node)
+        self.current_node_index = len(self.nodes) - 1
+        return self.current_node_index
+    
+    def complete_node(self, node_index: int, output_data: Dict[str, Any] = None, metadata: Dict[str, Any] = None):
+        if 0 <= node_index < len(self.nodes):
+            self.nodes[node_index].complete(output_data, metadata)
+    
+    def fail_node(self, node_index: int, error_message: str, output_data: Dict[str, Any] = None):
+        if 0 <= node_index < len(self.nodes):
+            self.nodes[node_index].fail(error_message, output_data)
+    
+    def skip_node(self, node_index: int, reason: str = None):
+        if 0 <= node_index < len(self.nodes):
+            self.nodes[node_index].skip(reason)
+    
+    def complete_workflow(self, summary: Dict[str, Any] = None):
+        self.workflow_status = NodeStatus.SUCCESS
+        self.end_time = time.time()
+        self.total_duration_ms = (self.end_time - self.start_time) * 1000
+        if summary:
+            self.summary = summary
+    
+    def fail_workflow(self, error_message: str):
+        self.workflow_status = NodeStatus.FAILED
+        self.end_time = time.time()
+        self.total_duration_ms = (self.end_time - self.start_time) * 1000
+        self.summary["error"] = error_message
+    
+    def get_node_by_name(self, node_name: str) -> Optional[NodeExecutionRecord]:
+        for node in self.nodes:
+            if node.node_name == node_name:
+                return node
+        return None
+    
+    def get_nodes_by_status(self, status: NodeStatus) -> List[NodeExecutionRecord]:
+        return [node for node in self.nodes if node.status == status]
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        total = len(self.nodes)
+        success = len(self.get_nodes_by_status(NodeStatus.SUCCESS))
+        failed = len(self.get_nodes_by_status(NodeStatus.FAILED))
+        skipped = len(self.get_nodes_by_status(NodeStatus.SKIPPED))
+        running = len(self.get_nodes_by_status(NodeStatus.RUNNING))
+        
+        total_duration = sum(node.duration_ms or 0 for node in self.nodes)
+        avg_duration = total_duration / success if success > 0 else 0
+        
+        return {
+            "total_nodes": total,
+            "success_count": success,
+            "failed_count": failed,
+            "skipped_count": skipped,
+            "running_count": running,
+            "total_duration_ms": total_duration,
+            "average_duration_ms": avg_duration,
+            "success_rate": (success / total * 100) if total > 0 else 0
+        }
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "workflow_id": self.workflow_id,
+            "task_id": self.task_id,
+            "target": self.target,
+            "start_time": self.start_time,
+            "start_time_iso": datetime.fromtimestamp(self.start_time).isoformat() if self.start_time else None,
+            "end_time": self.end_time,
+            "end_time_iso": datetime.fromtimestamp(self.end_time).isoformat() if self.end_time else None,
+            "total_duration_ms": self.total_duration_ms,
+            "workflow_status": self.workflow_status.value,
+            "nodes": [node.to_dict() for node in self.nodes],
+            "current_node_index": self.current_node_index,
+            "summary": self.summary,
+            "statistics": self.get_statistics()
+        }
+
+
+class WorkflowRecorder:
+    _instance = None
+    _workflows: Dict[str, WorkflowTrace] = {}
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
+    @classmethod
+    def create_workflow(cls, task_id: str, target: str) -> WorkflowTrace:
+        workflow_id = f"wf_{task_id}_{int(time.time() * 1000)}"
+        workflow = WorkflowTrace(
+            workflow_id=workflow_id,
+            task_id=task_id,
+            target=target
+        )
+        cls._workflows[workflow_id] = workflow
+        return workflow
+    
+    @classmethod
+    def get_workflow(cls, workflow_id: str) -> Optional[WorkflowTrace]:
+        return cls._workflows.get(workflow_id)
+    
+    @classmethod
+    def get_workflow_by_task(cls, task_id: str) -> Optional[WorkflowTrace]:
+        for workflow in cls._workflows.values():
+            if workflow.task_id == task_id:
+                return workflow
+        return None
+    
+    @classmethod
+    def remove_workflow(cls, workflow_id: str):
+        if workflow_id in cls._workflows:
+            del cls._workflows[workflow_id]
+    
+    @classmethod
+    def get_all_workflows(cls) -> Dict[str, WorkflowTrace]:
+        return cls._workflows.copy()
+    
+    @classmethod
+    def clear_all(cls):
+        cls._workflows.clear()
 
 try:
     from backend.utils.serializers import sanitize_json_data
@@ -18,8 +230,30 @@ except ImportError:
     from utils.serializers import sanitize_json_data
 
 
-async def persist_task_state(task_id: str, stage_status: Dict, progress: int):
-    """Persist task state to database"""
+async def persist_task_state(task_id: str, state_data: Dict[str, Any], progress: int = None):
+    """
+    持久化完整的任务状态到数据库
+    
+    Args:
+        task_id: 任务ID
+        state_data: 完整的状态数据字典，包含所有需要持久化的字段
+        progress: 可选的进度值，如果不提供则从state_data中获取
+    
+    持久化的数据包括：
+        - stages: 阶段状态
+        - tool_results: 工具执行结果
+        - vulnerabilities: 发现的漏洞
+        - execution_history: 执行历史
+        - target_context: 目标上下文
+        - scan_summary: 扫描摘要
+        - report: 分析报告
+        - planned_tasks: 规划的任务
+        - completed_tasks: 已完成的任务
+        - errors: 错误信息
+        - seebug_pocs: Seebug POC列表
+        - generated_pocs: 生成的POC列表
+        - workflow_trace: 工作流追踪记录
+    """
     try:
         try:
             from backend.models import Task
@@ -29,19 +263,71 @@ async def persist_task_state(task_id: str, stage_status: Dict, progress: int):
         try:
             tid = int(task_id)
         except ValueError:
+            logger.error(f"Invalid task_id format: {task_id}")
             return
             
         task = await Task.get(id=tid)
-        task.progress = progress
+        
+        if progress is not None:
+            task.progress = progress
+        elif 'progress' in state_data:
+            task.progress = state_data['progress']
         
         try:
             current_result = json.loads(task.result) if task.result else {}
         except:
             current_result = {}
-            
-        current_result['stages'] = stage_status
-
-        # Ensure default fields exist to prevent frontend errors
+        
+        current_result['stages'] = state_data.get('stage_status', {})
+        
+        if 'tool_results' in state_data and state_data['tool_results']:
+            current_result['tool_results'] = state_data['tool_results']
+        
+        if 'vulnerabilities' in state_data and state_data['vulnerabilities']:
+            current_result['vulnerabilities'] = state_data['vulnerabilities']
+        
+        if 'execution_history' in state_data and state_data['execution_history']:
+            current_result['execution_history'] = state_data['execution_history']
+        
+        if 'target_context' in state_data and state_data['target_context']:
+            current_result['target_context'] = state_data['target_context']
+        
+        if 'scan_summary' in state_data and state_data['scan_summary']:
+            current_result['scan_summary'] = state_data['scan_summary']
+        
+        if 'report' in state_data and state_data['report']:
+            current_result['report'] = state_data['report']
+        
+        if 'planned_tasks' in state_data:
+            current_result['planned_tasks'] = state_data['planned_tasks']
+        
+        if 'completed_tasks' in state_data:
+            current_result['completed_tasks'] = state_data['completed_tasks']
+        
+        if 'errors' in state_data and state_data['errors']:
+            current_result['errors'] = state_data['errors']
+        
+        if 'seebug_pocs' in state_data and state_data['seebug_pocs']:
+            current_result['seebug_pocs'] = state_data['seebug_pocs']
+        
+        if 'generated_pocs' in state_data and state_data['generated_pocs']:
+            current_result['generated_pocs'] = state_data['generated_pocs']
+        
+        if 'current_task' in state_data:
+            current_result['current_task'] = state_data['current_task']
+        
+        if 'vuln_scan_results' in state_data and state_data['vuln_scan_results']:
+            current_result['vuln_scan_results'] = state_data['vuln_scan_results']
+        
+        if 'vuln_scan_plugins_loaded' in state_data:
+            current_result['vuln_scan_plugins_loaded'] = state_data['vuln_scan_plugins_loaded']
+        
+        if 'vuln_scan_progress' in state_data:
+            current_result['vuln_scan_progress'] = state_data['vuln_scan_progress']
+        
+        if 'workflow_trace' in state_data and state_data['workflow_trace']:
+            current_result['workflow_trace'] = state_data['workflow_trace']
+        
         if 'scan_summary' not in current_result:
             current_result['scan_summary'] = {}
         if 'vulnerabilities' not in current_result:
@@ -50,14 +336,28 @@ async def persist_task_state(task_id: str, stage_status: Dict, progress: int):
             current_result['report'] = ""
         if 'execution_history' not in current_result:
             current_result['execution_history'] = []
-
-        # Ensure json serialization handles common types if needed, or assume clean data
+        if 'tool_results' not in current_result:
+            current_result['tool_results'] = {}
+        if 'target_context' not in current_result:
+            current_result['target_context'] = {}
+        if 'workflow_trace' not in current_result:
+            current_result['workflow_trace'] = {}
+        
         current_result = sanitize_json_data(current_result)
         task.result = json.dumps(current_result, default=str)
         
         await task.save()
+        
+        logger.info(
+            f"Successfully persisted task state for {task_id}: "
+            f"{len(current_result.get('vulnerabilities', []))} vulnerabilities, "
+            f"{len(current_result.get('execution_history', []))} history items, "
+            f"{len(current_result.get('tool_results', {}))} tool results, "
+            f"workflow nodes: {len(current_result.get('workflow_trace', {}).get('nodes', []))}"
+        )
+        
     except Exception as e:
-        logger.error(f"Failed to persist task state for {task_id}: {e}")
+        logger.error(f"Failed to persist task state for {task_id}: {e}", exc_info=True)
 
 
 @dataclass
@@ -72,6 +372,7 @@ class AgentState:
     - 记忆与上下文:目标上下文、执行历史
     - 异常处理:错误列表、重试次数
     - 控制开关:完成标志、继续执行标志
+    - 工作流追踪:工作流执行记录、节点状态追踪
     
     Attributes:
         target: 扫描目标(URL/IP)
@@ -87,6 +388,7 @@ class AgentState:
         retry_count: 重试次数
         is_complete: 任务是否完成
         should_continue: 是否继续执行
+        workflow_trace: 工作流执行追踪记录
     """
     
     # = 基础信息 =
@@ -102,6 +404,23 @@ class AgentState:
     任务ID
     
     用于标识和跟踪Agent任务。
+    """
+    
+    # = 工作流追踪 =
+    workflow_trace: Optional[WorkflowTrace] = None
+    """
+    工作流执行追踪记录
+    
+    记录整个工作流的执行过程，包括：
+    - 各节点的执行状态
+    - 执行时间戳
+    - 输入输出数据
+    - 执行统计信息
+    """
+    
+    _current_node_index: int = field(default=-1, repr=False)
+    """
+    当前正在执行的节点索引（内部使用）
     """
     
     # = 任务规划 =
@@ -266,6 +585,78 @@ class AgentState:
         "report": {"status": "pending", "sub_status": "pending", "progress": 0, "logs": [], "start_time": None, "end_time": None}
     })
     
+    def __post_init__(self):
+        if self.workflow_trace is None:
+            self.workflow_trace = WorkflowRecorder.create_workflow(self.task_id, self.target)
+    
+    def start_workflow_recording(self):
+        if self.workflow_trace:
+            self.workflow_trace.start_workflow()
+            logger.info(f"[{self.task_id}] 🚀 工作流开始记录 | Workflow ID: {self.workflow_trace.workflow_id}")
+    
+    def start_node_recording(self, node_name: str, node_type: str, input_data: Dict[str, Any] = None) -> int:
+        if self.workflow_trace:
+            node_index = self.workflow_trace.start_node(node_name, node_type, input_data)
+            self._current_node_index = node_index
+            logger.debug(f"[{self.task_id}] 📍 节点开始 | 节点: {node_name} | 类型: {node_type} | 索引: {node_index}")
+            return node_index
+        return -1
+    
+    def complete_node_recording(self, node_index: int = None, output_data: Dict[str, Any] = None, metadata: Dict[str, Any] = None):
+        if self.workflow_trace:
+            idx = node_index if node_index is not None else self._current_node_index
+            if idx >= 0:
+                self.workflow_trace.complete_node(idx, output_data, metadata)
+                node = self.workflow_trace.nodes[idx] if idx < len(self.workflow_trace.nodes) else None
+                if node:
+                    logger.debug(f"[{self.task_id}] ✅ 节点完成 | 节点: {node.node_name} | 耗时: {node.duration_ms:.2f}ms")
+    
+    def fail_node_recording(self, error_message: str, node_index: int = None, output_data: Dict[str, Any] = None):
+        if self.workflow_trace:
+            idx = node_index if node_index is not None else self._current_node_index
+            if idx >= 0:
+                self.workflow_trace.fail_node(idx, error_message, output_data)
+                node = self.workflow_trace.nodes[idx] if idx < len(self.workflow_trace.nodes) else None
+                if node:
+                    logger.debug(f"[{self.task_id}] ❌ 节点失败 | 节点: {node.node_name} | 错误: {error_message}")
+    
+    def skip_node_recording(self, reason: str = None, node_index: int = None):
+        if self.workflow_trace:
+            idx = node_index if node_index is not None else self._current_node_index
+            if idx >= 0:
+                self.workflow_trace.skip_node(idx, reason)
+                node = self.workflow_trace.nodes[idx] if idx < len(self.workflow_trace.nodes) else None
+                if node:
+                    logger.debug(f"[{self.task_id}] ⏭️ 节点跳过 | 节点: {node.node_name} | 原因: {reason}")
+    
+    def complete_workflow_recording(self, summary: Dict[str, Any] = None):
+        if self.workflow_trace:
+            self.workflow_trace.complete_workflow(summary)
+            stats = self.workflow_trace.get_statistics()
+            logger.info(
+                f"[{self.task_id}] 🏁 工作流完成 | "
+                f"总节点: {stats['total_nodes']} | "
+                f"成功: {stats['success_count']} | "
+                f"失败: {stats['failed_count']} | "
+                f"总耗时: {stats['total_duration_ms']:.2f}ms | "
+                f"成功率: {stats['success_rate']:.1f}%"
+            )
+    
+    def fail_workflow_recording(self, error_message: str):
+        if self.workflow_trace:
+            self.workflow_trace.fail_workflow(error_message)
+            logger.error(f"[{self.task_id}] 💥 工作流失败 | 错误: {error_message}")
+    
+    def get_workflow_statistics(self) -> Dict[str, Any]:
+        if self.workflow_trace:
+            return self.workflow_trace.get_statistics()
+        return {}
+    
+    def get_workflow_report(self) -> Dict[str, Any]:
+        if self.workflow_trace:
+            return self.workflow_trace.to_dict()
+        return {}
+    
     # = Vulnerability Scan =
     vuln_scan_results: Dict[str, Any] = field(default_factory=dict)
     vuln_scan_plugins_loaded: List[str] = field(default_factory=list)
@@ -295,8 +686,16 @@ class AgentState:
     def update_stage_status(self, stage: str, status: str = None, sub_status: str = None, progress: int = None, log: str = None):
         """
         Update stage status and broadcast via WebSocket
+        
+        更新阶段状态并通过WebSocket广播，同时持久化完整的任务状态到数据库
+        
+        Args:
+            stage: 阶段名称 (planning, tool_execution, poc_verification, report)
+            status: 阶段状态 (pending, running, completed, failed)
+            sub_status: 子状态描述
+            progress: 进度值 (0-100)
+            log: 日志消息
         """
-        # Import here to avoid circular dependency
         try:
             from backend.api.websocket import manager
         except ImportError:
@@ -317,9 +716,7 @@ class AgentState:
                 }
                 self.stage_status[stage]["logs"].append(entry)
             
-            # 广播阶段更新
             try:
-                # 只有在事件循环中才能执行async操作
                 try:
                     loop = asyncio.get_running_loop()
                     if loop.is_running():
@@ -332,14 +729,14 @@ class AgentState:
                             }
                         }))
                         
-                        # 持久化到数据库
+                        state_data = self.to_dict()
+                        
                         asyncio.create_task(persist_task_state(
                             self.task_id, 
-                            self.stage_status, 
+                            state_data,
                             self.get_progress()
                         ))
                 except RuntimeError:
-                    # 如果没有运行的事件循环，则忽略（通常在同步测试中）
                     pass
             except Exception as e:
                 logger.error(f"Failed to broadcast stage update: {e}")
@@ -530,6 +927,51 @@ class AgentState:
         """
         self.vulnerabilities.append(vuln)
     
+    async def add_vulnerability_with_persist(self, vuln: Dict[str, Any]):
+        """
+        添加漏洞到漏洞列表并立即持久化
+        
+        Args:
+            vuln: 漏洞信息字典
+        """
+        self.vulnerabilities.append(vuln)
+        await self.persist_state()
+    
+    async def persist_state(self):
+        """
+        强制持久化当前状态到数据库
+        
+        这是一个异步方法，用于在关键操作后立即保存状态，
+        而不是等待下一次 update_stage_status 调用。
+        """
+        try:
+            state_data = self.to_dict()
+            await persist_task_state(self.task_id, state_data, self.get_progress())
+            logger.debug(f"State persisted for task {self.task_id}")
+        except Exception as e:
+            logger.error(f"Failed to persist state for task {self.task_id}: {e}", exc_info=True)
+    
+    def add_tool_result(self, tool_name: str, result: Any):
+        """
+        添加工具执行结果
+        
+        Args:
+            tool_name: 工具名称
+            result: 执行结果
+        """
+        self.tool_results[tool_name] = result
+    
+    async def add_tool_result_with_persist(self, tool_name: str, result: Any):
+        """
+        添加工具执行结果并立即持久化
+        
+        Args:
+            tool_name: 工具名称
+            result: 执行结果
+        """
+        self.tool_results[tool_name] = result
+        await self.persist_state()
+    
     def add_error(self, error: str):
         """
         添加错误到错误列表
@@ -570,22 +1012,11 @@ class AgentState:
         self.is_complete = True
         self.should_continue = False
     
-    def get_progress(self) -> float:
-        """
-        获取任务进度
-        
-        Returns:
-            float: 进度百分比(0-100)
-        """
-        if not self.planned_tasks:
-            return 100.0
-        total = len(self.planned_tasks)
-        completed = len(self.completed_tasks)
-        return (completed / total) * 100 if total > 0 else 0.0
-    
     def to_dict(self) -> Dict[str, Any]:
         """
-        转换为字典格式
+        转换为字典格式 - 用于子图间数据传递
+        
+        确保所有字段完整序列化，支持子图间无缝数据传递。
         
         Returns:
             Dict: 包含所有状态信息的字典
@@ -593,30 +1024,42 @@ class AgentState:
         return {
             "target": self.target,
             "task_id": self.task_id,
+            "workflow_trace": self.workflow_trace.to_dict() if self.workflow_trace else None,
             "planned_tasks": self.planned_tasks,
             "current_task": self.current_task,
             "completed_tasks": self.completed_tasks,
             "tool_results": self.tool_results,
             "vulnerabilities": self.vulnerabilities,
             "target_context": self.target_context,
+            "user_tools": self.user_tools,
+            "user_requirement": self.user_requirement,
+            "memory_info": self.memory_info,
+            "plan_data": self.plan_data,
+            "execution_results": self.execution_results,
             "execution_history": self.execution_history,
             "errors": self.errors,
             "retry_count": self.retry_count,
+            "enhancement_retry_count": self.enhancement_retry_count,
             "is_complete": self.is_complete,
             "should_continue": self.should_continue,
-            "progress": self.get_progress(),
+            "seebug_pocs": self.seebug_pocs,
+            "generated_pocs": self.generated_pocs,
+            "stage_status": self.stage_status,
             "vuln_scan_results": self.vuln_scan_results,
             "vuln_scan_plugins_loaded": self.vuln_scan_plugins_loaded,
             "vuln_scan_progress": self.vuln_scan_progress,
             "vuln_scan_metadata": self.vuln_scan_metadata,
             "scan_summary": self.scan_summary,
-            "report": self.report
+            "report": self.report,
+            "progress": self.get_progress()
         }
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AgentState":
         """
-        从字典创建AgentState实例
+        从字典创建AgentState实例 - 用于子图间数据传递
+        
+        确保所有字段完整反序列化，支持子图间无缝数据传递。
         
         Args:
             data: 包含状态信息的字典
@@ -624,24 +1067,223 @@ class AgentState:
         Returns:
             AgentState: 新的AgentState实例
         """
-        return cls(
+        default_stage_status = {
+            "planning": {"status": "pending", "sub_status": "pending", "progress": 0, "logs": [], "start_time": None, "end_time": None},
+            "tool_execution": {"status": "pending", "sub_status": "pending", "progress": 0, "logs": [], "start_time": None, "end_time": None},
+            "poc_verification": {"status": "pending", "sub_status": "pending", "progress": 0, "logs": [], "start_time": None, "end_time": None},
+            "report": {"status": "pending", "sub_status": "pending", "progress": 0, "logs": [], "start_time": None, "end_time": None}
+        }
+        
+        workflow_trace_data = data.get("workflow_trace")
+        workflow_trace = None
+        if workflow_trace_data:
+            workflow_trace = cls._reconstruct_workflow_trace(workflow_trace_data)
+        
+        instance = cls(
             target=data.get("target", ""),
             task_id=data.get("task_id", ""),
+            workflow_trace=workflow_trace,
             planned_tasks=data.get("planned_tasks", []),
             current_task=data.get("current_task"),
             completed_tasks=data.get("completed_tasks", []),
             tool_results=data.get("tool_results", {}),
             vulnerabilities=data.get("vulnerabilities", []),
             target_context=data.get("target_context", {}),
+            user_tools=data.get("user_tools", []),
+            user_requirement=data.get("user_requirement", ""),
+            memory_info=data.get("memory_info", ""),
+            plan_data=data.get("plan_data"),
+            execution_results=data.get("execution_results", []),
             execution_history=data.get("execution_history", []),
             errors=data.get("errors", []),
             retry_count=data.get("retry_count", 0),
+            enhancement_retry_count=data.get("enhancement_retry_count", 0),
             is_complete=data.get("is_complete", False),
             should_continue=data.get("should_continue", True),
+            seebug_pocs=data.get("seebug_pocs", []),
+            generated_pocs=data.get("generated_pocs", []),
+            stage_status=data.get("stage_status", default_stage_status),
             vuln_scan_results=data.get("vuln_scan_results", {}),
-            vuln_scan_plugins_loaded=data.get("vuln_scan_plugins_loaded", False),
-            vuln_scan_progress=data.get("vuln_scan_progress", {}),
+            vuln_scan_plugins_loaded=data.get("vuln_scan_plugins_loaded", []),
+            vuln_scan_progress=data.get("vuln_scan_progress", 0),
             vuln_scan_metadata=data.get("vuln_scan_metadata", {}),
             scan_summary=data.get("scan_summary", {}),
             report=data.get("report", "")
         )
+        
+        return instance
+    
+    @classmethod
+    def _reconstruct_workflow_trace(cls, data: Dict[str, Any]) -> Optional[WorkflowTrace]:
+        """
+        从字典重建 WorkflowTrace 对象
+        
+        Args:
+            data: 工作流追踪数据字典
+            
+        Returns:
+            WorkflowTrace: 重建的工作流追踪对象
+        """
+        if not data:
+            return None
+        
+        workflow_trace = WorkflowTrace(
+            workflow_id=data.get("workflow_id", ""),
+            task_id=data.get("task_id", ""),
+            target=data.get("target", ""),
+            start_time=data.get("start_time", time.time()),
+            end_time=data.get("end_time"),
+            total_duration_ms=data.get("total_duration_ms"),
+            workflow_status=NodeStatus(data.get("workflow_status", "pending")),
+            summary=data.get("summary", {})
+        )
+        
+        for node_data in data.get("nodes", []):
+            node = NodeExecutionRecord(
+                node_name=node_data.get("node_name", ""),
+                node_type=node_data.get("node_type", ""),
+                status=NodeStatus(node_data.get("status", "pending")),
+                start_time=node_data.get("start_time"),
+                end_time=node_data.get("end_time"),
+                duration_ms=node_data.get("duration_ms"),
+                input_data=node_data.get("input_data", {}),
+                output_data=node_data.get("output_data", {}),
+                error_message=node_data.get("error_message"),
+                metadata=node_data.get("metadata", {})
+            )
+            workflow_trace.nodes.append(node)
+        
+        return workflow_trace
+    
+    @classmethod
+    def get_all_fields(cls) -> List[str]:
+        """
+        获取所有字段名称列表
+        
+        Returns:
+            List[str]: 所有字段名称
+        """
+        return [
+            "target", "task_id", "workflow_trace",
+            "planned_tasks", "current_task", "completed_tasks",
+            "tool_results", "vulnerabilities", "target_context", "user_tools",
+            "user_requirement", "memory_info", "plan_data", "execution_results",
+            "execution_history", "errors", "retry_count", "enhancement_retry_count",
+            "is_complete", "should_continue", "seebug_pocs", "generated_pocs",
+            "stage_status", "vuln_scan_results", "vuln_scan_plugins_loaded",
+            "vuln_scan_progress", "vuln_scan_metadata", "scan_summary", "report"
+        ]
+    
+    def validate_data_integrity(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        验证数据完整性
+        
+        检查序列化数据是否包含所有必需字段，用于子图间数据传递验证。
+        
+        Args:
+            data: 要验证的数据字典
+            
+        Returns:
+            Dict: 包含验证结果的字典
+                - is_valid: 是否有效
+                - missing_fields: 缺失字段列表
+                - extra_fields: 多余字段列表
+                - field_count: 字段总数
+        """
+        all_fields = set(self.get_all_fields())
+        data_fields = set(data.keys())
+        
+        missing_fields = all_fields - data_fields
+        extra_fields = data_fields - all_fields
+        
+        return {
+            "is_valid": len(missing_fields) == 0,
+            "missing_fields": list(missing_fields),
+            "extra_fields": list(extra_fields),
+            "field_count": len(data_fields),
+            "expected_count": len(all_fields)
+        }
+    
+    def serialize_for_transfer(self) -> Dict[str, Any]:
+        """
+        为子图传递序列化数据（带完整性验证）
+        
+        序列化当前状态并验证数据完整性，确保子图间数据传递的可靠性。
+        
+        Returns:
+            Dict: 包含状态数据和验证信息的字典
+        """
+        data = self.to_dict()
+        validation = self.validate_data_integrity(data)
+        
+        if not validation["is_valid"]:
+            logger.warning(
+                f"Data serialization incomplete. Missing fields: {validation['missing_fields']}"
+            )
+        
+        return {
+            "state_data": data,
+            "validation": validation,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    @classmethod
+    def deserialize_from_transfer(cls, transfer_data: Dict[str, Any]) -> "AgentState":
+        """
+        从子图传递反序列化数据（带完整性验证）
+        
+        反序列化数据并验证完整性，确保子图间数据传递的可靠性。
+        
+        Args:
+            transfer_data: 包含状态数据和验证信息的字典
+            
+        Returns:
+            AgentState: 新的AgentState实例
+            
+        Raises:
+            ValueError: 如果数据格式无效或缺少关键字段
+        """
+        if "state_data" not in transfer_data:
+            raise ValueError("Invalid transfer data: missing 'state_data' field")
+        
+        data = transfer_data["state_data"]
+        
+        if "validation" in transfer_data:
+            validation = transfer_data["validation"]
+            if not validation["is_valid"]:
+                logger.warning(
+                    f"Data deserialization with missing fields: {validation['missing_fields']}"
+                )
+        
+        return cls.from_dict(data)
+    
+    def merge_from_dict(self, data: Dict[str, Any]) -> "AgentState":
+        """
+        合并字典数据到当前状态
+        
+        用于子图间增量数据传递，只更新提供的字段。
+        
+        Args:
+            data: 要合并的数据字典
+            
+        Returns:
+            AgentState: 更新后的状态实例（self）
+        """
+        for key, value in data.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+            else:
+                logger.warning(f"Unknown field '{key}' ignored during merge")
+        
+        return self
+    
+    def clone(self) -> "AgentState":
+        """
+        克隆当前状态
+        
+        创建当前状态的深拷贝，用于子图间数据隔离。
+        
+        Returns:
+            AgentState: 新的AgentState实例
+        """
+        return self.from_dict(self.to_dict())
