@@ -25,7 +25,7 @@ import os
 
 import logging
 from pathlib import Path
-from typing import Optional, bool
+from typing import Optional
 from logging.handlers import TimedRotatingFileHandler
 
 # === 配置项(集中管理,便于修改) ===

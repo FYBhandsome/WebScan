@@ -866,6 +866,140 @@ class ReportService:
         
         return html
     
+    def _render_workflow_html(self, workflow: WorkflowData, language: Language) -> str:
+        """渲染工作流数据 HTML"""
+        if not workflow:
+            return ""
+        
+        labels = {
+            "workflow_title": "工作流执行详情" if language == Language.ZH_CN else "Workflow Execution Details",
+            "overview": "执行概览" if language == Language.ZH_CN else "Overview",
+            "execution_history": "执行历史" if language == Language.ZH_CN else "Execution History",
+            "task_plans": "任务规划" if language == Language.ZH_CN else "Task Plans",
+            "total_steps": "总步骤数" if language == Language.ZH_CN else "Total Steps",
+            "completed_steps": "已完成" if language == Language.ZH_CN else "Completed",
+            "failed_steps": "失败" if language == Language.ZH_CN else "Failed",
+            "duration": "执行时长" if language == Language.ZH_CN else "Duration",
+            "status": "状态" if language == Language.ZH_CN else "Status",
+            "priority": "优先级" if language == Language.ZH_CN else "Priority",
+            "no_records": "暂无执行记录" if language == Language.ZH_CN else "No execution records",
+            "no_plans": "暂无任务规划" if language == Language.ZH_CN else "No task plans"
+        }
+        
+        status_labels = {
+            "success": "成功" if language == Language.ZH_CN else "Success",
+            "completed": "完成" if language == Language.ZH_CN else "Completed",
+            "failed": "失败" if language == Language.ZH_CN else "Failed",
+            "running": "运行中" if language == Language.ZH_CN else "Running",
+            "pending": "等待中" if language == Language.ZH_CN else "Pending",
+            "skipped": "已跳过" if language == Language.ZH_CN else "Skipped"
+        }
+        
+        completed_count = sum(1 for r in workflow.execution_history if r.status in ["success", "completed"])
+        failed_count = sum(1 for r in workflow.execution_history if r.status == "failed")
+        total_duration = sum(r.execution_time or 0 for r in workflow.execution_history)
+        
+        overview_html = f"""
+        <div class="workflow-overview">
+            <div class="workflow-stat">
+                <div class="value">{len(workflow.execution_history)}</div>
+                <div class="label">{labels['total_steps']}</div>
+            </div>
+            <div class="workflow-stat">
+                <div class="value" style="color: #10b981;">{completed_count}</div>
+                <div class="label">{labels['completed_steps']}</div>
+            </div>
+            <div class="workflow-stat">
+                <div class="value" style="color: #ef4444;">{failed_count}</div>
+                <div class="label">{labels['failed_steps']}</div>
+            </div>
+            <div class="workflow-stat">
+                <div class="value">{total_duration:.2f}s</div>
+                <div class="label">{labels['duration']}</div>
+            </div>
+        </div>
+        """
+        
+        timeline_html = ""
+        if workflow.execution_history:
+            for idx, record in enumerate(workflow.execution_history):
+                status_class = record.status if record.status in ["success", "failed", "running", "pending"] else "pending"
+                status_text = status_labels.get(record.status, record.status)
+                duration_text = f"{record.execution_time:.2f}s" if record.execution_time else "-"
+                
+                timeline_html += f"""
+                <div class="timeline-item {status_class}">
+                    <div class="timeline-step">{idx + 1}</div>
+                    <div class="timeline-content">
+                        <div class="timeline-title">{record.node_name or record.task or f'步骤 {idx + 1}'}</div>
+                        <div class="timeline-meta">
+                            <span>类型: {record.node_type or 'N/A'}</span>
+                            <span style="margin-left: 15px;">状态: {status_text}</span>
+                            <span style="margin-left: 15px;">工具: {record.tool_name or 'N/A'}</span>
+                        </div>
+                        {f'<div class="timeline-duration">耗时: {duration_text}</div>' if record.execution_time else ''}
+                        {f'<div style="color: #ef4444; margin-top: 5px; font-size: 12px;">错误: {record.error}</div>' if record.error else ''}
+                    </div>
+                </div>
+                """
+        else:
+            timeline_html = f'<p style="color: #64748b; text-align: center; padding: 20px;">{labels["no_records"]}</p>'
+        
+        plans_html = ""
+        if workflow.task_plans:
+            for plan in sorted(workflow.task_plans, key=lambda x: x.priority, reverse=True):
+                status_class = plan.status if plan.status in ["completed", "running", "pending", "failed"] else "pending"
+                status_text = status_labels.get(plan.status, plan.status)
+                
+                plans_html += f"""
+                <div class="plan-item">
+                    <div class="plan-priority">{plan.priority}</div>
+                    <div class="plan-info">
+                        <div class="plan-name">{plan.plan_name}</div>
+                        <div style="font-size: 12px; color: #64748b;">
+                            类型: {plan.plan_type} | ID: {plan.plan_id}
+                        </div>
+                    </div>
+                    <span class="plan-status status-{status_class}">{status_text}</span>
+                </div>
+                """
+        else:
+            plans_html = f'<p style="color: #64748b; text-align: center; padding: 20px;">{labels["no_plans"]}</p>'
+        
+        progress_html = ""
+        if workflow.progress > 0:
+            progress_html = f"""
+            <div style="margin-top: 15px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                    <span style="font-size: 12px; color: #64748b;">执行进度</span>
+                    <span style="font-size: 12px; font-weight: 500;">{workflow.progress}%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: {workflow.progress}%;"></div>
+                </div>
+            </div>
+            """
+        
+        return f"""
+        <div class="workflow-section">
+            <h2>⚡ {labels['workflow_title']}</h2>
+            
+            {overview_html}
+            
+            {progress_html}
+            
+            <div class="execution-timeline">
+                <h3 style="margin-bottom: 15px; color: #333;">📋 {labels['execution_history']}</h3>
+                {timeline_html}
+            </div>
+            
+            <div class="task-plans">
+                <h3 style="margin-bottom: 15px; color: #333;">📝 {labels['task_plans']}</h3>
+                {plans_html}
+            </div>
+        </div>
+        """
+    
     def _render_markdown_template(self, report_data: ReportData, language: Language) -> str:
         """渲染 Markdown 模板"""
         summary = report_data.summary
@@ -894,7 +1028,46 @@ class ReportService:
 | 低危 | {summary.low_count} |
 | 信息 | {summary.info_count} |
 
-## 漏洞详情
+"""
+        
+        if report_data.workflow:
+            workflow = report_data.workflow
+            completed_count = sum(1 for r in workflow.execution_history if r.status in ["success", "completed"])
+            failed_count = sum(1 for r in workflow.execution_history if r.status == "failed")
+            total_duration = sum(r.execution_time or 0 for r in workflow.execution_history)
+            
+            md += f"""## ⚡ 工作流执行详情
+
+### 执行概览
+
+| 指标 | 数值 |
+|------|------|
+| 总步骤数 | {len(workflow.execution_history)} |
+| 已完成 | {completed_count} |
+| 失败 | {failed_count} |
+| 执行时长 | {total_duration:.2f}s |
+| 进度 | {workflow.progress}% |
+
+### 执行历史
+
+"""
+            if workflow.execution_history:
+                md += "| 步骤 | 名称 | 类型 | 状态 | 耗时 |\n"
+                md += "|------|------|------|------|------|\n"
+                for idx, record in enumerate(workflow.execution_history):
+                    duration_text = f"{record.execution_time:.2f}s" if record.execution_time else "-"
+                    md += f"| {idx + 1} | {record.node_name or record.task or 'N/A'} | {record.node_type or 'N/A'} | {record.status} | {duration_text} |\n"
+                md += "\n"
+            
+            if workflow.task_plans:
+                md += "### 任务规划\n\n"
+                md += "| 优先级 | 名称 | 类型 | 状态 |\n"
+                md += "|--------|------|------|------|\n"
+                for plan in sorted(workflow.task_plans, key=lambda x: x.priority, reverse=True):
+                    md += f"| {plan.priority} | {plan.plan_name} | {plan.plan_type} | {plan.status} |\n"
+                md += "\n"
+
+        md += """## 漏洞详情
 
 """
         for vuln in report_data.vulnerabilities:

@@ -175,28 +175,6 @@ class ConnectionManager:
         self._is_shutting_down = False
         logger.info("所有WebSocket连接已关闭")
 
-    def get_connection_count(self) -> int:
-        return len(self.active_connections)
-
-    def get_connection_states(self) -> Dict[str, int]:
-        states = {}
-        for info in self.connection_info.values():
-            state_name = info.state.value
-            states[state_name] = states.get(state_name, 0) + 1
-        return states
-
-    def get_error_connections(self) -> List[Dict[str, Any]]:
-        error_connections = []
-        for ws, info in self.connection_info.items():
-            if info.state == ConnectionState.ERROR or info.error_count > 0:
-                error_connections.append({
-                    "client_host": info.client_host,
-                    "error_count": info.error_count,
-                    "last_error": info.last_error,
-                    "state": info.state.value
-                })
-        return error_connections
-
 manager = ConnectionManager()
 
 @router.websocket("/ws")

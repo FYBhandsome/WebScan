@@ -13,6 +13,7 @@ import json
 import time
 import os
 import hashlib
+from TOSKill.AI.memory import get_memory_manager
 
 logger = logging.getLogger(__name__)
 
@@ -867,3 +868,179 @@ class AgentState:
         
         self.update_timestamp()
         logger.info(f"已导入扫描数据，合并模式: {merge}")
+    
+    def save_to_session_memory(self) -> bool:
+        """
+        保存状态到 SessionMemory
+        
+        Returns:
+            bool: 保存是否成功
+        """
+        try:
+            memory_manager = get_memory_manager()
+            session_id = self.chat_instance_id or self.task_id
+            
+            state_data = self.to_dict()
+            state_data["_state_metadata"] = {
+                "saved_at": datetime.now().isoformat(),
+                "task_id": self.task_id,
+                "target": self.target,
+                "workflow_status": self.workflow_status
+            }
+            
+            success = memory_manager.save_session(session_id, state_data)
+            
+            if success:
+                logger.info(f"状态已保存到 SessionMemory: session_id={session_id}")
+            else:
+                logger.warning(f"状态保存到 SessionMemory 失败: session_id={session_id}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"保存状态到 SessionMemory 异常: {e}")
+            return False
+    
+    @classmethod
+    def load_from_session_memory(cls, session_id: str) -> Optional["AgentState"]:
+        """
+        从 SessionMemory 加载状态
+        
+        Args:
+            session_id: 会话ID（通常是 chat_instance_id 或 task_id）
+            
+        Returns:
+            AgentState 实例，如果不存在则返回 None
+        """
+        try:
+            memory_manager = get_memory_manager()
+            
+            if session_id not in memory_manager._sessions:
+                logger.debug(f"SessionMemory 中不存在会话: {session_id}")
+                return None
+            
+            checkpoint = memory_manager._sessions.get(session_id)
+            if not checkpoint or not checkpoint.channel_values:
+                logger.debug(f"SessionMemory 中会话无状态数据: {session_id}")
+                return None
+            
+            state_data = checkpoint.channel_values
+            
+            instance = cls.from_dict(state_data)
+            
+            if "_state_metadata" in state_data:
+                instance.persistence_metadata.update(state_data["_state_metadata"])
+                logger.info(
+                    f"从 SessionMemory 加载状态: session_id={session_id}, "
+                    f"保存时间: {state_data['_state_metadata'].get('saved_at')}"
+                )
+            
+            return instance
+            
+        except Exception as e:
+            logger.error(f"从 SessionMemory 加载状态异常: {e}")
+            return None
+    
+    def sync_chat_history(self, messages: List[Dict[str, Any]] = None) -> bool:
+        """
+        同步对话历史到 SessionMemory（增量更新）
+        
+        Args:
+            messages: 要同步的消息列表，如果为 None 则同步当前 chat_history 中未同步的消息
+            
+        Returns:
+            bool: 同步是否成功
+        """
+        try:
+            memory_manager = get_memory_manager()
+            session_id = self.chat_instance_id or self.task_id
+            
+            if session_id not in memory_manager._sessions:
+                memory_manager.create_session(session_id)
+            
+            checkpoint = memory_manager._sessions.get(session_id)
+            if not checkpoint:
+                logger.warning(f"无法获取会话检查点: {session_id}")
+                return False
+            
+            existing_timestamps = {
+                msg.get("timestamp") 
+                for msg in checkpoint.message_history 
+                if msg.get("timestamp")
+            }
+            
+            messages_to_sync = messages if messages is not None else self.chat_history
+            
+            added_count = 0
+            for msg in messages_to_sync:
+                msg_timestamp = msg.get("timestamp")
+                if msg_timestamp and msg_timestamp not in existing_timestamps:
+                    memory_manager.add_message(
+                        session_id,
+                        role=msg.get("role", "user"),
+                        content=msg.get("content", ""),
+                        metadata=msg.get("metadata", {})
+                    )
+                    added_count += 1
+            
+            logger.debug(f"同步对话历史到 SessionMemory: session_id={session_id}, 新增 {added_count} 条")
+            return True
+            
+        except Exception as e:
+            logger.error(f"同步对话历史到 SessionMemory 异常: {e}")
+            return False
+    
+    def sync_execution_history(self, steps: List[Dict[str, Any]] = None) -> bool:
+        """
+        同步执行历史到 SessionMemory（增量更新）
+        
+        Args:
+            steps: 要同步的执行步骤列表，如果为 None 则同步当前 execution_history 中未同步的步骤
+            
+        Returns:
+            bool: 同步是否成功
+        """
+        try:
+            memory_manager = get_memory_manager()
+            session_id = self.chat_instance_id or self.task_id
+            
+            if session_id not in memory_manager._sessions:
+                memory_manager.create_session(session_id)
+            
+            checkpoint = memory_manager._sessions.get(session_id)
+            if not checkpoint:
+                logger.warning(f"无法获取会话检查点: {session_id}")
+                return False
+            
+            existing_step_keys = set()
+            if "execution_history" in checkpoint.channel_values:
+                for step in checkpoint.channel_values.get("execution_history", []):
+                    key = (step.get("step_number"), step.get("timestamp"))
+                    if key[0] is not None or key[1] is not None:
+                        existing_step_keys.add(key)
+            
+            steps_to_sync = steps if steps is not None else self.execution_history
+            
+            new_steps = []
+            for step in steps_to_sync:
+                key = (step.get("step_number"), step.get("timestamp"))
+                if key not in existing_step_keys:
+                    new_steps.append(step)
+            
+            if new_steps:
+                if "execution_history" not in checkpoint.channel_values:
+                    checkpoint.channel_values["execution_history"] = []
+                
+                checkpoint.channel_values["execution_history"].extend(new_steps)
+                checkpoint.updated_at = time.time()
+                
+                logger.debug(
+                    f"同步执行历史到 SessionMemory: session_id={session_id}, "
+                    f"新增 {len(new_steps)} 条步骤"
+                )
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"同步执行历史到 SessionMemory 异常: {e}")
+            return False

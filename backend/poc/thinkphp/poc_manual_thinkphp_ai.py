@@ -57,5 +57,4 @@ class ThinkPHP_RCE(POCBase):
         else:
             self.output.fail('target is not vulnerable')
 
-def register_poc():
-    register_poc(ThinkPHP_RCE)
+poc = ThinkPHP_RCE

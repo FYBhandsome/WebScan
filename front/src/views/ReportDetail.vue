@@ -136,6 +136,65 @@
         </div>
       </div>
 
+      <div class="report-section ai-analysis-section" v-if="report.ai_analysis">
+        <h2 class="section-title">🤖 AI 智能分析</h2>
+        <div class="ai-analysis-content">
+          <div class="ai-summary" v-if="report.ai_analysis.summary">
+            <h3 class="ai-subtitle">风险总结</h3>
+            <p class="ai-text">{{ report.ai_analysis.summary }}</p>
+          </div>
+          
+          <div class="ai-risk-level" v-if="report.ai_analysis.risk_level">
+            <h3 class="ai-subtitle">风险等级</h3>
+            <div class="risk-badge" :class="report.ai_analysis.risk_level">
+              {{ getRiskLevelLabel(report.ai_analysis.risk_level) }}
+            </div>
+          </div>
+
+          <div class="ai-causes" v-if="report.ai_analysis.causes && report.ai_analysis.causes.length">
+            <h3 class="ai-subtitle">漏洞成因</h3>
+            <ul class="ai-list">
+              <li v-for="(cause, index) in report.ai_analysis.causes" :key="index">
+                {{ cause }}
+              </li>
+            </ul>
+          </div>
+
+          <div class="ai-risks" v-if="report.ai_analysis.risks && report.ai_analysis.risks.length">
+            <h3 class="ai-subtitle">利用风险</h3>
+            <ul class="ai-list">
+              <li v-for="(risk, index) in report.ai_analysis.risks" :key="index">
+                {{ risk }}
+              </li>
+            </ul>
+          </div>
+
+          <div class="ai-priorities" v-if="report.ai_analysis.priorities && report.ai_analysis.priorities.length">
+            <h3 class="ai-subtitle">修复优先级</h3>
+            <div class="priority-list">
+              <div class="priority-item" v-for="(p, index) in report.ai_analysis.priorities" :key="index">
+                <div class="priority-header">
+                  <span class="priority-vuln">{{ p.vulnerability }}</span>
+                  <span class="priority-level" :class="getPriorityClass(p.priority)">
+                    优先级 {{ p.priority }}
+                  </span>
+                </div>
+                <p class="priority-reason">{{ p.reason }}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="ai-recommendations" v-if="report.ai_analysis.recommendations && report.ai_analysis.recommendations.length">
+            <h3 class="ai-subtitle">AI 修复建议</h3>
+            <ul class="ai-list">
+              <li v-for="(rec, index) in report.ai_analysis.recommendations" :key="index">
+                {{ rec }}
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
       <div class="report-section appendix-section" v-if="report.content?.appendix">
         <h2 class="section-title">技术附录</h2>
         <div class="appendix-content">
@@ -259,6 +318,24 @@ export default {
       return labels[priority] || priority
     }
 
+    const getRiskLevelLabel = (riskLevel) => {
+      const labels = {
+        'critical': '极高风险',
+        'high': '高风险',
+        'medium': '中等风险',
+        'low': '低风险',
+        'info': '信息'
+      }
+      return labels[riskLevel] || riskLevel
+    }
+
+    const getPriorityClass = (priority) => {
+      if (priority >= 8) return 'critical'
+      if (priority >= 5) return 'high'
+      if (priority >= 3) return 'medium'
+      return 'low'
+    }
+
     const getAppendixTitle = (key) => {
       const titles = {
         'scan_config': '扫描配置',
@@ -330,6 +407,8 @@ export default {
       getScanTypeName,
       getSeverityLabel,
       getPriorityLabel,
+      getRiskLevelLabel,
+      getPriorityClass,
       getAppendixTitle,
       getCriticalPercentage,
       getHighPercentage,
@@ -732,6 +811,132 @@ export default {
 .rec-priority.low {
   background-color: #e6f7ff;
   color: #1890ff;
+}
+
+.ai-analysis-section {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #ffffff;
+}
+
+.ai-analysis-section .section-title {
+  color: #ffffff;
+}
+
+.ai-analysis-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.ai-subtitle {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.ai-text {
+  margin: 0;
+  line-height: 1.8;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.risk-badge {
+  display: inline-block;
+  padding: 8px 20px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.risk-badge.critical {
+  background-color: #ff4d4f;
+}
+
+.risk-badge.high {
+  background-color: #faad14;
+}
+
+.risk-badge.medium {
+  background-color: #52c41a;
+}
+
+.risk-badge.low {
+  background-color: #1890ff;
+}
+
+.risk-badge.info {
+  background-color: #8c8c8c;
+}
+
+.ai-list {
+  margin: 0;
+  padding-left: 20px;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.ai-list li {
+  margin-bottom: 8px;
+  line-height: 1.6;
+}
+
+.priority-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.priority-item {
+  padding: 12px 16px;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+}
+
+.priority-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.priority-vuln {
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.priority-level {
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.priority-level.critical {
+  background-color: #ff4d4f;
+  color: #ffffff;
+}
+
+.priority-level.high {
+  background-color: #faad14;
+  color: #ffffff;
+}
+
+.priority-level.medium {
+  background-color: #52c41a;
+  color: #ffffff;
+}
+
+.priority-level.low {
+  background-color: #1890ff;
+  color: #ffffff;
+}
+
+.priority-reason {
+  margin: 0;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.6;
 }
 
 .appendix-content {

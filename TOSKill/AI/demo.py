@@ -22,6 +22,8 @@ from typing import Dict, List, TypedDict, Optional, Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from TOSKill.AI.instance_manager import get_instance_manager
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -248,9 +250,15 @@ def extract_state_from_agent(agent_state: "AgentState", base_state: TOSKillState
         
     Returns:
         更新后的 TOSKillState
+        
+    字段映射说明:
+        - AgentState.next_mode -> TOSKillState.mode
+        - errors 列表完整保留
+        - execution_history 列表完整保留
     """
     return {
         **base_state,
+        "mode": agent_state.next_mode,
         "planned_tasks": agent_state.planned_tasks,
         "completed_tasks": agent_state.completed_tasks,
         "tool_results": agent_state.tool_results,
@@ -431,7 +439,16 @@ async def user_interact_atom(state: TOSKillState) -> TOSKillState:
     choice = input("请输入指令：").strip()
     logger.info(f"用户选择: {choice}")
     
-    return {**state, "user_choice": choice}
+    new_state = {**state, "user_choice": choice}
+    
+    if choice == "0":
+        current_mode = state.get("mode", "info_collection")
+        new_mode = "vuln_scan" if current_mode == "info_collection" else "info_collection"
+        new_state = {**new_state, "mode": new_mode}
+        logger.info(f"[状态更新] 模式切换: {current_mode} -> {new_mode}")
+        stream_print(f"\n🔄 已切换到【{new_mode}】模式")
+    
+    return new_state
 
 
 async def execute_analyze_atom(state: TOSKillState) -> TOSKillState:
@@ -1161,11 +1178,18 @@ async def report_generation_atom(state: TOSKillState) -> TOSKillState:
 
 
 def atom_router(state: TOSKillState) -> str:
-    """路由决策"""
+    """路由决策
+    
+    注意：此函数只负责路由决策，不修改状态。
+    状态更新应在对应的原子节点中完成。
+    """
     if state["need_generate_script"]:
+        logger.info(f"[路由决策] need_generate_script=True -> script_tool_atom")
         return "script_tool_atom"
     
     c = state["user_choice"]
+    logger.info(f"[路由决策] user_choice={c}")
+    
     if c == "1": 
         return "execute_analyze_atom"
     if c == "2": 
@@ -1175,10 +1199,7 @@ def atom_router(state: TOSKillState) -> str:
     if c in ["4", "5"]: 
         return "script_tool_atom"
     if c == "0":
-        current_mode = state["mode"]
-        new_mode = "vuln_scan" if current_mode == "info_collection" else "info_collection"
-        state["mode"] = new_mode
-        stream_print(f"\n🔄 已切换到【{new_mode}】模式")
+        logger.info(f"[路由决策] 模式切换完成，当前模式: {state.get('mode', 'unknown')} -> ai_decision_atom")
         return "ai_decision_atom"
     
     return "user_interact_atom"
@@ -1245,6 +1266,12 @@ async def main():
     print(f"\n已选择模式: {mode}")
     print("\n初始化工作流...")
     
+    instance_manager = get_instance_manager()
+    instance_id = instance_manager.create_instance(target, {"task_id": task_id, "mode": mode})
+    
+    print(f"实例ID: {instance_id}")
+    print(f"当前实例数: {instance_manager.get_instance_count()}")
+    
     initial_state = TOSKillState(
         target=target,
         task_id=task_id,
@@ -1283,6 +1310,8 @@ async def main():
         
         final_state = await app.ainvoke(initial_state)
         
+        instance_manager.complete_instance(instance_id)
+        
         print("\n" + "=" * 60)
         print("  工作流执行完成")
         print("=" * 60)
@@ -1311,12 +1340,20 @@ async def main():
         if final_state['report']:
             print(f"\n报告已生成，长度: {len(final_state['report'])} 字符")
         
+        memory_report = instance_manager.get_memory_report()
+        print(f"\n内存使用: {memory_report['total_mb']:.2f} MB")
+        
     except KeyboardInterrupt:
         stream_print("\n🛑 用户强制终止")
+        instance_manager.error_instance(instance_id, "用户强制终止")
     except Exception as e:
         print(f"\n工作流执行出错: {e}")
+        instance_manager.error_instance(instance_id, str(e))
         import traceback
         traceback.print_exc()
+    finally:
+        instance_manager.destroy_instance(instance_id)
+        print(f"\n实例已销毁，剩余实例数: {instance_manager.get_instance_count()}")
     
     stream_print("\n✅ 任务结束")
 

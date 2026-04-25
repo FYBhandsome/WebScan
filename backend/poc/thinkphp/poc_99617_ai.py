@@ -64,5 +64,3 @@ class ThinkPHP_RCE_POC(POCBase):
             return self.output.success(result)
         else:
             return self.output.fail()
-            
-register_poc(ThinkPHP_RCE_POC)

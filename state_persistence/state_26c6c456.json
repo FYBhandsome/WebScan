@@ -1,0 +1,399 @@
+{
+  "target": "http://testasp.vuinweb.com",
+  "task_id": "26c6c456",
+  "chat_instance_id": "",
+  "user_id": null,
+  "workflow_status": "idle",
+  "workflow_paused": false,
+  "workflow_paused_at": null,
+  "workflow_resume_from": null,
+  "websocket_connected": false,
+  "websocket_session_id": null,
+  "last_heartbeat": null,
+  "created_at": "2026-04-24T22:10:02.050075",
+  "updated_at": "2026-04-24T22:10:02.050075",
+  "persistence_metadata": {
+    "data_flow_history": [
+      {
+        "from": "input",
+        "to": "execute_analyze_atom",
+        "timestamp": "2026-04-24T22:10:02.050075",
+        "data_snapshot": {
+          "tool_results": {
+            "type": "dict",
+            "size": 0,
+            "preview": null
+          },
+          "vulnerabilities": {
+            "type": "list",
+            "size": 0,
+            "preview": null
+          },
+          "execution_history": {
+            "type": "list",
+            "size": 0,
+            "preview": null
+          },
+          "scan_summary": {
+            "type": "dict",
+            "size": 0,
+            "preview": null
+          }
+        }
+      },
+      {
+        "from": "execute_analyze_atom",
+        "to": "output",
+        "timestamp": "2026-04-24T22:10:09.098265",
+        "data_snapshot": {
+          "tool_results": {
+            "type": "dict",
+            "size": 0,
+            "preview": null
+          },
+          "vulnerabilities": {
+            "type": "list",
+            "size": 0,
+            "preview": null
+          },
+          "execution_history": {
+            "type": "list",
+            "size": 2,
+            "preview": "[{'task': 'baseinfo', 'tool_name': 'baseinfo', 'target': 'http://testasp.vuinweb.com', 'result': {'code': 400, 'msg': '无法连接目标URL', 'domain': 'testasp.vuinweb.com', 'server': None, 'language': None, 'i"
+          },
+          "scan_summary": {
+            "type": "dict",
+            "size": 0,
+            "preview": null
+          }
+        }
+      }
+    ]
+  },
+  "planned_tasks": [
+    "baseinfo"
+  ],
+  "current_task": null,
+  "completed_tasks": [],
+  "tool_results": {},
+  "vulnerabilities": [],
+  "target_context": {},
+  "execution_history": [
+    {
+      "task": "baseinfo",
+      "tool_name": "baseinfo",
+      "target": "http://testasp.vuinweb.com",
+      "result": {
+        "code": 400,
+        "msg": "无法连接目标URL",
+        "domain": "testasp.vuinweb.com",
+        "server": null,
+        "language": null,
+        "ip": null,
+        "os": null,
+        "register": "http://whois.chinaz.com/testasp.vuinweb.com"
+      },
+      "success": false,
+      "timestamp": "2026-04-24T22:10:03.395089",
+      "execution_time": 0.8322367668151855,
+      "error": "无法连接目标URL"
+    },
+    {
+      "task": "baseinfo",
+      "tool_name": "baseinfo",
+      "target": "http://testasp.vuinweb.com",
+      "result": {
+        "code": 400,
+        "msg": "无法连接目标URL",
+        "domain": "testasp.vuinweb.com",
+        "server": null,
+        "language": null,
+        "ip": null,
+        "os": null,
+        "register": "http://whois.chinaz.com/testasp.vuinweb.com"
+      },
+      "success": false,
+      "timestamp": "2026-04-24T22:10:03.588505",
+      "execution_time": 0.004992485046386719,
+      "error": "无法连接目标URL"
+    }
+  ],
+  "errors": [
+    "baseinfo: 无法连接目标URL",
+    "❌ 任务失败: baseinfo",
+    "   • 错误: 无法连接目标URL",
+    "baseinfo: 无法连接目标URL"
+  ],
+  "is_complete": false,
+  "should_continue": true,
+  "next_action": "",
+  "decision_history": [
+    {
+      "action": "execute_tools",
+      "reason": "首次扫描应从基础信息收集开始，以获取目标域名/IP的基本信息，包括服务器类型、编程语言等，为后续漏洞扫描提供基础数据。",
+      "tools": [
+        "baseinfo"
+      ],
+      "timestamp": "2026-04-24T22:09:55.104709"
+    }
+  ],
+  "progress": 0,
+  "vuln_scan_results": {},
+  "scan_summary": {},
+  "report": "",
+  "report_file_path": null,
+  "user_choice": "1",
+  "chat_history": [
+    {
+      "role": "assistant",
+      "content": "🔍 [阶段1/6] 正在初始化AI决策引擎...",
+      "timestamp": "2026-04-24T22:09:52.874146"
+    },
+    {
+      "role": "assistant",
+      "content": "[AI决策] 进度: 10% | 加载工具列表和配置",
+      "timestamp": "2026-04-24T22:09:52.874146"
+    },
+    {
+      "role": "assistant",
+      "content": "📊 [阶段2/6] 分析当前扫描状态...",
+      "timestamp": "2026-04-24T22:09:52.874146"
+    },
+    {
+      "role": "assistant",
+      "content": "[AI决策] 进度: 30% | 目标: http://testasp.vuinweb.com",
+      "timestamp": "2026-04-24T22:09:52.874146"
+    },
+    {
+      "role": "assistant",
+      "content": "   • 已完成任务: 0 个",
+      "timestamp": "2026-04-24T22:09:52.874146"
+    },
+    {
+      "role": "assistant",
+      "content": "   • 已发现漏洞: 0 个",
+      "timestamp": "2026-04-24T22:09:52.874146"
+    },
+    {
+      "role": "assistant",
+      "content": "🧠 [阶段3/6] 正在进行AI智能分析...",
+      "timestamp": "2026-04-24T22:09:52.874146"
+    },
+    {
+      "role": "assistant",
+      "content": "[AI决策] 进度: 50% | 调用大语言模型进行决策",
+      "timestamp": "2026-04-24T22:09:52.874146"
+    },
+    {
+      "role": "assistant",
+      "content": "📝 [阶段4/6] 解析AI决策结果...",
+      "timestamp": "2026-04-24T22:09:55.104709"
+    },
+    {
+      "role": "assistant",
+      "content": "[AI决策] 进度: 70% | 解析JSON响应",
+      "timestamp": "2026-04-24T22:09:55.104709"
+    },
+    {
+      "role": "assistant",
+      "content": "✅ [阶段5/6] 决策完成，准备执行...",
+      "timestamp": "2026-04-24T22:09:55.104709"
+    },
+    {
+      "role": "assistant",
+      "content": "[AI决策] 进度: 90% | 选择工具: baseinfo",
+      "timestamp": "2026-04-24T22:09:55.104709"
+    },
+    {
+      "role": "assistant",
+      "content": "📋 决策结果:",
+      "timestamp": "2026-04-24T22:09:55.104709"
+    },
+    {
+      "role": "assistant",
+      "content": "   • 推荐工具: baseinfo",
+      "timestamp": "2026-04-24T22:09:55.104709"
+    },
+    {
+      "role": "assistant",
+      "content": "   • 选择原因: 首次扫描应从基础信息收集开始，以获取目标域名/IP的基本信息，包括服务器类型、编程语言等，为后续漏洞扫描提供基础数据。",
+      "timestamp": "2026-04-24T22:09:55.104709"
+    },
+    {
+      "role": "assistant",
+      "content": "   • 可用工具数: 36",
+      "timestamp": "2026-04-24T22:09:55.104709"
+    },
+    {
+      "role": "assistant",
+      "content": "✅ [阶段6/6] AI决策流程完成",
+      "timestamp": "2026-04-24T22:09:55.104709"
+    },
+    {
+      "role": "assistant",
+      "content": "[AI决策] 进度: 100% | 决策完成，准备执行任务",
+      "timestamp": "2026-04-24T22:09:55.104709"
+    },
+    {
+      "role": "assistant",
+      "content": "🚀 [阶段1/4] 开始执行计划任务...",
+      "timestamp": "2026-04-24T22:10:02.562852"
+    },
+    {
+      "role": "assistant",
+      "content": "   • 任务总数: 1",
+      "timestamp": "2026-04-24T22:10:02.562852"
+    },
+    {
+      "role": "assistant",
+      "content": "   • 任务列表: baseinfo",
+      "timestamp": "2026-04-24T22:10:02.562852"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "timestamp": "2026-04-24T22:10:02.562852"
+    },
+    {
+      "role": "assistant",
+      "content": "════════════════════════════════════════",
+      "timestamp": "2026-04-24T22:10:02.562852"
+    },
+    {
+      "role": "assistant",
+      "content": "📋 任务进度: [1/1] (100%)",
+      "timestamp": "2026-04-24T22:10:02.562852"
+    },
+    {
+      "role": "assistant",
+      "content": "════════════════════════════════════════",
+      "timestamp": "2026-04-24T22:10:02.562852"
+    },
+    {
+      "role": "assistant",
+      "content": "🔧 [执行工具] baseinfo",
+      "timestamp": "2026-04-24T22:10:02.562852"
+    },
+    {
+      "role": "assistant",
+      "content": "   • 目标: http://testasp.vuinweb.com",
+      "timestamp": "2026-04-24T22:10:02.562852"
+    },
+    {
+      "role": "assistant",
+      "content": "   • 状态: 正在执行...",
+      "timestamp": "2026-04-24T22:10:02.562852"
+    },
+    {
+      "role": "assistant",
+      "content": "   • 耗时: 0.83秒",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "   • 状态: ✅ 执行成功",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "system",
+      "content": "[扫描完成] 工具 baseinfo 执行失败 | 耗时 0.83秒 | 错误: 无法连接目标URL",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "📊 任务摘要: 工具 baseinfo 执行失败 | 耗时 0.83秒 | 错误: 无法连接目标URL",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "🧠 [阶段2/4] 分析扫描结果...",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "✅ [阶段4/4] 执行分析流程完成",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "════════════════════════════════════════",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "📊 执行统计",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "════════════════════════════════════════",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "✅ 完成任务: 0 个",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "🔍 发现漏洞: 0 个",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "❌ 错误数量: 3 个",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "assistant",
+      "content": "════════════════════════════════════════",
+      "timestamp": "2026-04-24T22:10:03.395089"
+    },
+    {
+      "role": "system",
+      "content": "[扫描完成] 工具 baseinfo 执行失败 | 耗时 0.00秒 | 错误: 无法连接目标URL",
+      "timestamp": "2026-04-24T22:10:09.098265"
+    }
+  ],
+  "chat_summary": "无",
+  "user_name": "用户",
+  "need_generate_script": false,
+  "uploaded_script_path": null,
+  "next_mode": "vuln_scan",
+  "task_history": [],
+  "stage_status": {
+    "planning": {
+      "status": "pending",
+      "sub_status": "pending",
+      "progress": 0,
+      "logs": []
+    },
+    "tool_execution": {
+      "status": "pending",
+      "sub_status": "pending",
+      "progress": 0,
+      "logs": []
+    },
+    "report": {
+      "status": "pending",
+      "sub_status": "pending",
+      "progress": 0,
+      "logs": []
+    }
+  },
+  "_metadata": {
+    "saved_at": "2026-04-24T22:10:09.098265",
+    "version": "1.0",
+    "checksum": "7c34c0bd16c143deac0432ae903f3b54"
+  }
+}

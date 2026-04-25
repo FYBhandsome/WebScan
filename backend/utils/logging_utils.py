@@ -137,3 +137,54 @@ def get_request_id() -> Optional[str]:
 def clear_request_id() -> None:
     """清除当前请求ID"""
     request_id_var.set(None)
+
+
+class StructuredLogger:
+    """结构化日志记录器"""
+    
+    def __init__(self, name: str):
+        self.logger = logging.getLogger(name)
+        self.name = name
+    
+    def info(self, message: str, **kwargs):
+        self.logger.info(message, extra={'extra_data': kwargs} if kwargs else None)
+    
+    def error(self, message: str, **kwargs):
+        self.logger.error(message, extra={'extra_data': kwargs} if kwargs else None)
+    
+    def warning(self, message: str, **kwargs):
+        self.logger.warning(message, extra={'extra_data': kwargs} if kwargs else None)
+    
+    def debug(self, message: str, **kwargs):
+        self.logger.debug(message, extra={'extra_data': kwargs} if kwargs else None)
+
+
+class TaskStateLogger:
+    """任务状态日志记录器"""
+    
+    def __init__(self):
+        self.logger = logging.getLogger("task_state")
+    
+    def log_task_created(self, task_id: int, task_type: str, target: str):
+        self.logger.info(f"Task created | task_id={task_id} | type={task_type} | target={target}")
+    
+    def log_task_started(self, task_id: int, task_type: str, target: str):
+        self.logger.info(f"Task started | task_id={task_id} | type={task_type} | target={target}")
+    
+    def log_task_completed(self, task_id: int, duration: float):
+        self.logger.info(f"Task completed | task_id={task_id} | duration={duration:.2f}s")
+    
+    def log_task_failed(self, task_id: int, error: str, exc: str = None):
+        self.logger.error(f"Task failed | task_id={task_id} | error={error} | exc={exc}")
+    
+    def log_task_timeout(self, task_id: int, timeout_seconds: int):
+        self.logger.warning(f"Task timeout | task_id={task_id} | timeout={timeout_seconds}s")
+    
+    def log_task_cancelled(self, task_id: int, reason: str):
+        self.logger.info(f"Task cancelled | task_id={task_id} | reason={reason}")
+    
+    def log_task_recovery(self, task_id: int, task_type: str, status: str):
+        self.logger.info(f"Task recovery | task_id={task_id} | type={task_type} | status={status}")
+
+
+task_state_logger = TaskStateLogger()

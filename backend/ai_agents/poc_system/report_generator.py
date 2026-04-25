@@ -319,7 +319,8 @@ class ReportGenerator:
         verification_task: POCVerificationTask,
         format: str = "html",
         output_path: Optional[str] = None,
-        template_name: Optional[str] = None
+        template_name: Optional[str] = None,
+        workflow_data: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         生成 POC 验证报告
@@ -329,6 +330,7 @@ class ReportGenerator:
             format: 报告格式(html, json, pdf)
             output_path: 输出文件路径,None 则返回内容
             template_name: 自定义模板名称
+            workflow_data: 工作流数据（包含执行历史、任务规划等）
             
         Returns:
             str: 报告内容或文件路径
@@ -349,7 +351,8 @@ class ReportGenerator:
         report_content = await self.report_templates[format](
             verification_task,
             results,
-            custom_template=custom_template
+            custom_template=custom_template,
+            workflow_data=workflow_data
         )
         
         if output_path:
@@ -533,7 +536,8 @@ class ReportGenerator:
         task_or_tasks: Any,
         results: List[POCVerificationResult],
         is_batch: bool = False,
-        custom_template: Optional[CustomTemplate] = None
+        custom_template: Optional[CustomTemplate] = None,
+        workflow_data: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         生成 HTML 格式报告
@@ -543,6 +547,7 @@ class ReportGenerator:
             results: 验证结果列表
             is_batch: 是否为批量报告
             custom_template: 自定义模板
+            workflow_data: 工作流数据
             
         Returns:
             str: HTML 报告内容
@@ -568,6 +573,7 @@ class ReportGenerator:
         executive_summary_html = self._generate_executive_summary_html(
             total_results, vulnerable_count, severity_distribution
         )
+        workflow_html = self._generate_workflow_section_html(workflow_data) if workflow_data else ""
         
         html_content = f"""
 <!DOCTYPE html>
@@ -604,6 +610,8 @@ class ReportGenerator:
             {executive_summary_html if self.is_section_enabled('executive_summary') else ''}
             
             {charts_html}
+            
+            {workflow_html}
             
             <section id="verification-details" class="results">
                 <h2>{self.i18n.get('verification_details')}</h2>
@@ -1411,6 +1419,122 @@ class ReportGenerator:
         </section>
 """
     
+    def _generate_workflow_section_html(self, workflow_data: Dict[str, Any]) -> str:
+        """生成工作流数据展示 HTML"""
+        if not workflow_data:
+            return ""
+        
+        execution_history = workflow_data.get("execution_history", [])
+        task_plans = workflow_data.get("task_plans", [])
+        progress = workflow_data.get("progress", 0)
+        status = workflow_data.get("status", "pending")
+        
+        completed_count = sum(1 for r in execution_history if r.get("status") in ["success", "completed"])
+        failed_count = sum(1 for r in execution_history if r.get("status") == "failed")
+        total_duration = sum(r.get("execution_time", 0) or 0 for r in execution_history)
+        
+        overview_html = f"""
+        <div class="workflow-overview" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 25px;">
+            <div class="workflow-stat" style="background: var(--bg-color); padding: 15px; border-radius: 8px; text-align: center;">
+                <div style="font-size: 24px; font-weight: bold; color: var(--primary-color);">{len(execution_history)}</div>
+                <div style="font-size: 12px; color: var(--text-muted);">总步骤数</div>
+            </div>
+            <div class="workflow-stat" style="background: var(--bg-color); padding: 15px; border-radius: 8px; text-align: center;">
+                <div style="font-size: 24px; font-weight: bold; color: var(--success-color);">{completed_count}</div>
+                <div style="font-size: 12px; color: var(--text-muted);">已完成</div>
+            </div>
+            <div class="workflow-stat" style="background: var(--bg-color); padding: 15px; border-radius: 8px; text-align: center;">
+                <div style="font-size: 24px; font-weight: bold; color: var(--danger-color);">{failed_count}</div>
+                <div style="font-size: 12px; color: var(--text-muted);">失败</div>
+            </div>
+            <div class="workflow-stat" style="background: var(--bg-color); padding: 15px; border-radius: 8px; text-align: center;">
+                <div style="font-size: 24px; font-weight: bold; color: var(--primary-color);">{total_duration:.2f}s</div>
+                <div style="font-size: 12px; color: var(--text-muted);">执行时长</div>
+            </div>
+        </div>
+        """
+        
+        timeline_html = ""
+        if execution_history:
+            for idx, record in enumerate(execution_history):
+                record_status = record.get("status", "pending")
+                status_class = record_status if record_status in ["success", "failed", "running", "pending"] else "pending"
+                duration_text = f"{record.get('execution_time', 0):.2f}s" if record.get("execution_time") else "-"
+                error_msg = record.get("error", "")
+                
+                timeline_html += f"""
+                <div class="timeline-item {status_class}" style="display: flex; gap: 15px; margin-bottom: 15px; padding: 15px; background: var(--bg-color); border-radius: 8px; border-left: 3px solid var(--primary-color);">
+                    <div style="min-width: 30px; height: 30px; background: var(--primary-color); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px;">{idx + 1}</div>
+                    <div style="flex: 1;">
+                        <div style="font-weight: 600; margin-bottom: 5px;">{record.get('node_name', record.get('task', f'步骤 {idx + 1}'))}</div>
+                        <div style="font-size: 12px; color: var(--text-muted);">
+                            <span>类型: {record.get('node_type', 'N/A')}</span>
+                            <span style="margin-left: 15px;">状态: {record_status}</span>
+                            <span style="margin-left: 15px;">工具: {record.get('tool_name', 'N/A')}</span>
+                        </div>
+                        {f'<div style="font-size: 12px; color: var(--success-color); font-weight: 500; margin-top: 5px;">耗时: {duration_text}</div>' if record.get('execution_time') else ''}
+                        {f'<div style="color: var(--danger-color); margin-top: 5px; font-size: 12px;">错误: {error_msg}</div>' if error_msg else ''}
+                    </div>
+                </div>
+                """
+        else:
+            timeline_html = '<p style="color: var(--text-muted); text-align: center; padding: 20px;">暂无执行记录</p>'
+        
+        plans_html = ""
+        if task_plans:
+            for plan in sorted(task_plans, key=lambda x: x.get("priority", 5), reverse=True):
+                plan_status = plan.get("status", "pending")
+                status_class = plan_status if plan_status in ["completed", "running", "pending", "failed"] else "pending"
+                
+                plans_html += f"""
+                <div class="plan-item" style="display: flex; align-items: center; gap: 15px; padding: 12px 15px; background: var(--bg-color); border-radius: 8px; margin-bottom: 10px;">
+                    <div style="min-width: 30px; height: 30px; background: var(--primary-color); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px;">{plan.get('priority', 5)}</div>
+                    <div style="flex: 1;">
+                        <div style="font-weight: 600;">{plan.get('plan_name', 'N/A')}</div>
+                        <div style="font-size: 12px; color: var(--text-muted);">
+                            类型: {plan.get('plan_type', 'N/A')} | ID: {plan.get('plan_id', 'N/A')}
+                        </div>
+                    </div>
+                    <span style="padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 500; background: var(--bg-color);">{plan_status}</span>
+                </div>
+                """
+        else:
+            plans_html = '<p style="color: var(--text-muted); text-align: center; padding: 20px;">暂无任务规划</p>'
+        
+        progress_html = ""
+        if progress > 0:
+            progress_html = f"""
+            <div style="margin-top: 15px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                    <span style="font-size: 12px; color: var(--text-muted);">执行进度</span>
+                    <span style="font-size: 12px; font-weight: 500;">{progress}%</span>
+                </div>
+                <div style="width: 100%; height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden;">
+                    <div style="height: 100%; width: {progress}%; background: linear-gradient(90deg, var(--success-color), #34d399);"></div>
+                </div>
+            </div>
+            """
+        
+        return f"""
+        <section id="workflow-details" class="results" style="background: var(--card-bg); padding: 30px; border-radius: 16px; margin-bottom: 30px; box-shadow: var(--shadow);">
+            <h2 style="color: var(--primary-color); margin-bottom: 24px; padding-bottom: 12px; border-bottom: 2px solid var(--border-color);">⚡ 工作流执行详情</h2>
+            
+            {overview_html}
+            
+            {progress_html}
+            
+            <div style="margin-top: 25px;">
+                <h3 style="margin-bottom: 15px; color: var(--text-color);">📋 执行历史</h3>
+                {timeline_html}
+            </div>
+            
+            <div style="margin-top: 25px;">
+                <h3 style="margin-bottom: 15px; color: var(--text-color);">📝 任务规划</h3>
+                {plans_html}
+            </div>
+        </section>
+        """
+    
     def _get_javascript(self) -> str:
         """获取 JavaScript 代码"""
         return """
@@ -1474,7 +1598,8 @@ class ReportGenerator:
         task_or_tasks: Any,
         results: List[POCVerificationResult],
         is_batch: bool = False,
-        custom_template: Optional[CustomTemplate] = None
+        custom_template: Optional[CustomTemplate] = None,
+        workflow_data: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         生成 JSON 格式报告
@@ -1484,6 +1609,7 @@ class ReportGenerator:
             results: 验证结果列表
             is_batch: 是否为批量报告
             custom_template: 自定义模板
+            workflow_data: 工作流数据
             
         Returns:
             str: JSON 报告内容
@@ -1527,6 +1653,9 @@ class ReportGenerator:
             report_data["template_name"] = custom_template.name
             report_data["template_variables"] = {k: v.value for k, v in custom_template.variables.items()}
         
+        if workflow_data:
+            report_data["workflow"] = workflow_data
+        
         return json.dumps(report_data, ensure_ascii=False, indent=2)
     
     async def _generate_pdf_report(
@@ -1534,7 +1663,8 @@ class ReportGenerator:
         task_or_tasks: Any,
         results: List[POCVerificationResult],
         is_batch: bool = False,
-        custom_template: Optional[CustomTemplate] = None
+        custom_template: Optional[CustomTemplate] = None,
+        workflow_data: Optional[Dict[str, Any]] = None
     ) -> Union[str, bytes]:
         """
         生成 PDF 格式报告
@@ -1544,6 +1674,7 @@ class ReportGenerator:
             results: 验证结果列表
             is_batch: 是否为批量报告
             custom_template: 自定义模板
+            workflow_data: 工作流数据
             
         Returns:
             Union[str, bytes]: PDF 报告内容或 HTML 内容
@@ -1552,7 +1683,8 @@ class ReportGenerator:
             task_or_tasks,
             results,
             is_batch,
-            custom_template
+            custom_template,
+            workflow_data
         )
         
         try:

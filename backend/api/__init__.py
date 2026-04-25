@@ -7,8 +7,7 @@ API 路由总入口
 from fastapi import APIRouter
 from . import scan, tasks, reports, poc, awvs, settings, ai, kb, user, notifications, poc_verification, websocket, seebug
 from backend.ai_agents.api import router as ai_agents_router
-from . import report as report_download
-from . import ai_chat_websocket
+from TOSKill.api import ai_chat_router, report_router
 
 api_router = APIRouter()
 
@@ -24,8 +23,8 @@ api_router.include_router(notifications.router, tags=["通知管理"])
 api_router.include_router(ai_agents_router, tags=["AI Agents"])
 api_router.include_router(websocket.router, tags=["WebSocket"])
 api_router.include_router(seebug.router, prefix="/seebug", tags=["Seebug"])
-api_router.include_router(report_download.router, tags=["报告下载"])
-api_router.include_router(ai_chat_websocket.router, tags=["AI对话WebSocket"])
+api_router.include_router(report_router, tags=["报告下载"])
+api_router.include_router(ai_chat_router, tags=["AI对话WebSocket"])
 
 api_router.include_router(poc_verification.router, tags=["POC验证"])
 api_router.include_router(poc.router, tags=["POC扫描"])

@@ -16,11 +16,11 @@ from uuid import uuid4
 
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 
-from backend.ai_agents.memory import get_memory_manager
-
-router = APIRouter(prefix="/ai-chat", tags=["AI对话WebSocket"])
+from TOSKill.AI.memory import get_memory_manager
 from TOSKill.AI.state import AgentState
 from TOSKill.AI.graph import get_agent_orchestrator
+
+router = APIRouter(prefix="/ai-chat", tags=["AI对话WebSocket"])
 
 logger = logging.getLogger(__name__)
 
@@ -83,11 +83,6 @@ class AIChatConnectionManager:
             except Exception as e:
                 logger.error(f"发送消息失败: {e}")
     
-    async def broadcast(self, message: Dict[str, Any]):
-        """广播消息到所有连接"""
-        for session_id in self.active_connections:
-            await self.send_message(session_id, message)
-    
     async def handle_message(self, session_id: str, message: Dict[str, Any]):
         """处理接收到的消息"""
         message_type = message.get("type")
@@ -147,6 +142,7 @@ class AIChatConnectionManager:
             
             logger.info(f"用户确认 [{session_id}]: {choice}")
         
+        memory_manager = get_memory_manager()
         memory_manager.add_message(session_id, "system", f"用户选择: {choice}")
     
     async def _handle_user_cancel(self, session_id: str, payload: Dict[str, Any]):
@@ -192,10 +188,10 @@ class AIChatConnectionManager:
             websocket_session_id=session_id
         )
         state.set_websocket_callback(websocket_callback)
-        state.update_websocket_status(True, session_id)
         
         self.session_states[session_id] = state
         
+        memory_manager = get_memory_manager()
         memory_manager.add_message(session_id, "user", f"开始扫描目标: {target}")
         
         orchestrator = get_agent_orchestrator()
@@ -309,8 +305,3 @@ async def ai_chat_websocket_endpoint(websocket: WebSocket):
     finally:
         if session_id:
             ai_chat_manager.disconnect(session_id)
-
-
-def get_ai_chat_manager() -> AIChatConnectionManager:
-    """获取AI对话连接管理器"""
-    return ai_chat_manager

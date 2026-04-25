@@ -1,0 +1,70 @@
+{
+  "kb_vulnerabilities": {
+    "success": {
+      "code": 200,
+      "message": "获取成功",
+      "data": [
+        {
+          "id": 1,
+          "name": "SQL注入漏洞",
+          "severity": "high",
+          "description": "存在SQL注入漏洞",
+          "solution": "使用参数化查询",
+          "references": ["https://owasp.org"],
+          "created_at": "2024-01-01T00:00:00"
+        }
+      ]
+    },
+    "error": {
+      "code": 500,
+      "message": "服务器内部错误",
+      "data": null
+    }
+  },
+  "seebug_search": {
+    "success": {
+      "code": 200,
+      "message": "搜索成功",
+      "data": {
+        "total": 10,
+        "page": 1,
+        "page_size": 20,
+        "items": [
+          {
+            "ssvid": "SSVID-12345",
+            "name": "CVE-2020-1234",
+            "type": "SQL注入",
+            "level": "高危",
+            "publish_time": "2024-01-01"
+          }
+        ]
+      }
+    }
+  },
+  "settings": {
+    "success": {
+      "code": 200,
+      "message": "获取成功",
+      "data": {
+        "general": {
+          "systemName": "WebScan AI",
+          "language": "zh-CN"
+        },
+        "scan": {
+          "defaultDepth": 2,
+          "defaultConcurrency": 5
+        }
+      }
+    }
+  },
+  "ai_chat": {
+    "success": {
+      "code": 200,
+      "message": "成功",
+      "data": {
+        "response": "这是AI的回复内容",
+        "conversation_id": "conv-123"
+      }
+    }
+  }
+}

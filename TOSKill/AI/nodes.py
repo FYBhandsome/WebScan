@@ -62,6 +62,144 @@ class AIDecisionNode:
             descriptions.append(desc)
         return "\n".join(descriptions)
     
+    def _check_target_reachable(self, state: AgentState) -> Dict[str, Any]:
+        """检查目标可达性
+        
+        基于执行历史判断目标是否可达：
+        - 检查是否有成功的网络请求记录
+        - 检查是否有连接超时或拒绝连接等错误
+        
+        Args:
+            state: Agent状态
+            
+        Returns:
+            包含可达性信息的字典
+        """
+        result = {
+            "reachable": True,
+            "confidence": "high",
+            "reason": "目标可达",
+            "suggestions": []
+        }
+        
+        if not state.execution_history:
+            result["confidence"] = "low"
+            result["reason"] = "尚未执行任何扫描任务，无法判断目标可达性"
+            return result
+        
+        success_count = 0
+        failure_count = 0
+        connection_errors = []
+        
+        for record in state.execution_history:
+            if record.get("success"):
+                success_count += 1
+            else:
+                failure_count += 1
+                error = record.get("error", "")
+                if any(keyword in error.lower() for keyword in 
+                       ["timeout", "connection refused", "unreachable", "dns", "resolve"]):
+                    connection_errors.append({
+                        "tool": record.get("tool_name", "unknown"),
+                        "error": error[:100]
+                    })
+        
+        total = success_count + failure_count
+        
+        if connection_errors and len(connection_errors) >= 2:
+            result["reachable"] = False
+            result["confidence"] = "high"
+            result["reason"] = f"检测到多个连接错误，目标可能不可达"
+            result["suggestions"] = [
+                "检查目标地址是否正确",
+                "检查网络连接",
+                "确认目标是否在线",
+                "尝试使用代理或VPN"
+            ]
+        elif failure_count > success_count and total >= 3:
+            result["reachable"] = True
+            result["confidence"] = "medium"
+            result["reason"] = f"部分任务失败({failure_count}/{total})，目标可能存在防护措施"
+            result["suggestions"] = [
+                "目标可能有WAF/CDN防护",
+                "建议先进行WAF检测",
+                "考虑降低扫描频率"
+            ]
+        elif success_count > 0:
+            result["reachable"] = True
+            result["confidence"] = "high"
+            result["reason"] = f"已有{success_count}个任务成功执行"
+        
+        return result
+    
+    def _get_failed_tools(self, state: AgentState) -> List[str]:
+        """获取已失败的工具列表
+        
+        从 state.errors 中提取失败的工具名称
+        
+        Args:
+            state: Agent状态
+            
+        Returns:
+            失败工具名称列表
+        """
+        failed_tools = []
+        for error in state.errors:
+            if ":" in error:
+                tool_name = error.split(":")[0].strip()
+                if tool_name and tool_name not in failed_tools:
+                    failed_tools.append(tool_name)
+        return failed_tools
+    
+    def _format_execution_history_summary(self, state: AgentState, limit: int = 5) -> str:
+        """格式化执行历史摘要
+        
+        生成最近N条执行历史的简要描述
+        
+        Args:
+            state: Agent状态
+            limit: 最大历史条数，默认5条
+            
+        Returns:
+            格式化的执行历史摘要
+        """
+        if not state.execution_history:
+            return "暂无执行历史"
+        
+        recent_history = state.execution_history[-limit:]
+        summary_lines = []
+        
+        for idx, record in enumerate(recent_history, 1):
+            tool_name = record.get("tool_name", "unknown")
+            success = record.get("success", False)
+            exec_time = record.get("execution_time", 0)
+            status_icon = "✅" if success else "❌"
+            
+            key_finding = ""
+            result = record.get("result", {})
+            if isinstance(result, dict):
+                if result.get("vulnerabilities"):
+                    vulns = result["vulnerabilities"]
+                    if isinstance(vulns, list):
+                        key_finding = f"发现{len(vulns)}个漏洞"
+                elif result.get("ports"):
+                    ports = result["ports"]
+                    if isinstance(ports, list):
+                        key_finding = f"发现{len(ports)}个端口"
+                elif result.get("subdomains"):
+                    subs = result["subdomains"]
+                    if isinstance(subs, list):
+                        key_finding = f"发现{len(subs)}个子域名"
+            
+            if not key_finding:
+                key_finding = record.get("error", "无特殊发现")[:50] if not success else "执行成功"
+            
+            summary_lines.append(
+                f"{idx}. {status_icon} {tool_name} ({exec_time:.1f}s) - {key_finding}"
+            )
+        
+        return "\n".join(summary_lines)
+    
     async def __call__(self, state: AgentState) -> AgentState:
         logger.info(f"[{state.task_id}] AI决策节点开始执行")
         
@@ -74,6 +212,18 @@ class AIDecisionNode:
             await state.send_ai_message(f"   • 已完成任务: {len(state.completed_tasks)} 个")
             await state.send_ai_message(f"   • 已发现漏洞: {len(state.vulnerabilities)} 个")
             
+            failed_tools = self._get_failed_tools(state)
+            reachable_info = self._check_target_reachable(state)
+            execution_summary = self._format_execution_history_summary(state, limit=5)
+            
+            failed_tasks_list = "\n".join([f"  - {tool}: 执行失败" for tool in failed_tools]) if failed_tools else "  暂无失败任务"
+            
+            reachable_status = f"{'✅ 可达' if reachable_info['reachable'] else '❌ 不可达'} (置信度: {reachable_info['confidence']})"
+            reachable_suggestions = "\n".join([f"  - {s}" for s in reachable_info.get("suggestions", [])]) if reachable_info.get("suggestions") else "  无"
+            
+            available_tools = [t for t in self.available_tool_names if t not in failed_tools]
+            available_tools_str = ", ".join(available_tools) if available_tools else "baseinfo"
+            
             system_prompt = f"""你是Web安全扫描调度器，负责分析当前状态并选择最合适的工具执行下一步扫描任务。
 
 ## 可用工具列表
@@ -85,6 +235,7 @@ class AIDecisionNode:
 3. 信息收集完成后，执行漏洞扫描工具（如 sqli_scan, xss_scan 等）
 4. 每次只选择一个最优先的工具
 5. 必须以JSON格式回复，格式为: {{"tool": "工具名称", "reason": "选择原因"}}
+6. **重要**: 不要选择已失败的工具，避免重复执行失败任务
 
 ## 工具选择策略
 - 首次扫描：baseinfo（基础信息收集）
@@ -103,7 +254,22 @@ class AIDecisionNode:
 - 聊天历史总结: {state.chat_summary}
 - 已发现漏洞: {len(state.vulnerabilities)}个
 
-请分析当前状态，选择下一个要执行的工具。只返回JSON，不要其他内容。"""
+## 目标可达性检查
+- 状态: {reachable_status}
+- 原因: {reachable_info['reason']}
+- 建议:
+{reachable_suggestions}
+
+## 失败任务列表（请勿重复选择）
+{failed_tasks_list}
+
+## 最近执行历史（最近5条）
+{execution_summary}
+
+## 可选工具（已排除失败工具）
+{available_tools_str}
+
+请分析当前状态，选择下一个要执行的工具。**注意**: 不要选择失败任务列表中的工具。只返回JSON，不要其他内容。"""
             
             await state.send_ai_message("🧠 [阶段3/6] 正在进行AI智能分析...")
             await state.send_ai_message(self._format_status_message("AI决策", 50, "调用大语言模型进行决策"))
@@ -135,7 +301,41 @@ class AIDecisionNode:
                 
                 await state.send_ai_message("✅ [阶段5/6] 决策完成，准备执行...")
                 
-                if tool_name in self.available_tool_names:
+                if tool_name in failed_tools:
+                    alternative_tools = [t for t in self.available_tool_names if t not in failed_tools and t not in state.completed_tasks]
+                    if alternative_tools:
+                        alternative_tool = alternative_tools[0]
+                        state.planned_tasks = [alternative_tool]
+                        state.need_generate_script = False
+                        
+                        await state.send_decision(
+                            action="execute_tools",
+                            reason=f"工具 {tool_name} 已失败，自动选择替代工具: {alternative_tool}",
+                            tools=[alternative_tool]
+                        )
+                        
+                        await state.send_ai_message(self._format_status_message("AI决策", 90, f"使用替代工具: {alternative_tool}"))
+                        await state.send_ai_message(f"⚠️ 工具 {tool_name} 已在失败列表中")
+                        await state.send_ai_message(f"📋 已自动切换为替代工具: {alternative_tool}")
+                        await state.send_ai_message(f"   • 剩余可用工具: {len(alternative_tools)} 个")
+                        
+                        logger.warning(f"[AI决策] 工具 {tool_name} 已失败，使用替代: {alternative_tool}")
+                    else:
+                        state.planned_tasks = ["baseinfo"]
+                        state.need_generate_script = False
+                        
+                        await state.send_decision(
+                            action="execute_tools",
+                            reason="所有工具均已失败或已完成，尝试使用默认工具 baseinfo",
+                            tools=["baseinfo"]
+                        )
+                        
+                        await state.send_ai_message(self._format_status_message("AI决策", 90, "所有工具已处理"))
+                        await state.send_ai_message(f"⚠️ 所有可用工具均已失败或已完成")
+                        await state.send_ai_message(f"📋 尝试使用默认工具: baseinfo")
+                        
+                        logger.warning(f"[AI决策] 所有工具已处理，使用默认: baseinfo")
+                elif tool_name in self.available_tool_names:
                     state.planned_tasks = [tool_name]
                     state.need_generate_script = False
                     
@@ -149,24 +349,26 @@ class AIDecisionNode:
                     await state.send_ai_message(f"📋 决策结果:")
                     await state.send_ai_message(f"   • 推荐工具: {tool_name}")
                     await state.send_ai_message(f"   • 选择原因: {reason or '基于当前状态的最佳选择'}")
-                    await state.send_ai_message(f"   • 可用工具数: {len(self.available_tool_names)}")
+                    await state.send_ai_message(f"   • 可用工具数: {len(available_tools)}")
                     
                     logger.info(f"[AI决策] 选择工具: {tool_name}, 原因: {reason}")
                 else:
-                    state.planned_tasks = ["baseinfo"]
+                    alternative_tools = [t for t in self.available_tool_names if t not in failed_tools]
+                    fallback_tool = alternative_tools[0] if alternative_tools else "baseinfo"
+                    state.planned_tasks = [fallback_tool]
                     state.need_generate_script = False
                     
                     await state.send_decision(
                         action="execute_tools",
-                        reason=f"工具 {tool_name} 不在可用列表中，使用默认工具 baseinfo",
-                        tools=["baseinfo"]
+                        reason=f"工具 {tool_name} 不在可用列表中，使用替代工具 {fallback_tool}",
+                        tools=[fallback_tool]
                     )
                     
-                    await state.send_ai_message(self._format_status_message("AI决策", 90, "使用默认工具: baseinfo"))
+                    await state.send_ai_message(self._format_status_message("AI决策", 90, f"使用替代工具: {fallback_tool}"))
                     await state.send_ai_message(f"⚠️ 工具 {tool_name} 不在可用列表中")
-                    await state.send_ai_message(f"📋 已切换为默认工具: baseinfo")
+                    await state.send_ai_message(f"📋 已切换为替代工具: {fallback_tool}")
                     
-                    logger.warning(f"[AI决策] 无效工具: {tool_name}, 使用默认: baseinfo")
+                    logger.warning(f"[AI决策] 无效工具: {tool_name}, 使用替代: {fallback_tool}")
                     
             except json.JSONDecodeError as e:
                 state.planned_tasks = ["baseinfo"]
@@ -317,10 +519,126 @@ class ExecuteAnalyzeNode:
             self._tools_cache[name] = tool
         return tool
     
+    def _get_failed_tools_from_errors(self, state: AgentState) -> List[str]:
+        """从 errors 中提取失败的工具名称
+        
+        Args:
+            state: Agent状态
+            
+        Returns:
+            失败工具名称列表
+        """
+        failed_tools = []
+        for error in state.errors:
+            if ":" in error:
+                tool_name = error.split(":")[0].strip()
+                if tool_name and tool_name not in failed_tools:
+                    failed_tools.append(tool_name)
+        return failed_tools
+    
+    def _check_tool_suitable_for_mode(self, tool_name: str, mode: str) -> Dict[str, Any]:
+        """检查工具是否适合当前模式
+        
+        Args:
+            tool_name: 工具名称
+            mode: 当前模式
+            
+        Returns:
+            包含检查结果的字典 {"suitable": bool, "reason": str}
+        """
+        mode_tool_mapping = {
+            "quick": {
+                "allowed": ["baseinfo", "portscan", "waf_detect", "cdn_detect"],
+                "description": "快速扫描模式"
+            },
+            "standard": {
+                "allowed": ["baseinfo", "portscan", "subdomain", "dirscan", "waf_detect", "cdn_detect", "cms_detect", "sqli_scan", "xss_scan"],
+                "description": "标准扫描模式"
+            },
+            "deep": {
+                "allowed": None,
+                "description": "深度扫描模式（允许所有工具）"
+            },
+            "stealth": {
+                "allowed": ["baseinfo", "subdomain", "cdn_detect"],
+                "description": "隐蔽扫描模式"
+            }
+        }
+        
+        if mode not in mode_tool_mapping:
+            return {"suitable": True, "reason": f"未知模式 '{mode}'，默认允许执行"}
+        
+        mode_config = mode_tool_mapping[mode]
+        allowed_tools = mode_config["allowed"]
+        
+        if allowed_tools is None:
+            return {"suitable": True, "reason": f"{mode_config['description']}，允许所有工具"}
+        
+        if tool_name in allowed_tools:
+            return {"suitable": True, "reason": f"工具 '{tool_name}' 适合 {mode_config['description']}"}
+        else:
+            return {
+                "suitable": False,
+                "reason": f"工具 '{tool_name}' 不适合 {mode_config['description']}，允许的工具: {', '.join(allowed_tools)}"
+            }
+    
+    def _check_tool_before_execution(self, tool_name: str, state: AgentState) -> Dict[str, Any]:
+        """工具执行前的综合检查
+        
+        Args:
+            tool_name: 工具名称
+            state: Agent状态
+            
+        Returns:
+            包含检查结果的字典 {"can_execute": bool, "reason": str, "skip": bool}
+        """
+        if tool_name in state.completed_tasks:
+            return {
+                "can_execute": False,
+                "reason": f"工具 '{tool_name}' 已在 completed_tasks 中，跳过执行",
+                "skip": True
+            }
+        
+        failed_tools = self._get_failed_tools_from_errors(state)
+        if tool_name in failed_tools:
+            return {
+                "can_execute": False,
+                "reason": f"工具 '{tool_name}' 在失败列表中，跳过执行",
+                "skip": True
+            }
+        
+        mode_check = self._check_tool_suitable_for_mode(tool_name, state.next_mode)
+        if not mode_check["suitable"]:
+            return {
+                "can_execute": False,
+                "reason": mode_check["reason"],
+                "skip": True
+            }
+        
+        return {
+            "can_execute": True,
+            "reason": f"工具 '{tool_name}' 通过所有检查，可以执行",
+            "skip": False
+        }
+    
     async def _execute_tool(self, tool_name: str, target: str, state: AgentState) -> Dict[str, Any]:
         """执行单个工具"""
-        tool = self._get_tool_by_name(tool_name)
         start_time = time.time()
+        
+        pre_check = self._check_tool_before_execution(tool_name, state)
+        if not pre_check["can_execute"]:
+            logger.warning(f"[工具检查] {pre_check['reason']}")
+            await state.send_ai_message(f"⏭️ [跳过工具] {tool_name}")
+            await state.send_ai_message(f"   • 原因: {pre_check['reason']}")
+            return {
+                "success": False,
+                "error": pre_check["reason"],
+                "data": None,
+                "execution_time": 0,
+                "skipped": True
+            }
+        
+        tool = self._get_tool_by_name(tool_name)
         
         if not tool:
             await state.send_error(f"❌ 工具 {tool_name} 不存在")
@@ -370,16 +688,292 @@ class ExecuteAnalyzeNode:
             }
         except Exception as e:
             execution_time = time.time() - start_time
-            logger.error(f"工具执行失败: {tool_name} - {str(e)}")
-            await state.send_error(f"❌ 工具执行失败: {tool_name}")
-            await state.send_error(f"   • 错误: {str(e)}")
-            await state.send_error(f"   • 耗时: {execution_time:.2f}秒")
-            return {
-                "success": False,
-                "error": str(e),
-                "data": None,
-                "execution_time": execution_time
+            error_str = str(e)
+            
+            error_info = self._analyze_error_type(error_str)
+            
+            failure_result = await self._handle_tool_failure(
+                tool_name=tool_name,
+                error_str=error_str,
+                error_info=error_info,
+                state=state,
+                execution_time=execution_time
+            )
+            
+            logger.error(f"工具执行失败: {tool_name} - {error_str} (类型: {error_info['type']})")
+            
+            return failure_result
+    
+    def _analyze_error_type(self, error_str: str) -> Dict[str, Any]:
+        """分析错误类型
+        
+        根据错误信息判断错误类型，返回错误分类和处理策略
+        
+        Args:
+            error_str: 错误信息字符串
+            
+        Returns:
+            包含错误类型、严重程度、处理策略等信息的字典
+        """
+        error_lower = error_str.lower()
+        
+        error_patterns = {
+            "network": {
+                "keywords": ["connection refused", "connection reset", "network unreachable", 
+                           "no route to host", "network error", "socket error", "connection error",
+                           "连接被拒绝", "网络不可达", "网络错误"],
+                "severity": "high",
+                "retryable": True,
+                "skip_similar": True,
+                "suggestion": "目标主机可能不可达或网络配置问题"
+            },
+            "timeout": {
+                "keywords": ["timeout", "timed out", "超时", "time out"],
+                "severity": "medium",
+                "retryable": True,
+                "skip_similar": False,
+                "suggestion": "请求超时，可能是目标响应慢或网络延迟高"
+            },
+            "permission": {
+                "keywords": ["permission denied", "access denied", "forbidden", 
+                           "unauthorized", "权限不足", "拒绝访问", "认证失败"],
+                "severity": "medium",
+                "retryable": False,
+                "skip_similar": False,
+                "suggestion": "权限不足，可能需要认证或更高的访问权限"
+            },
+            "dns": {
+                "keywords": ["dns", "name resolution", "域名解析", "resolve", 
+                           "getaddrinfo", "no such host"],
+                "severity": "high",
+                "retryable": False,
+                "skip_similar": True,
+                "suggestion": "DNS解析失败，目标域名可能不存在或DNS配置错误"
+            },
+            "ssl": {
+                "keywords": ["ssl", "tls", "certificate", "cert", "ssl error",
+                           "handshake", "加密"],
+                "severity": "low",
+                "retryable": False,
+                "skip_similar": False,
+                "suggestion": "SSL/TLS证书问题，可以尝试忽略证书验证"
+            },
+            "rate_limit": {
+                "keywords": ["rate limit", "too many requests", "429", "限流", 
+                           "频率限制", "请求过快"],
+                "severity": "medium",
+                "retryable": True,
+                "skip_similar": False,
+                "suggestion": "请求频率过高被限制，建议降低扫描速度"
+            },
+            "waf": {
+                "keywords": ["waf", "web application firewall", "blocked", 
+                           "拦截", "防火墙", "cloudflare", "安全防护"],
+                "severity": "medium",
+                "retryable": False,
+                "skip_similar": True,
+                "suggestion": "目标可能部署了WAF防护，建议先进行WAF检测"
+            },
+            "resource": {
+                "keywords": ["memory", "cpu", "resource", "内存", "资源不足",
+                           "out of memory", "资源耗尽"],
+                "severity": "high",
+                "retryable": True,
+                "skip_similar": True,
+                "suggestion": "系统资源不足，建议释放资源后重试"
+            },
+            "config": {
+                "keywords": ["config", "configuration", "配置", "setting",
+                           "invalid", "参数错误", "配置错误"],
+                "severity": "low",
+                "retryable": False,
+                "skip_similar": False,
+                "suggestion": "工具配置错误，请检查工具参数设置"
+            },
+            "target_invalid": {
+                "keywords": ["invalid url", "invalid target", "invalid host",
+                           "无效的目标", "目标格式错误", "malformed"],
+                "severity": "high",
+                "retryable": False,
+                "skip_similar": True,
+                "suggestion": "目标地址格式无效，请检查目标URL/域名"
             }
+        }
+        
+        for error_type, config in error_patterns.items():
+            for keyword in config["keywords"]:
+                if keyword in error_lower:
+                    return {
+                        "type": error_type,
+                        "severity": config["severity"],
+                        "retryable": config["retryable"],
+                        "skip_similar": config["skip_similar"],
+                        "suggestion": config["suggestion"],
+                        "original_error": error_str
+                    }
+        
+        return {
+            "type": "unknown",
+            "severity": "medium",
+            "retryable": True,
+            "skip_similar": False,
+            "suggestion": "未知错误类型，建议查看详细日志",
+            "original_error": error_str
+        }
+    
+    async def _handle_tool_failure(
+        self, 
+        tool_name: str, 
+        error_str: str, 
+        error_info: Dict[str, Any],
+        state: AgentState,
+        execution_time: float
+    ) -> Dict[str, Any]:
+        """处理工具失败
+        
+        根据错误类型选择合适的处理策略：
+        1. 将失败工具添加到errors列表
+        2. 根据错误类型决定是否跳过相似工具
+        3. 尝试选择替代工具
+        
+        Args:
+            tool_name: 失败的工具名称
+            error_str: 错误信息
+            error_info: 错误分析结果
+            state: Agent状态
+            execution_time: 执行时间
+            
+        Returns:
+            处理结果字典
+        """
+        error_type = error_info["type"]
+        severity = error_info["severity"]
+        suggestion = error_info["suggestion"]
+        
+        state.errors.append(f"{tool_name}: {error_str}")
+        
+        severity_icons = {
+            "high": "🔴",
+            "medium": "🟠",
+            "low": "🟡"
+        }
+        severity_icon = severity_icons.get(severity, "⚪")
+        
+        await state.send_error(f"❌ 工具执行失败: {tool_name}")
+        await state.send_error(f"   • 错误类型: {error_type}")
+        await state.send_error(f"   • 严重程度: {severity_icon} {severity}")
+        await state.send_error(f"   • 错误信息: {error_str[:100]}")
+        await state.send_error(f"   • 耗时: {execution_time:.2f}秒")
+        await state.send_error(f"   • 建议: {suggestion}")
+        
+        if error_info["skip_similar"]:
+            similar_tools = self._get_similar_tools(tool_name)
+            for similar_tool in similar_tools:
+                if similar_tool not in [e.split(":")[0].strip() for e in state.errors]:
+                    state.errors.append(f"{similar_tool}: 因相关工具 {tool_name} 失败而跳过")
+                    await state.send_ai_message(f"⚠️ 跳过相似工具: {similar_tool} (原因: {tool_name} 失败)")
+        
+        alternative_tools = self._get_alternative_tools(tool_name, error_type, state)
+        if alternative_tools:
+            await state.send_ai_message(f"💡 建议替代工具: {', '.join(alternative_tools[:3])}")
+        
+        result = {
+            "success": False,
+            "error": error_str,
+            "error_type": error_type,
+            "error_severity": severity,
+            "suggestion": suggestion,
+            "data": None,
+            "execution_time": execution_time,
+            "retryable": error_info["retryable"]
+        }
+        
+        return result
+    
+    def _get_similar_tools(self, tool_name: str) -> List[str]:
+        """获取相似工具列表
+        
+        根据工具名称和功能，返回可能受影响的相似工具
+        
+        Args:
+            tool_name: 工具名称
+            
+        Returns:
+            相似工具名称列表
+        """
+        tool_categories = {
+            "portscan": ["nmap_scan", "masscan_scan"],
+            "subdomain": ["subfinder", "amass_scan", "dns_enum"],
+            "dirscan": ["gobuster", "dirsearch", "ffuf"],
+            "sqli_scan": ["sqlmap"],
+            "xss_scan": ["xsser"],
+            "vuln_scan": ["nikto", "wpscan"],
+            "baseinfo": ["whatweb", "waf_detect"],
+            "waf_detect": ["cdn_detect"],
+            "cdn_detect": ["waf_detect"]
+        }
+        
+        similar = []
+        for key, related in tool_categories.items():
+            if key == tool_name:
+                similar.extend(related)
+            elif tool_name in related:
+                similar.append(key)
+                similar.extend([t for t in related if t != tool_name])
+        
+        return list(set(similar))
+    
+    def _get_alternative_tools(
+        self, 
+        failed_tool: str, 
+        error_type: str, 
+        state: AgentState
+    ) -> List[str]:
+        """获取替代工具列表
+        
+        根据失败工具和错误类型，推荐可用的替代工具
+        
+        Args:
+            failed_tool: 失败的工具名称
+            error_type: 错误类型
+            state: Agent状态
+            
+        Returns:
+            推荐的替代工具列表
+        """
+        failed_tools = set()
+        for error in state.errors:
+            if ":" in error:
+                failed_tools.add(error.split(":")[0].strip())
+        
+        alternative_map = {
+            "portscan": ["baseinfo", "subdomain", "dirscan"],
+            "subdomain": ["baseinfo", "portscan", "dirscan"],
+            "dirscan": ["baseinfo", "portscan", "vuln_scan"],
+            "sqli_scan": ["xss_scan", "csrf_scan", "vuln_scan"],
+            "xss_scan": ["sqli_scan", "csrf_scan", "vuln_scan"],
+            "vuln_scan": ["baseinfo", "portscan", "dirscan"],
+            "baseinfo": ["portscan", "subdomain", "waf_detect"],
+            "waf_detect": ["baseinfo", "cdn_detect"],
+            "cdn_detect": ["baseinfo", "waf_detect"]
+        }
+        
+        alternatives = alternative_map.get(failed_tool, ["baseinfo"])
+        
+        valid_alternatives = [
+            tool for tool in alternatives 
+            if tool not in failed_tools 
+            and tool not in state.completed_tasks
+        ]
+        
+        if error_type in ["network", "dns", "target_invalid"]:
+            network_tools = ["baseinfo", "waf_detect", "cdn_detect"]
+            valid_alternatives = [
+                tool for tool in valid_alternatives 
+                if tool in network_tools
+            ]
+        
+        return valid_alternatives
     
     async def _process_tool_calls(self, tool_calls: List[Any], state: AgentState) -> List[Dict[str, Any]]:
         """处理工具调用列表"""
@@ -516,51 +1110,59 @@ class ExecuteAnalyzeNode:
                     await state.send_ai_message(f"📋 任务进度: [{idx}/{total_tasks}] ({progress}%)")
                     await state.send_ai_message(f"════════════════════════════════════════")
                     
-                    if task not in state.completed_tasks:
-                        start_time = time.time()
-                        result = await self._execute_tool(task, state.target, state)
-                        execution_time = time.time() - start_time
+                    pre_check = self._check_tool_before_execution(task, state)
+                    if not pre_check["can_execute"]:
+                        logger.info(f"[工具检查] 跳过工具 {task}: {pre_check['reason']}")
+                        await state.send_ai_message(f"⏭️ 跳过任务: {task}")
+                        await state.send_ai_message(f"   • 原因: {pre_check['reason']}")
+                        continue
+                    
+                    start_time = time.time()
+                    result = await self._execute_tool(task, state.target, state)
+                    execution_time = time.time() - start_time
+                    
+                    if result.get("skipped"):
+                        logger.info(f"[工具执行] 工具 {task} 被跳过: {result.get('error')}")
+                        continue
+                    
+                    timestamp = datetime.now().isoformat()
+                    
+                    execution_record = {
+                        "task": task,
+                        "tool_name": task,
+                        "target": state.target,
+                        "result": result.get("data", {}),
+                        "success": result.get("success", False),
+                        "timestamp": timestamp,
+                        "execution_time": result.get("execution_time", execution_time),
+                        "error": result.get("error")
+                    }
+                    state.execution_history.append(execution_record)
+                    
+                    formatted_result = self._format_scan_result(task, state.target, result)
+                    logger.info(f"\n{formatted_result}")
+                    
+                    if result.get("success"):
+                        state.tool_results[task] = result.get("data", {})
+                        state.completed_tasks.append(task)
                         
-                        timestamp = datetime.now().isoformat()
+                        await state.send_ai_message(f"✅ 任务完成: {task}")
                         
-                        execution_record = {
-                            "task": task,
-                            "tool_name": task,
-                            "target": state.target,
-                            "result": result.get("data", {}),
-                            "success": result.get("success", False),
-                            "timestamp": timestamp,
-                            "execution_time": result.get("execution_time", execution_time),
-                            "error": result.get("error")
-                        }
-                        state.execution_history.append(execution_record)
-                        
-                        formatted_result = self._format_scan_result(task, state.target, result)
-                        logger.info(f"\n{formatted_result}")
-                        
-                        if result.get("success"):
-                            state.tool_results[task] = result.get("data", {})
-                            state.completed_tasks.append(task)
-                            
-                            await state.send_ai_message(f"✅ 任务完成: {task}")
-                            
-                            if "vulnerabilities" in result.get("data", {}):
-                                vulns = result["data"]["vulnerabilities"]
-                                if isinstance(vulns, list):
-                                    state.vulnerabilities.extend(vulns)
-                                    await state.send_ai_message(f"   • 发现漏洞: {len(vulns)} 个")
-                        else:
-                            error_msg = result.get("error", "未知错误")
-                            state.errors.append(f"{task}: {error_msg}")
-                            await state.send_error(f"❌ 任务失败: {task}")
-                            await state.send_error(f"   • 错误: {error_msg}")
-                        
-                        result_summary = self._generate_result_summary(task, result)
-                        state.append_chat_history("system", f"[扫描完成] {result_summary}")
-                        
-                        await state.send_ai_message(f"📊 任务摘要: {result_summary}")
+                        if "vulnerabilities" in result.get("data", {}):
+                            vulns = result["data"]["vulnerabilities"]
+                            if isinstance(vulns, list):
+                                state.vulnerabilities.extend(vulns)
+                                await state.send_ai_message(f"   • 发现漏洞: {len(vulns)} 个")
                     else:
-                        await state.send_ai_message(f"⏭️ 跳过已完成任务: {task}")
+                        error_msg = result.get("error", "未知错误")
+                        state.errors.append(f"{task}: {error_msg}")
+                        await state.send_error(f"❌ 任务失败: {task}")
+                        await state.send_error(f"   • 错误: {error_msg}")
+                    
+                    result_summary = self._generate_result_summary(task, result)
+                    state.append_chat_history("system", f"[扫描完成] {result_summary}")
+                    
+                    await state.send_ai_message(f"📊 任务摘要: {result_summary}")
             
             await state.send_ai_message(f"")
             await state.send_ai_message(f"🧠 [阶段2/4] 分析扫描结果...")

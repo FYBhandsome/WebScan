@@ -12,7 +12,7 @@
 - Seebug POC 搜索和下载（使用Pocsuite3内置API）
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from backend.models import VulnerabilityKB
 from tortoise.expressions import Q
@@ -22,48 +22,6 @@ import logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-class VulnerabilityKBResponse(BaseModel):
-    """
-    漏洞知识库响应模型
-    
-    Attributes:
-        id: 漏洞 ID
-        cve_id: CVE 编号
-        name: 漏洞名称
-        description: 漏洞描述
-        severity: 严重程度
-        cvss_score: CVSS 评分
-        affected_product: 受影响产品
-        solution: 解决方案
-        has_poc: 是否有 POC
-        source: 数据源
-        created_at: 创建时间
-    """
-    id: int
-    cve_id: Optional[str]
-    name: str
-    description: Optional[str]
-    severity: Optional[str]
-    cvss_score: Optional[float]
-    affected_product: Optional[str]
-    solution: Optional[str]
-    has_poc: bool
-    source: str
-    created_at: str
-
-    model_config = ConfigDict(from_attributes=True)
-
-class SyncResponse(BaseModel):
-    """
-    同步响应模型
-    
-    Attributes:
-        message: 同步消息
-        count: 同步的漏洞数量
-    """
-    message: str
-    count: int
 
 class SeebugPOCSearchRequest(BaseModel):
     """
@@ -94,19 +52,6 @@ class SeebugPOCDownloadRequest(BaseModel):
     category: str = "seebug"
     cve_id: Optional[str] = None
     vuln_name: Optional[str] = None
-
-class SeebugAPIResponse(BaseModel):
-    """
-    Seebug API 响应模型
-    
-    Attributes:
-        code: 状态码
-        message: 响应消息
-        data: 响应数据
-    """
-    code: int
-    message: str
-    data: Optional[Dict[str, Any]] = None
 
 @router.get("/vulnerabilities", response_model=Dict[str, Any])
 async def list_kb_vulnerabilities(

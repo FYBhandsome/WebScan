@@ -132,15 +132,34 @@
           <button class="btn-close" @click="showCreateModal = false">×</button>
         </div>
         <div class="modal-body">
+          <div class="task-type-filters">
+            <div class="filter-row">
+              <input
+                v-model="searchTaskType"
+                type="text"
+                placeholder="搜索任务类型..."
+                class="search-input"
+              />
+              <select v-model="selectedCategory" class="category-select">
+                <option value="">全部类别</option>
+                <option v-for="(cat, key) in taskTypeCategories" :key="key" :value="key">
+                  {{ cat.icon }} {{ cat.label }}
+                </option>
+              </select>
+            </div>
+          </div>
+
           <div class="task-type-selector">
             <button
-              v-for="type in taskTypes"
+              v-for="type in filteredTaskTypes"
               :key="type.value"
               :class="['task-type-btn', { active: selectedTaskType === type.value }]"
               @click="selectedTaskType = type.value"
+              :title="type.description"
             >
               <span class="task-type-icon">{{ type.icon }}</span>
               <span class="task-type-label">{{ type.label }}</span>
+              <span class="task-type-desc">{{ type.description }}</span>
             </button>
           </div>
 
@@ -244,15 +263,77 @@ export default {
       target: ''
     })
 
-    const taskTypes = [
-      { value: 'poc_scan', label: 'POC扫描', icon: '🔍' },
-      { value: 'awvs_scan', label: 'AWVS扫描', icon: '🛡️' },
-      { value: 'scan_dir', label: '目录扫描', icon: '📁' },
-      { value: 'scan_webside', label: '网站扫描', icon: '🌐' },
-      { value: 'scan_port', label: '端口扫描', icon: '🔌' },
-      { value: 'scan_cms', label: 'CMS识别', icon: '🔎' },
-      { value: 'scan_comprehensive', label: '综合扫描', icon: '🎯' }
+    const taskTypeCategories = {
+      info_collection: { label: '信息收集', icon: '🔍', types: [] },
+      vuln_scan: { label: '漏洞扫描', icon: '🛡️', types: [] },
+      poc_verify: { label: 'POC验证', icon: '💥', types: [] },
+      comprehensive: { label: '综合扫描', icon: '🎯', types: [] }
+    }
+
+    const allTaskTypes = [
+      { value: 'portscan', label: '端口扫描', icon: '🔌', category: 'info_collection', description: '扫描目标开放端口' },
+      { value: 'baseinfo', label: '基础信息', icon: 'ℹ️', category: 'info_collection', description: '获取网站基础信息' },
+      { value: 'webside', label: '旁站查询', icon: '🌐', category: 'info_collection', description: '查询IP旁站信息' },
+      { value: 'webweight', label: '权重查询', icon: '⚖️', category: 'info_collection', description: '查询网站权重' },
+      { value: 'iplocating', label: 'IP定位', icon: '📍', category: 'info_collection', description: 'IP地理位置定位' },
+      { value: 'cdnexist', label: 'CDN检测', icon: '☁️', category: 'info_collection', description: '检测是否使用CDN' },
+      { value: 'whatcms', label: 'CMS识别', icon: '🔎', category: 'info_collection', description: '识别CMS类型' },
+      { value: 'subdomain', label: '子域名收集', icon: '🔗', category: 'info_collection', description: '收集子域名信息' },
+      { value: 'dirscan', label: '目录扫描', icon: '📁', category: 'info_collection', description: '扫描敏感目录' },
+      { value: 'crawler', label: '网站爬虫', icon: '🕷️', category: 'info_collection', description: '爬取网站链接' },
+      { value: 'loginfo', label: '日志分析', icon: '📊', category: 'info_collection', description: '分析日志信息' },
+      { value: 'infoleak', label: '信息泄露', icon: '🔓', category: 'info_collection', description: '检测信息泄露' },
+      
+      { value: 'sqli', label: 'SQL注入', icon: '💉', category: 'vuln_scan', description: 'SQL注入漏洞扫描' },
+      { value: 'xss', label: 'XSS扫描', icon: '📜', category: 'vuln_scan', description: '跨站脚本漏洞扫描' },
+      { value: 'csrf', label: 'CSRF扫描', icon: '🔄', category: 'vuln_scan', description: '跨站请求伪造扫描' },
+      { value: 'ssrf', label: 'SSRF扫描', icon: '🌐', category: 'vuln_scan', description: '服务端请求伪造扫描' },
+      { value: 'lfi', label: 'LFI扫描', icon: '📂', category: 'vuln_scan', description: '本地文件包含扫描' },
+      { value: 'cmdi', label: '命令注入', icon: '⚡', category: 'vuln_scan', description: '命令注入漏洞扫描' },
+      { value: 'fileupload', label: '文件上传', icon: '📤', category: 'vuln_scan', description: '文件上传漏洞扫描' },
+      { value: 'weakpass', label: '弱口令', icon: '🔑', category: 'vuln_scan', description: '弱口令检测' },
+      
+      { value: 'weblogic_cve_2020_2551', label: 'WebLogic CVE-2020-2551', icon: '💥', category: 'poc_verify', description: 'WebLogic T3/IIOP反序列化' },
+      { value: 'weblogic_cve_2018_2628', label: 'WebLogic CVE-2018-2628', icon: '💥', category: 'poc_verify', description: 'WebLogic T3反序列化' },
+      { value: 'weblogic_cve_2018_2894', label: 'WebLogic CVE-2018-2894', icon: '💥', category: 'poc_verify', description: 'WebLogic未授权访问' },
+      { value: 'struts2_009', label: 'Struts2 S2-009', icon: '💥', category: 'poc_verify', description: 'Struts2 REST插件RCE' },
+      { value: 'struts2_032', label: 'Struts2 S2-032', icon: '💥', category: 'poc_verify', description: 'Struts2动态方法调用RCE' },
+      { value: 'tomcat_cve_2017_12615', label: 'Tomcat CVE-2017-12615', icon: '💥', category: 'poc_verify', description: 'Tomcat PUT任意文件写入' },
+      { value: 'jboss_cve_2017_12149', label: 'JBoss CVE-2017-12149', icon: '💥', category: 'poc_verify', description: 'JBoss反序列化漏洞' },
+      { value: 'nexus_cve_2020_10199', label: 'Nexus CVE-2020-10199', icon: '💥', category: 'poc_verify', description: 'Nexus RCE漏洞' },
+      { value: 'drupal_cve_2018_7600', label: 'Drupal CVE-2018-7600', icon: '💥', category: 'poc_verify', description: 'Drupalgeddon2 RCE' },
+      { value: 'thinkphp_rce', label: 'ThinkPHP RCE', icon: '💥', category: 'poc_verify', description: 'ThinkPHP远程代码执行' },
+      
+      { value: 'waf', label: 'WAF检测', icon: '🛡️', category: 'comprehensive', description: '检测Web应用防火墙' },
+      { value: 'comprehensive', label: '综合扫描', icon: '🎯', category: 'comprehensive', description: '综合安全扫描' },
+      { value: 'awvs_scan', label: 'AWVS扫描', icon: '🛡️', category: 'comprehensive', description: 'AWVS专业扫描' },
+      { value: 'ai_agent_scan', label: 'AI Agent扫描', icon: '🤖', category: 'comprehensive', description: 'AI智能扫描' }
     ]
+
+    allTaskTypes.forEach(type => {
+      if (taskTypeCategories[type.category]) {
+        taskTypeCategories[type.category].types.push(type)
+      }
+    })
+
+    const taskTypes = allTaskTypes
+    const selectedCategory = ref('')
+    const searchTaskType = ref('')
+
+    const filteredTaskTypes = computed(() => {
+      let types = allTaskTypes
+      if (selectedCategory.value) {
+        types = taskTypeCategories[selectedCategory.value].types
+      }
+      if (searchTaskType.value) {
+        const search = searchTaskType.value.toLowerCase()
+        types = types.filter(t => 
+          t.label.toLowerCase().includes(search) || 
+          t.description.toLowerCase().includes(search)
+        )
+      }
+      return types
+    })
 
     const totalPages = computed(() => Math.ceil(total.value / limit.value))
 
@@ -451,6 +532,11 @@ export default {
       selectedTaskType,
       newTask,
       taskTypes,
+      taskTypeCategories,
+      allTaskTypes,
+      selectedCategory,
+      searchTaskType,
+      filteredTaskTypes,
       loadTasks,
       resetFilters,
       handleCancelTask,
@@ -741,18 +827,65 @@ export default {
   padding: var(--spacing-lg);
 }
 
+.task-type-filters {
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-md);
+  background-color: #f8f9fa;
+  border-radius: var(--border-radius);
+}
+
+.filter-row {
+  display: flex;
+  gap: var(--spacing-md);
+  align-items: center;
+}
+
+.search-input {
+  flex: 1;
+  padding: 10px 14px;
+  border: 2px solid var(--border-color);
+  border-radius: var(--border-radius);
+  font-size: 14px;
+  transition: all 0.3s;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.15);
+}
+
+.category-select {
+  padding: 10px 14px;
+  border: 2px solid var(--border-color);
+  border-radius: var(--border-radius);
+  font-size: 14px;
+  background-color: #ffffff;
+  cursor: pointer;
+  transition: all 0.3s;
+  min-width: 150px;
+}
+
+.category-select:focus {
+  outline: none;
+  border-color: var(--primary-color);
+}
+
 .task-type-selector {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: var(--spacing-md);
   margin-bottom: var(--spacing-lg);
+  max-height: 400px;
+  overflow-y: auto;
+  padding: var(--spacing-sm);
 }
 
 .task-type-btn {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: var(--spacing-xs);
   padding: var(--spacing-md);
   border: 2px solid var(--border-color);
   border-radius: var(--border-radius);
@@ -760,6 +893,7 @@ export default {
   cursor: pointer;
   transition: all 0.3s;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  min-height: 100px;
 }
 
 .task-type-btn:hover {
@@ -776,14 +910,23 @@ export default {
 }
 
 .task-type-icon {
-  font-size: 2rem;
+  font-size: 1.8rem;
 }
 
 .task-type-label {
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: 0.3px;
+  text-align: center;
+}
+
+.task-type-desc {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.3;
+  margin-top: 2px;
 }
 
 .form-group {
