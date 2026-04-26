@@ -415,18 +415,14 @@ class PluginLogHandler(logging.Handler):
     
     功能：
     1. 格式化日志输出
-    2. 支持Kafka日志传输
-    3. 自动注入上下文信息
+    2. 自动注入上下文信息
     """
     
-    def __init__(self, plugin_type: str, plugin_name: str, task_id: int, 
-                 kafka_producer=None, kafka_topic: str = None):
+    def __init__(self, plugin_type: str, plugin_name: str, task_id: int):
         super().__init__()
         self.plugin_type = plugin_type
         self.plugin_name = plugin_name
         self.task_id = task_id
-        self.kafka_producer = kafka_producer
-        self.kafka_topic = kafka_topic
         self.formatter = logging.Formatter(
             '[Plugin][%(plugin_type)s][%(plugin_name)s][%(task_id)s] %(levelname)s %(message)s'
         )
@@ -437,12 +433,6 @@ class PluginLogHandler(logging.Handler):
         record.task_id = self.task_id
         
         msg = self.format(record)
-        
-        if self.kafka_producer and self.kafka_topic:
-            try:
-                self.kafka_producer.send(self.kafka_topic, msg.encode('utf-8'))
-            except Exception:
-                pass
 
 
 # ============================================================
@@ -464,7 +454,6 @@ class PluginExecutor:
         plugin_name: 插件名称
         stop_event: 停止事件
         logger: 日志记录器
-        kafka_producer: Kafka生产者
     """
     
     PLUGIN_TYPE_MAP = {
@@ -518,7 +507,6 @@ class PluginExecutor:
         
         self.stop_event = threading.Event()
         self.logger = None
-        self.kafka_producer = None
         self._start_time = None
     
     def _get_plugin_name(self) -> str:
@@ -531,29 +519,11 @@ class PluginExecutor:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / f"{self.task_id}.log"
         
-        try:
-            from kafka import KafkaProducer
-            if KafkaProducer:
-                self.kafka_producer = KafkaProducer(
-                    bootstrap_servers=['localhost:9092'],
-                    value_serializer=lambda x: x
-                )
-        except Exception as e:
-            logger.warning(f"Kafka setup failed: {e}")
-        
         self.logger = logging.getLogger(f"plugin_{self.task_id}")
         self.logger.setLevel(logging.DEBUG)
         
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setFormatter(logging.Formatter(
-            '[Plugin][%(plugin_type)s][%(plugin_name)s][%(task_id)s] %(levelname)s %(message)s'
-        ))
-        
-        plugin_handler = PluginLogHandler(
-            self.task_type, self.plugin_name, self.task_id,
-            self.kafka_producer, "agent.plugin.log"
-        )
-        plugin_handler.setFormatter(logging.Formatter(
             '[Plugin][%(plugin_type)s][%(plugin_name)s][%(task_id)s] %(levelname)s %(message)s'
         ))
         
@@ -565,7 +535,6 @@ class PluginExecutor:
         
         self.logger.logger.handlers = []
         self.logger.logger.addHandler(file_handler)
-        self.logger.logger.addHandler(plugin_handler)
     
     def heartbeat_loop(self):
         """心跳循环"""

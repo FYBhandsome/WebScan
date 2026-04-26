@@ -149,25 +149,10 @@ class TaskExecutor:
         self.worker_task = None
         self.current_execution_task = None
         
-        self.kafka_producer = None
-        self._init_kafka()
-        
         self._ensure_state_dir()
         self._persisted_tasks: Dict[int, Dict] = self._load_task_states()
         
         logger.info(f"TaskExecutor initialized with {len(self._persisted_tasks)} persisted task states")
-
-    def _init_kafka(self):
-        """初始化Kafka生产者"""
-        try:
-            if KafkaProducer:
-                self.kafka_producer = KafkaProducer(
-                    bootstrap_servers=[settings.KAFKA_BOOTSTRAP_SERVERS],
-                    value_serializer=lambda x: json.dumps(x).encode('utf-8')
-                )
-                logger.info(f"Kafka Producer initialized: {settings.KAFKA_BOOTSTRAP_SERVERS}")
-        except Exception as e:
-            logger.warning(f"Kafka setup failed: {e}")
 
     def _ensure_state_dir(self):
         """确保状态目录存在"""
@@ -373,19 +358,6 @@ class TaskExecutor:
             "type": "task_update",
             "payload": payload
         })
-        
-        # 3. MQ (agent.status.change)
-        if self.kafka_producer:
-            try:
-                msg = {
-                    "task_id": task_id,
-                    "status": status,
-                    "timestamp": time.time(),
-                    "details": details or {}
-                }
-                self.kafka_producer.send("agent.status.change", msg)
-            except Exception as e:
-                logger.error(f"Failed to send to Kafka: {e}")
 
     def start_worker(self):
         """启动后台工作协程"""
@@ -498,8 +470,7 @@ class TaskExecutor:
                 task_state_logger.log_task_started(
                     task_id=task_id,
                     task_type=task_type if 'task_type' in dir() else 'unknown',
-                    target=target,
-                    timeout=timeout
+                    target=target
                 )
                 
                 try:
@@ -2329,12 +2300,6 @@ class TaskExecutor:
             f"Task execution history: {task_type} - {status}",
             **history_entry
         )
-        
-        if self.kafka_producer:
-            try:
-                self.kafka_producer.send("agent.execution.history", history_entry)
-            except Exception as e:
-                logger.error(f"Failed to send execution history to Kafka: {e}")
 
     async def _handle_execution_error(
         self, 
@@ -2440,9 +2405,8 @@ class TaskExecutor:
         2. 停止接收新任务
         3. 取消当前运行的任务
         4. 终止所有子进程
-        5. 关闭Kafka生产者
-        6. 保存任务状态
-        7. 清理资源
+        5. 保存任务状态
+        6. 清理资源
         """
         if self.is_shutting_down:
             logger.warning("关闭流程已在进行中，跳过重复调用")
@@ -2510,22 +2474,9 @@ class TaskExecutor:
         else:
             logger.info("[3/6] 无活跃子进程，跳过")
         
-        if self.kafka_producer:
-            logger.info("[4/6] 正在关闭Kafka生产者...")
-            try:
-                self.kafka_producer.flush(timeout=5)
-                self.kafka_producer.close(timeout=5)
-                logger.info("[4/6] Kafka生产者已关闭")
-            except Exception as e:
-                logger.error(f"[4/6] 关闭Kafka生产者时发生错误: {e}")
-            finally:
-                self.kafka_producer = None
-        else:
-            logger.info("[4/6] Kafka生产者未初始化，跳过")
-        
-        logger.info("[5/6] 正在保存任务状态...")
+        logger.info("[4/6] 正在保存任务状态...")
         self._save_task_states()
-        logger.info(f"[5/6] 已保存 {len(self._persisted_tasks)} 个任务状态")
+        logger.info(f"[4/6] 已保存 {len(self._persisted_tasks)} 个任务状态")
         
         self.queued_task_ids.clear()
         self.cancelled_task_ids.clear()
@@ -2534,13 +2485,13 @@ class TaskExecutor:
         self.task_timeouts.clear()
         self.running_task_id = None
         
-        logger.info("[6/6] 正在清空任务队列...")
+        logger.info("[5/5] 正在清空任务队列...")
         while not self.queue.empty():
             try:
                 self.queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-        logger.info("[6/6] 任务队列已清空")
+        logger.info("[5/5] 任务队列已清空")
         
         logger.info("=" * 50)
         logger.info("任务执行器关闭完成")

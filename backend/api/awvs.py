@@ -1242,57 +1242,40 @@ async def generate_awvs_report(request: AWVSReportGenerateRequest, background_ta
                 
                 template_uuid = template_info["id"]
                 
-                generate_data = {
-                    "template_id": template_uuid,
-                    "source": {
-                        "list_type": "scans",
-                        "id_list": [scan_id]
-                    }
-                }
+                logger.info(f"[AWVS报告生成] 使用模板: {template_info['name']} (UUID: {template_uuid})")
                 
-                headers = {
-                    'X-Auth': client['api_key'],
-                    'content-type': 'application/json'
-                }
-                
-                report_api = f"{client['api_url']}/api/v1/reports"
-                
-                response = await asyncio.to_thread(
-                    requests.post,
-                    report_api,
-                    json=generate_data,
-                    headers=headers,
-                    verify=False,
-                    timeout=60
+                awvs_report_id = await asyncio.to_thread(
+                    awvs_report.generate,
+                    template_uuid,
+                    'scans',
+                    [scan_id]
                 )
-                
-                if response.status_code not in [200, 201]:
-                    raise Exception(f"AWVS报告生成失败: HTTP {response.status_code}")
-                
-                location = response.headers.get('Location', '')
-                awvs_report_id = location.split('/')[-1] if location else None
                 
                 if not awvs_report_id:
                     raise Exception("无法获取AWVS报告ID")
                 
                 logger.info(f"[AWVS报告生成] AWVS报告ID: {awvs_report_id}")
                 
-                await asyncio.sleep(5)
-                
-                download_url = f"{client['api_url']}/reports/download/{awvs_report_id}.{request.report_format}"
-                
-                report_response = await asyncio.to_thread(
-                    requests.get,
-                    download_url,
-                    headers=headers,
-                    verify=False,
-                    timeout=120
+                completed = await asyncio.to_thread(
+                    awvs_report.wait_for_completion,
+                    awvs_report_id,
+                    120,
+                    3
                 )
                 
-                if report_response.status_code != 200:
-                    raise Exception(f"报告下载失败: HTTP {report_response.status_code}")
+                if not completed:
+                    raise Exception("报告生成超时或失败")
                 
-                report_content = report_response.content
+                logger.info(f"[AWVS报告生成] 报告生成完成，开始下载")
+                
+                report_content = await asyncio.to_thread(
+                    awvs_report.download,
+                    awvs_report_id,
+                    request.report_format
+                )
+                
+                if not report_content:
+                    raise Exception("报告下载失败")
                 
                 reports_dir = os.path.join(settings.UPLOAD_DIR, "awvs_reports")
                 os.makedirs(reports_dir, exist_ok=True)

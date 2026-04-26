@@ -62,9 +62,6 @@ class Settings(BaseSettings):
     POC_CACHE_ENABLED: bool = True
     POC_CACHE_TTL: int = 3600
     POC_REPORT_FORMAT: str = "html"
-    
-    KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
-    KAFKA_TOPIC: str = "task_status_changes"
 
     @field_validator('AWVS_API_KEY', 'OPENAI_API_KEY', 'QWEN_API_KEY', 'SEEBUG_API_KEY', mode='before')
     @classmethod

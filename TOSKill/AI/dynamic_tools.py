@@ -1,207 +1,93 @@
 # -*- coding:utf-8 -*-
 """
-动态工具注册管理器
+动态工具创建模块
 
-提供动态工具的注册、注销和管理功能，支持从脚本代码创建工具并使用LLM分析脚本功能。
+提供从脚本代码创建工具的功能，支持使用LLM分析脚本功能。
+与 tools.py 配合使用，专注于动态脚本工具的创建和注册。
 """
 
 import logging
 import re
 import hashlib
 import asyncio
-from typing import Dict, Any, List, Callable, Optional
+import json
+from typing import Dict, Any, Callable, Optional
 from datetime import datetime
 
-from langchain.tools import tool
+from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
 
-from TOSKill.AI.agent_config import agent_config
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-class DynamicToolRegistry:
-    """动态工具注册管理器"""
+def _get_llm():
+    """获取LLM实例"""
+    return ChatOpenAI(
+        model=settings.MODEL_ID,
+        temperature=0.3,
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL
+    )
+
+
+class ToolInput(BaseModel):
+    """工具输入模型"""
+    target: str = Field(description="目标URL或IP地址")
+
+
+def _create_tool_wrapper(name: str, func: Callable, description: str) -> Any:
+    """创建工具包装器
     
-    def __init__(self):
-        self._dynamic_tools: Dict[str, Any] = {}
-        self._tool_metadata: Dict[str, Dict[str, Any]] = {}
-        self._llm = ChatOpenAI(
-            model=agent_config.MODEL_ID,
-            temperature=agent_config.TEMPERATURE,
-            api_key=agent_config.OPENAI_API_KEY,
-            base_url=agent_config.OPENAI_BASE_URL
-        )
-        logger.info("DynamicToolRegistry 初始化完成")
-    
-    def register_tool(self, name: str, func: Callable, description: str) -> bool:
-        """注册动态工具
+    Args:
+        name: 工具名称
+        func: 执行函数
+        description: 工具描述
         
-        Args:
-            name: 工具名称，需唯一
-            func: 工具执行函数
-            description: 工具描述
-            
-        Returns:
-            注册是否成功
-        """
-        if not name or not callable(func):
-            logger.error(f"注册工具失败: 无效的名称或函数")
-            return False
-        
-        if name in self._dynamic_tools:
-            logger.warning(f"工具 {name} 已存在，将覆盖")
-        
+    Returns:
+        包装后的工具对象
+    """
+    def tool_func(target: str) -> Dict[str, Any]:
+        """动态工具包装器"""
         try:
-            tool_wrapper = _create_tool_wrapper(name, func, description)
+            if asyncio.iscoroutinefunction(func):
+                try:
+                    loop = asyncio.get_running_loop()
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, func(target))
+                        result = future.result()
+                except RuntimeError:
+                    result = asyncio.run(func(target))
+            else:
+                result = func(target)
             
-            self._dynamic_tools[name] = tool_wrapper
-            self._tool_metadata[name] = {
-                "name": name,
-                "description": description,
-                "created_at": datetime.now().isoformat(),
-                "type": "dynamic"
+            if isinstance(result, dict):
+                return result
+            return {
+                "success": True,
+                "data": result,
+                "error": None,
+                "metadata": {"tool": name, "target": target}
             }
-            
-            logger.info(f"成功注册动态工具: {name}")
-            return True
-            
         except Exception as e:
-            logger.error(f"注册工具 {name} 失败: {str(e)}")
-            return False
+            return {
+                "success": False,
+                "data": None,
+                "error": str(e),
+                "metadata": {"tool": name, "target": target}
+            }
     
-    def unregister_tool(self, name: str) -> bool:
-        """注销动态工具
-        
-        Args:
-            name: 要注销的工具名称
-            
-        Returns:
-            注销是否成功
-        """
-        if name not in self._dynamic_tools:
-            logger.warning(f"工具 {name} 不存在，无法注销")
-            return False
-        
-        try:
-            del self._dynamic_tools[name]
-            del self._tool_metadata[name]
-            logger.info(f"成功注销动态工具: {name}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"注销工具 {name} 失败: {str(e)}")
-            return False
+    tool_wrapper = StructuredTool(
+        name=name,
+        description=description,
+        func=tool_func,
+        args_schema=ToolInput
+    )
     
-    def get_all_tools(self) -> List[Any]:
-        """获取所有工具（包括静态和动态）
-        
-        Returns:
-            包含静态工具和动态工具的完整列表
-        """
-        from TOSKill.tools import ALL_TOOLS
-        
-        all_tools = list(ALL_TOOLS) + list(self._dynamic_tools.values())
-        logger.debug(f"获取所有工具: {len(ALL_TOOLS)} 静态 + {len(self._dynamic_tools)} 动态 = {len(all_tools)} 总计")
-        return all_tools
-    
-    def get_tool_names(self) -> List[str]:
-        """获取所有工具名称
-        
-        Returns:
-            所有工具名称列表
-        """
-        from TOSKill.tools import get_all_tool_names
-        
-        static_names = get_all_tool_names()
-        dynamic_names = list(self._dynamic_tools.keys())
-        return static_names + dynamic_names
-    
-    def get_dynamic_tools(self) -> List[Any]:
-        """获取所有动态工具
-        
-        Returns:
-            动态工具列表
-        """
-        return list(self._dynamic_tools.values())
-    
-    def get_dynamic_tool_names(self) -> List[str]:
-        """获取所有动态工具名称
-        
-        Returns:
-            动态工具名称列表
-        """
-        return list(self._dynamic_tools.keys())
-    
-    def get_tool_by_name(self, name: str) -> Optional[Any]:
-        """根据名称获取工具
-        
-        Args:
-            name: 工具名称
-            
-        Returns:
-            工具对象，未找到返回None
-        """
-        if name in self._dynamic_tools:
-            return self._dynamic_tools[name]
-        
-        from TOSKill.tools import get_tool_by_name
-        return get_tool_by_name(name)
-    
-    def get_tool_metadata(self, name: str) -> Optional[Dict[str, Any]]:
-        """获取工具元数据
-        
-        Args:
-            name: 工具名称
-            
-        Returns:
-            工具元数据字典，未找到返回None
-        """
-        return self._tool_metadata.get(name)
-    
-    def tool_exists(self, name: str) -> bool:
-        """检查工具是否存在
-        
-        Args:
-            name: 工具名称
-            
-        Returns:
-            工具是否存在
-        """
-        if name in self._dynamic_tools:
-            return True
-        
-        from TOSKill.tools import get_tool_by_name
-        return get_tool_by_name(name) is not None
-    
-    def clear_all_dynamic_tools(self) -> int:
-        """清除所有动态工具
-        
-        Returns:
-            清除的工具数量
-        """
-        count = len(self._dynamic_tools)
-        self._dynamic_tools.clear()
-        self._tool_metadata.clear()
-        logger.info(f"已清除 {count} 个动态工具")
-        return count
-    
-    def get_tools_count(self) -> Dict[str, int]:
-        """获取工具数量统计
-        
-        Returns:
-            包含静态和动态工具数量的字典
-        """
-        from TOSKill.tools import TOOL_COUNT
-        
-        return {
-            "static": TOOL_COUNT.get("total", 0),
-            "dynamic": len(self._dynamic_tools),
-            "total": TOOL_COUNT.get("total", 0) + len(self._dynamic_tools)
-        }
-
-
-dynamic_registry = DynamicToolRegistry()
+    return tool_wrapper
 
 
 def create_tool_from_script(
@@ -280,7 +166,9 @@ def create_tool_from_script(
         result["description"] = description
         
         if auto_register:
-            dynamic_registry.register_tool(name, run_func, description)
+            from .tools import TOOL_MAP
+            TOOL_MAP[name] = tool_wrapper
+            logger.info(f"动态工具已注册: {name}")
         
         logger.info(f"成功从脚本创建工具: {name}")
         
@@ -294,66 +182,8 @@ def create_tool_from_script(
     return result
 
 
-def _create_tool_wrapper(name: str, func: Callable, description: str) -> Any:
-    """创建工具包装器
-    
-    Args:
-        name: 工具名称
-        func: 执行函数
-        description: 工具描述
-        
-    Returns:
-        包装后的工具对象
-    """
-    from langchain_core.tools import StructuredTool
-    from pydantic import BaseModel, Field
-    
-    class ToolInput(BaseModel):
-        target: str = Field(description="目标URL或IP地址")
-    
-    def tool_func(target: str) -> Dict[str, Any]:
-        """动态工具包装器"""
-        try:
-            if asyncio.iscoroutinefunction(func):
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(asyncio.run, func(target))
-                        result = future.result()
-                else:
-                    result = loop.run_until_complete(func(target))
-            else:
-                result = func(target)
-            
-            if isinstance(result, dict):
-                return result
-            return {
-                "success": True,
-                "data": result,
-                "error": None,
-                "metadata": {"tool": name, "target": target}
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "data": None,
-                "error": str(e),
-                "metadata": {"tool": name, "target": target}
-            }
-    
-    tool_wrapper = StructuredTool(
-        name=name,
-        description=description,
-        func=tool_func,
-        args_schema=ToolInput
-    )
-    
-    return tool_wrapper
-
-
-async def analyze_script_with_llm(script_code: str) -> Dict[str, Any]:
-    """使用LLM分析脚本功能
+def analyze_script_with_llm(script_code: str) -> Dict[str, Any]:
+    """使用LLM分析脚本功能（同步版本）
     
     Args:
         script_code: Python脚本代码
@@ -383,12 +213,7 @@ async def analyze_script_with_llm(script_code: str) -> Dict[str, Any]:
         return result
     
     try:
-        llm = ChatOpenAI(
-            model=agent_config.MODEL_ID,
-            temperature=0.3,
-            api_key=agent_config.OPENAI_API_KEY,
-            base_url=agent_config.OPENAI_BASE_URL
-        )
+        llm = _get_llm()
         
         prompt = f"""请分析以下Python脚本代码，并以JSON格式返回分析结果。
 
@@ -407,7 +232,7 @@ async def analyze_script_with_llm(script_code: str) -> Dict[str, Any]:
 }}
 """
         
-        response = await llm.ainvoke(prompt)
+        response = llm.invoke(prompt)
         response_text = response.content.strip()
         
         if response_text.startswith("```"):
@@ -418,7 +243,6 @@ async def analyze_script_with_llm(script_code: str) -> Dict[str, Any]:
                 lines = lines[:-1]
             response_text = "\n".join(lines)
         
-        import json
         analysis = json.loads(response_text)
         
         result["success"] = True
@@ -445,7 +269,7 @@ def register_script_as_tool(
     name: Optional[str] = None,
     description: Optional[str] = None
 ) -> Dict[str, Any]:
-    """将脚本注册为工具（同步版本）
+    """将脚本注册为工具
     
     这是一个便捷函数，结合了分析脚本和创建工具的功能。
     
@@ -459,17 +283,7 @@ def register_script_as_tool(
     """
     if not description:
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        analyze_script_with_llm(script_code)
-                    )
-                    analysis = future.result()
-            else:
-                analysis = loop.run_until_complete(analyze_script_with_llm(script_code))
+            analysis = analyze_script_with_llm(script_code)
             
             if analysis["success"]:
                 if not name and analysis.get("name"):
@@ -487,44 +301,8 @@ def register_script_as_tool(
     )
 
 
-async def register_script_as_tool_async(
-    script_code: str,
-    name: Optional[str] = None,
-    description: Optional[str] = None
-) -> Dict[str, Any]:
-    """将脚本注册为工具（异步版本）
-    
-    这是一个便捷函数，结合了分析脚本和创建工具的功能。
-    
-    Args:
-        script_code: Python脚本代码
-        name: 工具名称（可选）
-        description: 工具描述（可选）
-        
-    Returns:
-        注册结果字典
-    """
-    if not description:
-        analysis = await analyze_script_with_llm(script_code)
-        if analysis["success"]:
-            if not name and analysis.get("name"):
-                name = analysis["name"]
-            if not description and analysis.get("description"):
-                description = analysis["description"]
-    
-    return create_tool_from_script(
-        script_code=script_code,
-        name=name,
-        description=description,
-        auto_register=True
-    )
-
-
 __all__ = [
-    "DynamicToolRegistry",
-    "dynamic_registry",
     "create_tool_from_script",
     "analyze_script_with_llm",
     "register_script_as_tool",
-    "register_script_as_tool_async",
 ]

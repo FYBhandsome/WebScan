@@ -196,7 +196,7 @@ async def get_report(report_id: int):
         content_data = json.loads(report.content) if report.content else {}
         
         ai_analysis_data = None
-        if report.ai_analysis:
+        if hasattr(report, 'ai_analysis') and report.ai_analysis:
             try:
                 ai_analysis_data = json.loads(report.ai_analysis)
             except json.JSONDecodeError:
@@ -221,8 +221,10 @@ async def get_report(report_id: int):
         if ai_analysis_data:
             response_data["ai_analysis"] = ai_analysis_data
             response_data["has_ai_analysis"] = True
-            response_data["analyzed_at"] = report.analyzed_at.strftime("%Y-%m-%dT%H:%M:%SZ") if report.analyzed_at else None
-            response_data["analysis_model"] = report.analysis_model
+            if hasattr(report, 'analyzed_at'):
+                response_data["analyzed_at"] = report.analyzed_at.strftime("%Y-%m-%dT%H:%M:%SZ") if report.analyzed_at else None
+            if hasattr(report, 'analysis_model'):
+                response_data["analysis_model"] = report.analysis_model
         else:
             response_data["has_ai_analysis"] = False
         

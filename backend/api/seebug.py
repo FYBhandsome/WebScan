@@ -46,7 +46,7 @@ class StandardResponse(BaseModel):
     message: str
 
 
-def create_response(code: int = 200, data: Any = None, message: str = "操作成功") -> Dict[str, Any]:
+def create_response(code: int = 200, data: Any = None, message: str = "操作成功") -> StandardResponse:
     """
     创建统一格式的响应
     
@@ -56,13 +56,13 @@ def create_response(code: int = 200, data: Any = None, message: str = "操作成
         message: 响应消息
         
     Returns:
-        统一格式的响应字典
+        统一格式的响应对象
     """
-    return {
-        "code": code,
-        "data": data,
-        "message": message
-    }
+    return StandardResponse(
+        code=code,
+        data=data,
+        message=message
+    )
 
 
 @router.get("/status", response_model=StandardResponse, summary="获取 Seebug API 状态")
@@ -83,14 +83,10 @@ async def get_status():
                 message="获取状态成功"
             )
         
-        loop = asyncio.get_event_loop()
-        status = await loop.run_in_executor(
-            None,
-            seebug_utils.validate_api_key
-        )
+        status = await seebug_utils.validate_api_key()
         
-        available = status.get("status") == "success"
-        message = status.get("msg", "")
+        available = status.success
+        message = status.message
         
         return create_response(
             code=200,
@@ -168,18 +164,18 @@ async def test_connection():
                 message="测试连接完成"
             )
         
-        loop = asyncio.get_event_loop()
-        status = await loop.run_in_executor(
-            None,
-            seebug_utils.validate_api_key
-        )
+        status = await seebug_utils.validate_api_key()
         
         return create_response(
             code=200,
             data={
-                "success": status.get("status") == "success",
-                "message": status.get("msg", ""),
-                "data": status
+                "success": status.success,
+                "message": status.message,
+                "data": {
+                    "success": status.success,
+                    "message": status.message,
+                    "status_code": status.status_code
+                }
             },
             message="测试连接完成"
         )

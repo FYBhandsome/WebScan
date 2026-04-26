@@ -1,638 +1,630 @@
 """
-LangGraph 多子图架构 - WebSocket版本
+TOSKill AI 工作流图定义
 
-实现三个子图：
+类比 demo.py，使用 LangGraph 构建三个子图：
 1. 信息收集子图 (InfoCollectionGraph)
-2. 漏洞扫描子图 (VulnScanGraph)  
+2. 漏洞扫描子图 (VulnScanGraph)
 3. 报告生成子图 (ReportGraph)
 
-所有子图支持WebSocket实时通信，每一步执行结果都返回给前端。
-支持记忆化集成，可在执行过程中保存和恢复状态。
+使用 LangGraph interrupt 机制实现用户交互暂停/恢复。
 """
 import logging
 import asyncio
-from typing import Dict, Any, Optional, Callable, Awaitable, List
+from typing import Dict, Optional, Callable, List, Any
 from datetime import datetime
-from enum import Enum
 
 from langgraph.graph import StateGraph, END
+from langgraph.types import interrupt, Command
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_openai import ChatOpenAI
 
-from .state import AgentState
-from .nodes import (
-    AIDecisionNode,
-    UserInteractNode,
-    ExecuteAnalyzeNode,
-    ChatNegotiateNode,
-    ScriptToolNode,
-    VulnerabilityAnalysisNode,
-    ReportGenerationNode
-)
-from .memory.session_memory import get_memory_manager
+from .state import ScanState, create_initial_state, append_chat, update_state
+from .tools import get_tool_by_name, get_tool_sequence
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
 
-class AgentGraph:
-    """Agent主图 - WebSocket版本，支持记忆化集成"""
+def get_llm():
+    """获取LLM实例"""
+    return ChatOpenAI(
+        model=settings.MODEL_ID,
+        temperature=0.1,
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL
+    )
+
+
+class MemoryStore:
+    """记忆化存储 - 类比 demo.py 的 chat_history"""
     
-    def __init__(self):
-        self.decision_node = AIDecisionNode()
-        self.user_interact_node = UserInteractNode()
-        self.execute_node = ExecuteAnalyzeNode()
-        self.chat_node = ChatNegotiateNode()
-        self.script_node = ScriptToolNode()
-        self.vuln_analysis_node = VulnerabilityAnalysisNode()
-        self.report_node = ReportGenerationNode()
-        
-        self.graph = self._build_graph()
-        self._memory_manager = get_memory_manager()
-        logger.info("Agent主图初始化完成 (WebSocket模式 + 记忆化支持)")
+    _instance = None
+    _sessions: Dict[str, ScanState] = {}
+    _chat_histories: Dict[str, List[Dict]] = {}
+    _pending_interactions: Dict[str, Dict] = {}
+    _websocket_callbacks: Dict[str, Callable] = {}
     
-    def _build_graph(self) -> StateGraph:
-        """构建主图"""
-        workflow = StateGraph(AgentState)
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+    
+    def save_session(self, session_id: str, state: ScanState):
+        """保存会话状态"""
+        self._sessions[session_id] = state
+        logger.debug(f"保存会话状态: {session_id}")
+    
+    def get_session(self, session_id: str) -> Optional[ScanState]:
+        """获取会话状态"""
+        return self._sessions.get(session_id)
+    
+    def delete_session(self, session_id: str):
+        """删除会话"""
+        self._sessions.pop(session_id, None)
+        self._chat_histories.pop(session_id, None)
+        self._pending_interactions.pop(session_id, None)
+        self._websocket_callbacks.pop(session_id, None)
+    
+    def append_chat(self, session_id: str, role: str, content: str):
+        """追加聊天历史"""
+        if session_id not in self._chat_histories:
+            self._chat_histories[session_id] = []
+        self._chat_histories[session_id].append({
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat()
+        })
+    
+    def get_chat_history(self, session_id: str) -> List[Dict]:
+        """获取聊天历史"""
+        return self._chat_histories.get(session_id, [])
+    
+    def set_pending_interaction(self, session_id: str, interaction_data: Dict):
+        """设置待处理的交互请求"""
+        self._pending_interactions[session_id] = interaction_data
+    
+    def get_pending_interaction(self, session_id: str) -> Optional[Dict]:
+        """获取待处理的交互请求"""
+        return self._pending_interactions.get(session_id)
+    
+    def clear_pending_interaction(self, session_id: str):
+        """清除待处理的交互请求"""
+        self._pending_interactions.pop(session_id, None)
+    
+    def set_websocket_callback(self, session_id: str, callback: Callable):
+        """设置 WebSocket 回调函数"""
+        self._websocket_callbacks[session_id] = callback
+    
+    def get_websocket_callback(self, session_id: str) -> Optional[Callable]:
+        """获取 WebSocket 回调函数"""
+        return self._websocket_callbacks.get(session_id)
+    
+    def has_pending_interaction(self, session_id: str) -> bool:
+        """检查是否有待处理的交互"""
+        return session_id in self._pending_interactions
+
+
+memory_store = MemoryStore.get_instance()
+
+
+async def ai_decision(state: ScanState) -> ScanState:
+    """原子1: AI智能决策"""
+    logger.info(f"[{state.get('task_id')}] AI决策节点开始执行")
+    
+    session_id = state.get("websocket_session_id") or state.get("task_id")
+    done = list(state.get("tool_results", {}).keys())
+    mode = state.get("mode", "full_scan")
+    tool_sequence = get_tool_sequence(mode)
+    
+    for t in tool_sequence:
+        if t not in done:
+            logger.info(f"✅ 分配任务：{t}")
+            
+            ws_callback = memory_store.get_websocket_callback(session_id)
+            if ws_callback:
+                try:
+                    await ws_callback({
+                        "type": "ai_decision",
+                        "payload": {
+                            "next_task": t,
+                            "completed_tasks": done,
+                            "total_tasks": len(tool_sequence),
+                            "progress": f"{len(done)}/{len(tool_sequence)}"
+                        }
+                    })
+                except Exception as e:
+                    logger.error(f"WebSocket推送失败: {e}")
+            
+            return update_state(state, next_task=t, need_generate_script=False)
+    
+    logger.info("✅ 所有扫描任务已完成！")
+    
+    ws_callback = memory_store.get_websocket_callback(session_id)
+    if ws_callback:
+        try:
+            await ws_callback({
+                "type": "ai_decision_complete",
+                "payload": {
+                    "completed_tasks": done,
+                    "total_tasks": len(tool_sequence)
+                }
+            })
+        except Exception as e:
+            logger.error(f"WebSocket推送失败: {e}")
+    
+    return update_state(state, next_task="end", need_generate_script=False)
+
+
+async def user_interact(state: ScanState) -> ScanState:
+    """原子2: 用户交互 - 使用 interrupt 实现暂停等待"""
+    logger.info(f"[{state.get('task_id')}] 用户交互节点")
+    
+    next_task = state.get("next_task", "")
+    mode = state.get("mode", "full_scan")
+    target = state.get("target", "")
+    session_id = state.get("websocket_session_id") or state.get("task_id")
+    
+    if next_task == "end":
+        return state
+    
+    interaction_data = {
+        "type": "interaction_required",
+        "session_id": session_id,
+        "next_task": next_task,
+        "target": target,
+        "mode": mode,
+        "completed_tasks": state.get("completed_tasks", []),
+        "options": [
+            {"key": "1", "label": "执行", "description": f"执行任务: {next_task}"},
+            {"key": "2", "label": "停止", "description": "停止扫描并生成报告"},
+            {"key": "3", "label": "聊天", "description": "与 AI 助手对话"}
+        ]
+    }
+    
+    logger.info(f"🎯 目标：{target} | 模式：{mode} | 下一个任务：{next_task}")
+    logger.info("[1]执行 [2]停止 [3]聊天")
+    
+    memory_store.set_pending_interaction(session_id, interaction_data)
+    
+    ws_callback = memory_store.get_websocket_callback(session_id)
+    if ws_callback:
+        try:
+            await ws_callback(interaction_data)
+        except Exception as e:
+            logger.error(f"WebSocket 回调失败: {e}")
+    
+    user_choice = interrupt(interaction_data)
+    
+    memory_store.clear_pending_interaction(session_id)
+    
+    logger.info(f"👤 用户选择: {user_choice}")
+    
+    return update_state(state, user_choice=user_choice)
+
+
+async def execute_task(state: ScanState) -> ScanState:
+    """原子3: 执行任务"""
+    logger.info(f"[{state.get('task_id')}] 执行任务节点")
+    
+    task = state.get("next_task", "")
+    if task == "end" or task == "":
+        return state
+    
+    target = state.get("target", "")
+    session_id = state.get("websocket_session_id") or state.get("task_id")
+    ws_callback = memory_store.get_websocket_callback(session_id)
+    
+    tool = get_tool_by_name(task)
+    
+    if not tool:
+        logger.warning(f"工具 {task} 不存在")
+        if ws_callback:
+            await ws_callback({
+                "type": "task_error",
+                "payload": {"tool": task, "error": f"工具 {task} 不存在"}
+            })
+        return update_state(state, errors=state.get("errors", []) + [f"工具 {task} 不存在"])
+    
+    if ws_callback:
+        try:
+            await ws_callback({
+                "type": "task_started",
+                "payload": {"tool": task, "target": target}
+            })
+        except Exception as e:
+            logger.error(f"WebSocket推送失败: {e}")
+    
+    try:
+        res = tool.invoke(target)
+        logger.info(f"📊 【{task}】结果：{res}")
         
-        workflow.add_node("ai_decision", self.decision_node)
-        workflow.add_node("user_interact", self.user_interact_node)
-        workflow.add_node("execute", self.execute_node)
-        workflow.add_node("chat", self.chat_node)
-        workflow.add_node("script", self.script_node)
-        workflow.add_node("vuln_analysis", self.vuln_analysis_node)
-        workflow.add_node("report", self.report_node)
+        llm = get_llm()
+        analysis = llm.invoke(f"用1-2句话简要分析这个扫描结果的关键发现：{str(res)[:500]}").content
+        logger.info(f"🧾 分析：{analysis}")
         
-        workflow.set_entry_point("ai_decision")
+        if ws_callback:
+            try:
+                await ws_callback({
+                    "type": "task_completed",
+                    "payload": {
+                        "tool": task,
+                        "result_summary": str(res)[:300] if res else "无结果",
+                        "analysis": analysis,
+                        "vulnerable": isinstance(res, dict) and res.get("vulnerable", False)
+                    }
+                })
+            except Exception as e:
+                logger.error(f"WebSocket推送失败: {e}")
         
-        workflow.add_conditional_edges(
-            "ai_decision",
-            self._decision_router,
+        new_state = append_chat(state, "system", f"任务：{task}\n结果：{res}\n分析：{analysis}")
+        tool_results = state.get("tool_results", {}).copy()
+        tool_results[task] = res
+        
+        completed_tasks = state.get("completed_tasks", []).copy()
+        completed_tasks.append(task)
+        
+        return update_state(new_state, tool_results=tool_results, completed_tasks=completed_tasks)
+        
+    except Exception as e:
+        logger.error(f"执行任务失败: {e}")
+        if ws_callback:
+            try:
+                await ws_callback({
+                    "type": "task_error",
+                    "payload": {"tool": task, "error": str(e)}
+                })
+            except Exception as we:
+                logger.error(f"WebSocket推送失败: {we}")
+        return update_state(state, errors=state.get("errors", []) + [f"{task}: {str(e)}"])
+
+
+async def chat(state: ScanState) -> ScanState:
+    """原子4: 聊天"""
+    logger.info(f"[{state.get('task_id')}] 聊天节点")
+    
+    session_id = state.get("websocket_session_id") or state.get("task_id")
+    ws_callback = memory_store.get_websocket_callback(session_id)
+    
+    llm = get_llm()
+    user_name = state.get("user_name", "用户")
+    chat_summary = state.get("chat_summary", "无")
+    task_history = state.get("completed_tasks", [])
+    target = state.get("target", "")
+    
+    prompt = f"""你是安全助手，用户：{user_name}
+聊天总结：{chat_summary}
+任务历史：{task_history}
+目标：{target}
+自然简洁回复。"""
+    
+    ai_msg = llm.invoke(prompt).content
+    logger.info(f"🤖 AI：{ai_msg}")
+    
+    if ws_callback:
+        try:
+            await ws_callback({
+                "type": "ai_chat",
+                "payload": {"content": ai_msg, "context": "scan_assistant"}
+            })
+        except Exception as e:
+            logger.error(f"WebSocket推送失败: {e}")
+    
+    new_state = append_chat(state, "assistant", ai_msg)
+    return update_state(new_state, chat_summary=ai_msg[:200])
+
+
+async def script_manager(state: ScanState) -> ScanState:
+    """原子5: 脚本管理"""
+    logger.info(f"[{state.get('task_id')}] 脚本管理节点")
+    
+    user_choice = state.get("user_choice", "")
+    
+    if user_choice == "4":
+        logger.info("📁 脚本上传功能")
+    elif user_choice == "5":
+        logger.info("🔧 脚本生成功能")
+    
+    return update_state(state, need_generate_script=False)
+
+
+async def report_generation(state: ScanState) -> ScanState:
+    """原子6: 报告生成 - 使用AI分析并保存报告到文件"""
+    logger.info(f"[{state.get('task_id')}] 报告生成节点")
+    
+    tool_results = state.get("tool_results", {})
+    vulnerabilities = state.get("vulnerabilities", [])
+    target = state.get("target", "")
+    session_id = state.get("websocket_session_id") or state.get("task_id", "unknown")
+    ws_callback = memory_store.get_websocket_callback(session_id)
+    
+    if not tool_results:
+        if ws_callback:
+            await ws_callback({
+                "type": "report_error",
+                "payload": {"error": "无扫描结果"}
+            })
+        return update_state(state, is_complete=True, report="无扫描结果")
+    
+    scan_summary = {
+        "timestamp": datetime.now().isoformat(),
+        "tool_count": len(tool_results),
+        "vulnerability_count": len(vulnerabilities)
+    }
+    
+    if ws_callback:
+        try:
+            await ws_callback({
+                "type": "report_generation_started",
+                "payload": {
+                    "session_id": session_id,
+                    "tool_count": len(tool_results),
+                    "vulnerability_count": len(vulnerabilities)
+                }
+            })
+        except Exception as e:
+            logger.error(f"WebSocket推送失败: {e}")
+    
+    try:
+        from ..tools.report.report_manager import get_report_manager
+        report_manager = get_report_manager()
+        
+        chat_history = memory_store.get_chat_history(session_id)
+        task_history = [
             {
-                "execute": "user_interact",
-                "chat": "chat",
-                "script": "script",
-                "report": "report"
+                "tool": task, 
+                "result_summary": str(state.get("tool_results", {}).get(task, ""))[:200]
+            }
+            for task in state.get("completed_tasks", [])
+        ]
+        
+        report = await report_manager.generate_ai_report_content_async(
+            tool_results=tool_results,
+            vulnerabilities=vulnerabilities,
+            target=target,
+            chat_history=chat_history,
+            task_history=task_history
+        )
+        
+        report_info = report_manager.save_report(
+            session_id=session_id,
+            content=report,
+            metadata={
+                "target": target,
+                "tool_results": tool_results,
+                "vulnerabilities": vulnerabilities,
+                "scan_summary": scan_summary,
+                "chat_history_count": len(chat_history),
+                "task_history_count": len(task_history)
             }
         )
         
-        workflow.add_edge("user_interact", "execute")
-        workflow.add_edge("execute", "vuln_analysis")
-        workflow.add_edge("vuln_analysis", "ai_decision")
-        workflow.add_edge("chat", "ai_decision")
-        workflow.add_edge("script", "ai_decision")
-        workflow.add_edge("report", END)
+        logger.info(f"报告已保存: {report_info.get('download_url')}")
         
-        return workflow.compile()
+        if ws_callback:
+            try:
+                await ws_callback({
+                    "type": "report_generated",
+                    "payload": {
+                        "report_url": report_info.get("download_url", ""),
+                        "report_id": report_info.get("report_id", ""),
+                        "report_preview": report[:500] if report else ""
+                    }
+                })
+            except Exception as e:
+                logger.error(f"WebSocket推送失败: {e}")
+        
+        return update_state(
+            state, 
+            is_complete=True, 
+            report=report, 
+            scan_summary=scan_summary,
+            report_url=report_info.get("download_url", ""),
+            report_id=report_info.get("report_id", "")
+        )
+    except Exception as e:
+        logger.error(f"保存报告失败: {e}")
+        if ws_callback:
+            try:
+                await ws_callback({
+                    "type": "report_error",
+                    "payload": {"error": str(e)}
+                })
+            except Exception as we:
+                logger.error(f"WebSocket推送失败: {we}")
+        return update_state(state, is_complete=True, report="报告生成失败", scan_summary=scan_summary)
+
+
+def router(state: ScanState) -> str:
+    """路由决策"""
+    next_task = state.get("next_task", "")
+    need_generate_script = state.get("need_generate_script", False)
+    user_choice = state.get("user_choice", "")
     
-    def _decision_router(self, state: AgentState) -> str:
-        """决策路由"""
-        if state.is_complete:
-            return "report"
-        
-        if state.need_generate_script:
-            return "script"
-        
-        if state.planned_tasks:
-            return "execute"
-        
+    if next_task == "end":
+        return "report_generation"
+    
+    if need_generate_script:
+        return "script_manager"
+    
+    c = user_choice
+    if c == "1":
+        return "execute_task"
+    if c == "2":
+        return "report_generation"
+    if c == "3":
         return "chat"
+    if c in ["4", "5"]:
+        return "script_manager"
     
-    async def run(self, state: AgentState) -> AgentState:
-        """
-        运行图 - 支持记忆化集成
-        
-        执行流程：
-        1. 保存初始状态到记忆
-        2. 执行图
-        3. 保存最终状态到记忆
-        """
-        logger.info(f"[{state.task_id}] 开始运行Agent图")
-        
-        session_id = state.websocket_session_id or state.task_id
-        
-        self._save_state_to_memory(session_id, state, "initial")
-        
-        state.set_workflow_running()
-        
-        try:
-            result = await self.graph.ainvoke(state)
-            state.set_workflow_completed()
-            
-            self._save_state_to_memory(session_id, state, "final")
-            
-            self._memory_manager.add_message(
-                session_id, 
-                "system", 
-                f"任务完成: {state.task_id}",
-                {"status": "completed", "target": state.target}
-            )
-            
-            logger.info(f"[{state.task_id}] Agent图运行完成")
-            return result
-        except Exception as e:
-            logger.error(f"[{state.task_id}] Agent图运行失败: {e}")
-            state.set_workflow_failed(str(e))
-            
-            self._save_state_to_memory(session_id, state, "failed")
-            
-            self._memory_manager.add_message(
-                session_id,
-                "system",
-                f"任务失败: {str(e)}",
-                {"status": "failed", "error": str(e)}
-            )
-            raise
-    
-    def _save_state_to_memory(self, session_id: str, state: AgentState, checkpoint_type: str):
-        """
-        保存状态到记忆
-        
-        Args:
-            session_id: 会话ID
-            state: Agent状态
-            checkpoint_type: 检查点类型 (initial/intermediate/final/failed)
-        """
-        try:
-            state_data = state.to_dict()
-            state_data["_checkpoint"] = {
-                "type": checkpoint_type,
-                "timestamp": datetime.now().isoformat(),
-                "task_id": state.task_id
-            }
-            
-            self._memory_manager.save_session(session_id, state_data)
-            logger.debug(f"[{state.task_id}] 状态已保存到记忆: {checkpoint_type}")
-        except Exception as e:
-            logger.warning(f"[{state.task_id}] 保存状态到记忆失败: {e}")
+    return "user_interact"
 
 
 class InfoCollectionGraph:
     """信息收集子图"""
     
-    def __init__(self):
-        self.decision_node = AIDecisionNode()
-        self.user_interact_node = UserInteractNode()
-        self.execute_node = ExecuteAnalyzeNode()
-        self.chat_node = ChatNegotiateNode()
+    @staticmethod
+    def build() -> StateGraph:
+        workflow = StateGraph(ScanState)
         
-        self.graph = self._build_graph()
-        logger.info("信息收集子图初始化完成")
-    
-    def _build_graph(self) -> StateGraph:
-        """构建信息收集子图"""
-        workflow = StateGraph(AgentState)
+        workflow.add_node("ai_decision", ai_decision)
+        workflow.add_node("user_interact", user_interact)
+        workflow.add_node("execute_task", execute_task)
+        workflow.add_node("chat", chat)
+        workflow.add_node("script_manager", script_manager)
+        workflow.add_node("report_generation", report_generation)
         
-        workflow.add_node("decision", self.decision_node)
-        workflow.add_node("user_interact", self.user_interact_node)
-        workflow.add_node("execute", self.execute_node)
-        workflow.add_node("chat", self.chat_node)
+        workflow.set_entry_point("ai_decision")
+        workflow.add_edge("ai_decision", "user_interact")
+        workflow.add_conditional_edges("user_interact", router)
+        workflow.add_edge("execute_task", "ai_decision")
+        workflow.add_edge("chat", "ai_decision")
+        workflow.add_edge("script_manager", "ai_decision")
+        workflow.add_edge("report_generation", END)
         
-        workflow.set_entry_point("decision")
-        
-        workflow.add_conditional_edges(
-            "decision",
-            self._info_router,
-            {
-                "execute": "user_interact",
-                "chat": "chat",
-                "end": END
-            }
-        )
-        
-        workflow.add_edge("user_interact", "execute")
-        workflow.add_edge("execute", "decision")
-        workflow.add_edge("chat", "decision")
-        
-        return workflow.compile()
-    
-    def _info_router(self, state: AgentState) -> str:
-        """信息收集路由"""
-        if state.is_complete or len(state.completed_tasks) >= 5:
-            return "end"
-        
-        if state.planned_tasks:
-            return "execute"
-        
-        return "chat"
-    
-    async def run(self, state: AgentState) -> AgentState:
-        """运行信息收集子图"""
-        logger.info(f"[{state.task_id}] 开始运行信息收集子图")
-        
-        await state.broadcast_progress("planning", 10, "开始信息收集阶段", "info_collection_start")
-        
-        try:
-            result = await self.graph.ainvoke(state)
-            await state.broadcast_progress("planning", 100, "信息收集完成", "info_collection_complete")
-            return result
-        except Exception as e:
-            logger.error(f"信息收集子图运行失败: {e}")
-            await state.send_error(f"信息收集失败: {str(e)}")
-            raise
+        return workflow.compile(checkpointer=MemorySaver())
 
 
 class VulnScanGraph:
     """漏洞扫描子图"""
     
-    def __init__(self):
-        self.decision_node = AIDecisionNode()
-        self.user_interact_node = UserInteractNode()
-        self.execute_node = ExecuteAnalyzeNode()
-        self.vuln_analysis_node = VulnerabilityAnalysisNode()
+    @staticmethod
+    def build() -> StateGraph:
+        workflow = StateGraph(ScanState)
         
-        self.graph = self._build_graph()
-        logger.info("漏洞扫描子图初始化完成")
-    
-    def _build_graph(self) -> StateGraph:
-        """构建漏洞扫描子图"""
-        workflow = StateGraph(AgentState)
+        workflow.add_node("ai_decision", ai_decision)
+        workflow.add_node("user_interact", user_interact)
+        workflow.add_node("execute_task", execute_task)
+        workflow.add_node("chat", chat)
+        workflow.add_node("report_generation", report_generation)
         
-        workflow.add_node("decision", self.decision_node)
-        workflow.add_node("user_interact", self.user_interact_node)
-        workflow.add_node("execute", self.execute_node)
-        workflow.add_node("vuln_analysis", self.vuln_analysis_node)
+        workflow.set_entry_point("ai_decision")
+        workflow.add_edge("ai_decision", "user_interact")
+        workflow.add_conditional_edges("user_interact", router)
+        workflow.add_edge("execute_task", "ai_decision")
+        workflow.add_edge("chat", "ai_decision")
+        workflow.add_edge("report_generation", END)
         
-        workflow.set_entry_point("decision")
-        
-        workflow.add_conditional_edges(
-            "decision",
-            self._vuln_router,
-            {
-                "execute": "user_interact",
-                "analyze": "vuln_analysis",
-                "end": END
-            }
-        )
-        
-        workflow.add_edge("user_interact", "execute")
-        workflow.add_edge("execute", "decision")
-        workflow.add_edge("vuln_analysis", END)
-        
-        return workflow.compile()
-    
-    def _vuln_router(self, state: AgentState) -> str:
-        """漏洞扫描路由"""
-        if state.is_complete:
-            return "end"
-        
-        if len(state.vulnerabilities) > 0 and not state.planned_tasks:
-            return "analyze"
-        
-        if state.planned_tasks:
-            return "execute"
-        
-        return "end"
-    
-    async def run(self, state: AgentState) -> AgentState:
-        """运行漏洞扫描子图"""
-        logger.info(f"[{state.task_id}] 开始运行漏洞扫描子图")
-        
-        await state.broadcast_progress("tool_execution", 10, "开始漏洞扫描阶段", "vuln_scan_start")
-        
-        try:
-            result = await self.graph.ainvoke(state)
-            await state.broadcast_progress("tool_execution", 100, "漏洞扫描完成", "vuln_scan_complete")
-            return result
-        except Exception as e:
-            logger.error(f"漏洞扫描子图运行失败: {e}")
-            await state.send_error(f"漏洞扫描失败: {str(e)}")
-            raise
+        return workflow.compile(checkpointer=MemorySaver())
 
 
 class ReportGraph:
     """报告生成子图"""
     
-    def __init__(self):
-        self.report_node = ReportGenerationNode()
+    @staticmethod
+    def build() -> StateGraph:
+        workflow = StateGraph(ScanState)
         
-        self.graph = self._build_graph()
-        logger.info("报告生成子图初始化完成")
-    
-    def _build_graph(self) -> StateGraph:
-        """构建报告生成子图"""
-        workflow = StateGraph(AgentState)
+        workflow.add_node("report_generation", report_generation)
         
-        workflow.add_node("report", self.report_node)
-        
-        workflow.set_entry_point("report")
-        workflow.add_edge("report", END)
+        workflow.set_entry_point("report_generation")
+        workflow.add_edge("report_generation", END)
         
         return workflow.compile()
-    
-    async def run(self, state: AgentState) -> AgentState:
-        """运行报告生成子图"""
-        logger.info(f"[{state.task_id}] 开始运行报告生成子图")
-        
-        await state.broadcast_progress("report", 10, "开始生成报告", "report_start")
-        
-        try:
-            result = await self.graph.ainvoke(state)
-            await state.broadcast_progress("report", 100, "报告生成完成", "report_complete")
-            return result
-        except Exception as e:
-            logger.error(f"报告生成子图运行失败: {e}")
-            await state.send_error(f"报告生成失败: {str(e)}")
-            raise
-
-
-class ExecutionStage(Enum):
-    """执行阶段枚举"""
-    INITIAL = "initial"
-    INFO_COLLECTION = "info_collection"
-    VULN_SCAN = "vuln_scan"
-    REPORT = "report"
-    COMPLETED = "completed"
-    FAILED = "failed"
 
 
 class AgentOrchestrator:
-    """
-    Agent编排器 - 管理多个子图的执行，支持记忆化集成
-    
-    功能特性：
-    - 子图执行后保存中间状态到记忆
-    - 支持从记忆恢复状态继续执行
-    - 会话管理功能
-    """
+    """Agent编排器 - 管理多个子图的执行，支持暂停/恢复"""
     
     def __init__(self):
-        self.info_graph = InfoCollectionGraph()
-        self.vuln_graph = VulnScanGraph()
-        self.report_graph = ReportGraph()
-        
-        self._active_states: Dict[str, AgentState] = {}
-        self._memory_manager = get_memory_manager()
-        self._session_stages: Dict[str, ExecutionStage] = {}
-        logger.info("Agent编排器初始化完成 (支持记忆化)")
+        self.info_graph = InfoCollectionGraph.build()
+        self.vuln_graph = VulnScanGraph.build()
+        self.report_graph = ReportGraph.build()
+        self._running_tasks: Dict[str, asyncio.Task] = {}
+        logger.info("Agent编排器初始化完成")
     
-    async def run_full_scan(self, state: AgentState) -> AgentState:
-        """
-        运行完整扫描流程 - 支持记忆化集成
+    def set_websocket_callback(self, session_id: str, callback: Callable):
+        """设置 WebSocket 回调"""
+        memory_store.set_websocket_callback(session_id, callback)
+    
+    def resume_workflow(self, session_id: str, user_choice: str) -> bool:
+        """恢复暂停的工作流"""
+        state = memory_store.get_session(session_id)
+        if not state:
+            logger.warning(f"会话 {session_id} 不存在")
+            return False
         
-        执行流程：
-        1. 保存初始状态
-        2. 执行信息收集子图 -> 保存中间状态
-        3. 执行漏洞扫描子图 -> 保存中间状态
-        4. 执行报告生成子图 -> 保存最终状态
-        """
-        logger.info(f"[{state.task_id}] 开始完整扫描流程")
+        state = update_state(state, user_choice=user_choice)
+        memory_store.save_session(session_id, state)
         
-        session_id = state.websocket_session_id or state.task_id
-        self._active_states[state.task_id] = state
-        self._session_stages[state.task_id] = ExecutionStage.INITIAL
+        logger.info(f"工作流 {session_id} 已恢复，用户选择: {user_choice}")
+        return True
+    
+    def get_pending_interaction(self, session_id: str) -> Optional[Dict]:
+        """获取待处理的交互请求"""
+        return memory_store.get_pending_interaction(session_id)
+    
+    def has_pending_interaction(self, session_id: str) -> bool:
+        """检查是否有待处理的交互"""
+        return memory_store.has_pending_interaction(session_id)
+    
+    async def run_full_scan(self, state: ScanState, websocket_callback: Callable = None) -> ScanState:
+        """运行完整扫描流程"""
+        logger.info(f"[{state.get('task_id')}] 开始完整扫描流程")
         
-        self._save_checkpoint(session_id, state, ExecutionStage.INITIAL)
+        session_id = state.get("websocket_session_id") or state.get("task_id")
+        memory_store.save_session(session_id, state)
+        
+        if websocket_callback:
+            memory_store.set_websocket_callback(session_id, websocket_callback)
         
         try:
-            await state.send_ai_message(f"开始对目标 {state.target} 进行安全扫描...")
-            
-            state = await self.info_graph.run(state)
-            self._session_stages[state.task_id] = ExecutionStage.INFO_COLLECTION
-            self._save_checkpoint(session_id, state, ExecutionStage.INFO_COLLECTION)
-            self._memory_manager.add_message(
-                session_id, "system", "信息收集阶段完成",
-                {"stage": "info_collection", "completed_tasks": len(state.completed_tasks)}
+            state = update_state(state, mode="info_collection")
+            state = await self.info_graph.ainvoke(
+                state,
+                config={"configurable": {"thread_id": session_id}}
             )
+            memory_store.save_session(session_id, state)
             
-            state = await self.vuln_graph.run(state)
-            self._session_stages[state.task_id] = ExecutionStage.VULN_SCAN
-            self._save_checkpoint(session_id, state, ExecutionStage.VULN_SCAN)
-            self._memory_manager.add_message(
-                session_id, "system", "漏洞扫描阶段完成",
-                {"stage": "vuln_scan", "vulnerabilities_found": len(state.vulnerabilities)}
+            state = update_state(state, mode="vuln_scan")
+            state = await self.vuln_graph.ainvoke(
+                state,
+                config={"configurable": {"thread_id": session_id}}
             )
+            memory_store.save_session(session_id, state)
             
-            state = await self.report_graph.run(state)
-            self._session_stages[state.task_id] = ExecutionStage.REPORT
-            self._save_checkpoint(session_id, state, ExecutionStage.REPORT)
+            state = await self.report_graph.ainvoke(state)
+            memory_store.save_session(session_id, state)
             
-            state.is_complete = True
-            self._session_stages[state.task_id] = ExecutionStage.COMPLETED
-            self._save_checkpoint(session_id, state, ExecutionStage.COMPLETED)
-            
-            await state.send_ai_message("扫描任务已完成！")
-            
-            self._memory_manager.add_message(
-                session_id, "system", f"扫描任务完成: {state.task_id}",
-                {"stage": "completed", "target": state.target}
-            )
-            
-            logger.info(f"[{state.task_id}] 完整扫描流程完成")
+            logger.info(f"[{state.get('task_id')}] 完整扫描流程完成")
             return state
             
         except Exception as e:
             logger.error(f"完整扫描流程失败: {e}")
-            state.set_workflow_failed(str(e))
-            self._session_stages[state.task_id] = ExecutionStage.FAILED
-            self._save_checkpoint(session_id, state, ExecutionStage.FAILED)
-            
-            self._memory_manager.add_message(
-                session_id, "system", f"扫描任务失败: {str(e)}",
-                {"stage": "failed", "error": str(e)}
-            )
-            
-            await state.send_error(f"扫描失败: {str(e)}")
             raise
-        finally:
-            if state.task_id in self._active_states:
-                del self._active_states[state.task_id]
     
-    def _save_checkpoint(self, session_id: str, state: AgentState, stage: ExecutionStage):
-        """
-        保存检查点到记忆
-        
-        Args:
-            session_id: 会话ID
-            state: Agent状态
-            stage: 当前执行阶段
-        """
-        try:
-            state_data = state.to_dict()
-            state_data["_checkpoint"] = {
-                "stage": stage.value,
-                "timestamp": datetime.now().isoformat(),
-                "task_id": state.task_id
-            }
-            
-            self._memory_manager.save_session(session_id, state_data)
-            logger.debug(f"[{state.task_id}] 检查点已保存: {stage.value}")
-        except Exception as e:
-            logger.warning(f"[{state.task_id}] 保存检查点失败: {e}")
-    
-    async def resume_from_memory(self, session_id: str) -> AgentState:
-        """
-        从记忆恢复状态并继续执行
-        
-        Args:
-            session_id: 会话ID
-            
-        Returns:
-            AgentState: 恢复后的状态
-            
-        Raises:
-            ValueError: 如果会话不存在或无法恢复
-        """
-        checkpoint = self._memory_manager._sessions.get(session_id)
-        if not checkpoint:
-            raise ValueError(f"会话不存在: {session_id}")
-        
-        state_data = checkpoint.channel_values
-        if not state_data:
-            raise ValueError(f"会话状态为空: {session_id}")
-        
-        state = AgentState.from_dict(state_data)
-        
-        checkpoint_info = state_data.get("_checkpoint", {})
-        stage = checkpoint_info.get("stage", "initial")
-        
-        logger.info(f"[{session_id}] 从记忆恢复状态，当前阶段: {stage}")
-        
-        if stage in ["completed", "failed"]:
-            logger.info(f"[{session_id}] 任务已{stage}，无需继续执行")
-            return state
-        
-        self._active_states[state.task_id] = state
-        
-        try:
-            if stage in ["initial", "info_collection"]:
-                if stage == "initial":
-                    await state.send_ai_message(f"从记忆恢复，继续对目标 {state.target} 进行安全扫描...")
-                
-                if stage != "info_collection":
-                    state = await self.info_graph.run(state)
-                    self._save_checkpoint(session_id, state, ExecutionStage.INFO_COLLECTION)
-            
-            if stage in ["initial", "info_collection", "vuln_scan"]:
-                if stage != "vuln_scan":
-                    state = await self.vuln_graph.run(state)
-                    self._save_checkpoint(session_id, state, ExecutionStage.VULN_SCAN)
-            
-            state = await self.report_graph.run(state)
-            self._save_checkpoint(session_id, state, ExecutionStage.REPORT)
-            
-            state.is_complete = True
-            self._save_checkpoint(session_id, state, ExecutionStage.COMPLETED)
-            
-            await state.send_ai_message("扫描任务已完成！")
-            
-            logger.info(f"[{session_id}] 从记忆恢复执行完成")
-            return state
-            
-        except Exception as e:
-            logger.error(f"[{session_id}] 从记忆恢复执行失败: {e}")
-            state.set_workflow_failed(str(e))
-            self._save_checkpoint(session_id, state, ExecutionStage.FAILED)
-            raise
-        finally:
-            if state.task_id in self._active_states:
-                del self._active_states[state.task_id]
-    
-    def get_session_state(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """
-        获取会话状态
-        
-        Args:
-            session_id: 会话ID
-            
-        Returns:
-            会话状态字典，如果不存在返回None
-        """
-        checkpoint = self._memory_manager._sessions.get(session_id)
-        if checkpoint:
-            return checkpoint.channel_values
-        return None
-    
-    def get_session_stage(self, session_id: str) -> Optional[str]:
-        """
-        获取会话当前执行阶段
-        
-        Args:
-            session_id: 会话ID
-            
-        Returns:
-            执行阶段字符串，如果不存在返回None
-        """
-        state_data = self.get_session_state(session_id)
-        if state_data:
-            return state_data.get("_checkpoint", {}).get("stage")
-        return None
-    
-    def get_all_sessions(self) -> List[Dict[str, Any]]:
-        """
-        获取所有会话信息
-        
-        Returns:
-            会话信息列表
-        """
-        sessions = []
-        for session_id, checkpoint in self._memory_manager._sessions.items():
-            state_data = checkpoint.channel_values
-            checkpoint_info = state_data.get("_checkpoint", {})
-            
-            sessions.append({
-                "session_id": session_id,
-                "task_id": checkpoint_info.get("task_id", ""),
-                "stage": checkpoint_info.get("stage", "unknown"),
-                "timestamp": checkpoint_info.get("timestamp", ""),
-                "target": state_data.get("target", ""),
-                "is_complete": state_data.get("is_complete", False),
-                "created_at": checkpoint.created_at,
-                "updated_at": checkpoint.updated_at
-            })
-        
-        return sessions
-    
-    def get_active_sessions(self) -> List[Dict[str, Any]]:
-        """
-        获取所有活动会话（未完成且未失败的）
-        
-        Returns:
-            活动会话信息列表
-        """
-        all_sessions = self.get_all_sessions()
-        return [
-            s for s in all_sessions 
-            if s["stage"] not in ["completed", "failed"]
-        ]
-    
-    def delete_session(self, session_id: str) -> bool:
-        """
-        删除会话
-        
-        Args:
-            session_id: 会话ID
-            
-        Returns:
-            是否删除成功
-        """
-        return self._memory_manager.delete_session(session_id)
-    
-    async def run_info_collection(self, state: AgentState) -> AgentState:
+    async def run_info_collection(self, state: ScanState, websocket_callback: Callable = None) -> ScanState:
         """仅运行信息收集"""
-        return await self.info_graph.run(state)
+        session_id = state.get("websocket_session_id") or state.get("task_id")
+        
+        if websocket_callback:
+            memory_store.set_websocket_callback(session_id, websocket_callback)
+        
+        state = update_state(state, mode="info_collection")
+        return await self.info_graph.ainvoke(
+            state,
+            config={"configurable": {"thread_id": session_id}}
+        )
     
-    async def run_vuln_scan(self, state: AgentState) -> AgentState:
+    async def run_vuln_scan(self, state: ScanState, websocket_callback: Callable = None) -> ScanState:
         """仅运行漏洞扫描"""
-        return await self.vuln_graph.run(state)
+        session_id = state.get("websocket_session_id") or state.get("task_id")
+        
+        if websocket_callback:
+            memory_store.set_websocket_callback(session_id, websocket_callback)
+        
+        state = update_state(state, mode="vuln_scan")
+        return await self.vuln_graph.ainvoke(
+            state,
+            config={"configurable": {"thread_id": session_id}}
+        )
     
-    async def run_report(self, state: AgentState) -> AgentState:
+    async def run_report(self, state: ScanState) -> ScanState:
         """仅生成报告"""
-        return await self.report_graph.run(state)
-    
-    def get_active_state(self, task_id: str) -> Optional[AgentState]:
-        """获取活动状态"""
-        return self._active_states.get(task_id)
-    
-    def get_all_active_tasks(self) -> Dict[str, AgentState]:
-        """获取所有活动任务"""
-        return self._active_states.copy()
+        return await self.report_graph.ainvoke(state)
 
 
-agent_graph = AgentGraph()
 agent_orchestrator = AgentOrchestrator()
-
-
-def get_agent_graph() -> AgentGraph:
-    """获取Agent图实例"""
-    return agent_graph
 
 
 def get_agent_orchestrator() -> AgentOrchestrator:

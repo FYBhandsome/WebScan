@@ -77,6 +77,9 @@ class APILoggingMiddleware(BaseHTTPMiddleware):
     
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         request_id = get_request_id()
+        if request_id is None:
+            request_id = str(uuid.uuid4())[:8]
+            set_request_id(request_id)
         start_time = time.time()
         request_timestamp = datetime.utcnow().isoformat() + "Z"
         

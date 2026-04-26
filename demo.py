@@ -1,68 +1,180 @@
 from typing import TypedDict, List, Dict, Optional
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
-from langchain.tools import tool, StructuredTool
+from langchain.tools import tool
 import importlib.util
 import os
 import sys
 import time
+from urllib.parse import urlparse
 
-# ==================== 系统基础配置 ===================
+# ==================== 导入真实工具 ====================
+from TOSKill.tools.info_collection.portscan import portscan
+from TOSKill.tools.info_collection.dirscan import dirscan
+from TOSKill.tools.info_collection.subdomain import subdomain
+from TOSKill.tools.info_collection.waf import waf_detect
+from TOSKill.tools.info_collection.baseinfo import baseinfo
+from TOSKill.tools.info_collection.cdnexist import cdn_detect
+from TOSKill.tools.info_collection.infoleak import infoleak_scan
+from TOSKill.tools.info_collection.iplocating import ip_locate
+from TOSKill.tools.info_collection.webside import webside_query
+from TOSKill.tools.info_collection.webweight import web_weight
+from TOSKill.tools.info_collection.whatcms import cms_detect
+
+# ==================== 系统配置 ===================
 sys.stdin.reconfigure(encoding='utf-8')
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
-
-# 脚本目录
 os.makedirs("custom_scripts", exist_ok=True)
 
-# 大模型配置
+# ==================== LLM ====================
 API_KEY = "001aa457c2c63574b2799bf1e3342e72:YTRkOGU4NWU3NjRiZjk5Y2E5OTMzZTBl"
 BASE_URL = "https://maas-api.cn-huabei-1.xf-yun.com/v2"
 MODEL_ID = "xop3qwen1b7"
 llm = ChatOpenAI(model=MODEL_ID, temperature=0.1, api_key=API_KEY, base_url=BASE_URL)
 
-# 流式输出（修复：只接受1个参数）
+# ==================== 流式输出 ====================
 def stream_print(text: str, delay: float = 0.01):
     for char in str(text):
         print(char, end="", flush=True)
         time.sleep(delay)
     print()
 
-# ==================== 内置扫描工具 ====================
+# ==================== URL 自动清洗 ====================
+def clean_target(target: str) -> str:
+    parsed = urlparse(target)
+    return parsed.netloc.strip() if parsed.netloc else target.strip()
+
+# ==================== 工具注册表 ====================
+tool_map = {}
+tool_sequence = [
+    "port_scan",
+    "dir_brute",
+    "subdomain_scan",
+    "cms_detect_scan",
+    "waf_detect_scan",
+    "baseinfo_scan",
+    "cdn_detect_scan",
+    "infoleak_scan",
+    "ip_locate_scan",
+    "webside_query_scan",
+    "web_weight_scan"
+]
+
+# ==================== 注册工具（无警告版） ====================
 @tool
 def port_scan(target: str) -> Dict:
     """端口扫描"""
-    stream_print(f"\n[+] 执行端口扫描：{target}")
-    time.sleep(0.5)
-    return {"target": target, "开放端口": [80, 443, 22], "状态": "成功"}
+    t = clean_target(target)
+    stream_print(f"\n[+] 执行端口扫描：{t}")
+    return portscan(t)
 
 @tool
 def dir_brute(target: str) -> Dict:
-    """敏感目录扫描"""
-    stream_print(f"\n[+] 执行目录扫描：{target}")
-    time.sleep(0.5)
-    return {"target": target, "敏感目录": ["/admin", "/.git", "/login"], "状态": "成功"}
+    """目录扫描"""
+    t = clean_target(target)
+    stream_print(f"\n[+] 执行目录扫描：{t}")
+    return dirscan(t)
 
-tool_map = {t.name: t for t in [port_scan, dir_brute]}
-available_task_names = list(tool_map.keys())
+@tool
+def subdomain_scan(target: str) -> Dict:
+    """子域名扫描"""
+    t = clean_target(target)
+    stream_print(f"\n[+] 执行子域名扫描：{t}")
+    return subdomain(t)
 
-# ==================== 脚本管理 ====================
-def save_script(script_name: str, code: str) -> str:
-    path = f"custom_scripts/{script_name}.py"
-    with open(path, "w", encoding="utf-8") as f:
+@tool
+def waf_detect_scan(target: str) -> Dict:
+    """WAF检测"""
+    t = clean_target(target)
+    stream_print(f"\n[+] 执行WAF检测：{t}")
+    return waf_detect(t)
+
+@tool
+def baseinfo_scan(target: str) -> Dict:
+    """基础信息"""
+    t = clean_target(target)
+    stream_print(f"\n[+] 执行基础信息收集：{t}")
+    return baseinfo(t)
+
+@tool
+def cdn_detect_scan(target: str) -> Dict:
+    """CDN检测"""
+    t = clean_target(target)
+    stream_print(f"\n[+] 执行CDN检测：{t}")
+    return cdn_detect(t)
+
+@tool
+def infoleak_scan(target: str) -> Dict:
+    """信息泄露"""
+    t = clean_target(target)
+    stream_print(f"\n[+] 执行信息泄露扫描：{t}")
+    return infoleak_scan(t)
+
+@tool
+def ip_locate_scan(target: str) -> Dict:
+    """IP定位"""
+    t = clean_target(target)
+    stream_print(f"\n[+] 执行IP定位：{t}")
+    return ip_locate(t)
+
+@tool
+def webside_query_scan(target: str) -> Dict:
+    """备案查询"""
+    t = clean_target(target)
+    stream_print(f"\n[+] 执行备案查询：{t}")
+    return webside_query(t)
+
+@tool
+def web_weight_scan(target: str) -> Dict:
+    """权重查询"""
+    t = clean_target(target)
+    stream_print(f"\n[+] 执行权重查询：{t}")
+    return web_weight(t)
+
+@tool
+def cms_detect_scan(target: str) -> Dict:
+    """CMS识别"""
+    t = clean_target(target)
+    stream_print(f"\n[+] 执行CMS识别：{t}")
+    return cms_detect(t)
+
+tool_map = {t.name: t for t in [
+    port_scan, dir_brute, subdomain_scan,
+    waf_detect_scan, baseinfo_scan, cdn_detect_scan,
+    infoleak_scan, ip_locate_scan, webside_query_scan,
+    web_weight_scan, cms_detect_scan
+]}
+
+# ==================== 脚本管理（自动注册+打印结果） ====================
+def save_script(name, code):
+    p = f"custom_scripts/{name}.py"
+    with open(p, "w", encoding="utf-8") as f:
         f.write(code.strip())
-    return path
+    return p
 
-def run_script(path: str, target: str) -> Dict:
+def run_script(path, target):
     try:
-        spec = importlib.util.spec_from_file_location("custom_task", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        if hasattr(module, "run"):
-            return module.run(target)
-        return {"错误": "脚本必须包含 run(target) 函数"}
+        spec = importlib.util.spec_from_file_location("s", path)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m.run(clean_target(target)) if hasattr(m, "run") else {"err": "no run()"}
     except Exception as e:
-        return {"错误": f"脚本异常：{str(e)}"}
+        return {"err": str(e)}
+
+def register_script_tool(name, path):
+    try:
+        spec = importlib.util.spec_from_file_location(name, path)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        if not hasattr(m, "run"): return False
+
+        @tool(name)
+        def f(t): return m.run(clean_target(t))
+        tool_map[name] = f
+        return True
+    except:
+        return False
 
 # ==================== 全局状态 ====================
 class ScanState(TypedDict):
@@ -76,179 +188,140 @@ class ScanState(TypedDict):
     user_name: str
     need_generate_script: bool
 
-# ==================== 统一追加聊天历史 ====================
-def append_chat_history(state: ScanState, role: str, content: str):
-    new_hist = state["chat_history"].copy()
-    new_hist.append({"role": role, "content": content})
-    return {**state, "chat_history": new_hist}
+# ==================== 聊天记忆 ====================
+def append_chat(state, role, content):
+    h = state["chat_history"].copy()
+    h.append({"role": role, "content": content})
+    s = llm.invoke(f"总结聊天：{h}").content.strip()
+    return {**state, "chat_history": h, "chat_summary": s}
 
-# ==================== 原子1：AI决策 ====================
-def ai_decision_atom(state: ScanState):
+# ==================== 原子1：AI 智能决策（不重复！） ====================
+def ai_decision(state: ScanState):
     stream_print("\n" + "="*60)
-    stream_print("🔹 原子1：AI全局决策")
+    stream_print("🔹 AI 全局任务决策")
 
-    prompt = f"""
-你是Web安全扫描调度器。
-当前可用任务：{available_task_names}
-用户目标：{state['target']}
-历史任务：{state['task_history']}
-聊天历史：{state['chat_history']}
-聊天总结：{state['chat_summary']}
+    done = list(state["task_result"].keys())
+    for t in tool_sequence:
+        if t not in done:
+            stream_print(f"✅ 分配任务：{t}")
+            return {**state, "next_task": t, "need_generate_script": False}
 
-规则：
-1. 如果任务不存在/不支持，只输出：need_script
-2. 否则只输出任务名：port_scan / dir_brute / custom_script
-3. 绝对不输出 end / 停止 / 多余文字
-"""
+    stream_print("✅ 所有扫描任务已完成！")
+    return {**state, "next_task": "end", "need_generate_script": False}
 
-    res = llm.invoke(prompt).content.strip()
-    need_gen = res == "need_script" or res not in available_task_names
-
-    if need_gen:
-        stream_print("⚠️ 当前无对应任务脚本，AI将引导您上传或生成脚本")
-    else:
-        stream_print(f"✅ 决策任务：【{res}】")
-
-    return {
-        **state,
-        "next_task": res,
-        "need_generate_script": need_gen
-    }
-
-# ==================== 原子2：用户交互 ====================
-def user_interact_atom(state: ScanState):
+# ==================== 原子2：交互 ====================
+def user_interact(state: ScanState):
     stream_print("\n" + "="*60)
-    stream_print(f"🎯 目标：{state['target']} | 任务：{state['next_task']}")
-    stream_print("【1】执行 【2】停止 【3】聊天 【4】上传脚本 【5】生成脚本")
-    return {**state, "user_choice": input("请输入指令：")}
+    stream_print(f"🎯 目标：{state['target']} | 下一个任务：{state['next_task']}")
+    stream_print("[1]执行 [2]停止 [3]聊天 [4]上传脚本 [5]生成脚本")
+    return {**state, "user_choice": input("指令：").strip()}
 
-# ==================== 原子3：执行任务 ====================
-def execute_analyze_atom(state: ScanState):
+# ==================== 原子3：执行任务（打印结果！） ====================
+def execute_task(state: ScanState):
     stream_print("\n" + "="*60)
     task = state["next_task"]
-    res = tool_map[task].func(state["target"]) if task in tool_map else {}
+    tool = tool_map[task]
 
-    exec_log = f"[执行] {task} → {res}"
-    analysis = llm.invoke(f"简要3点分析：{res}").content
-    analyze_log = f"[分析] {analysis}"
+    res = tool.invoke(state["target"])
+    stream_print(f"\n📊 【{task}】结果：{res}")
 
-    stream_print("\n🧾 分析：\n" + analysis)
+    analysis = llm.invoke(f"3条简要分析：{res}").content
+    stream_print(f"\n🧾 分析：{analysis}")
 
-    new_state = append_chat_history(state, "system", exec_log + "\n" + analyze_log)
-    new_state["task_history"].append(exec_log)
-    new_state["task_history"].append(analyze_log)
+    new_state = append_chat(state, "system", f"任务：{task}\n结果：{res}\n分析：{analysis}")
     new_state["task_result"][task] = res
-
+    new_state["task_history"].append(f"{task} 完成")
     return new_state
 
-# ==================== 原子4：聊天协商 ====================
-def chat_negotiate_atom(state: ScanState):
+# ==================== 原子4：聊天 ====================
+def chat(state: ScanState):
     stream_print("\n" + "="*60)
-    stream_print("🔹 原子4：实时记忆聊天（stop退出）")
-    name = state["user_name"]
-    chat_hist = state["chat_history"].copy()
+    stream_print("🔹 实时记忆聊天（stop 退出）")
+    curr = state
 
     while True:
-        prompt = f"""
-你是安全助手，称呼用户为 {name}
-上下文：
-任务历史：{state['task_history']}
-聊天历史：{chat_hist}
-目标：{state['target']}
-简洁回复。
-"""
+        prompt = f"""你是安全助手，用户：{curr['user_name']}
+聊天总结：{curr['chat_summary']}
+任务历史：{curr['task_history']}
+目标：{curr['target']}
+自然简洁回复。"""
         ai_msg = llm.invoke(prompt).content
         stream_print(f"\n🤖 AI：{ai_msg}")
-        chat_hist.append({"role": "assistant", "content": ai_msg})
+        curr = append_chat(curr, "assistant", ai_msg)
 
         user_msg = input("👤 你：")
-        chat_hist.append({"role": "user", "content": user_msg})
+        if user_msg.lower() == "stop": break
+        curr = append_chat(curr, "user", user_msg)
 
         if "我叫" in user_msg:
-            name = user_msg.replace("我叫", "").strip()
-            stream_print(f"✅ 已记住名字：{name}")
+            curr["user_name"] = user_msg.replace("我叫", "").strip()
+            stream_print(f"✅ 已记住：{curr['user_name']}")
 
-        if user_msg.lower() == "stop":
-            break
+    stream_print("\n✅ 聊天已保存")
+    return curr
 
-    summary = llm.invoke(f"总结聊天内容：{chat_hist}").content
-    stream_print(f"\n✅ 聊天总结：{summary}")
-
-    return {
-        **state,
-        "chat_history": chat_hist,
-        "chat_summary": summary,
-        "user_name": name
-    }
-
-# ==================== 原子5：脚本管理（修复报错） ====================
-def script_tool_atom(state: ScanState):
+# ==================== 原子5：脚本管理（显示结果） ====================
+def script_manager(state: ScanState):
     stream_print("\n" + "="*60)
-    stream_print("🔹 原子5：自定义脚本管理")
     res = {}
-
     if state["user_choice"] == "4":
-        path = input("输入脚本路径：")
-        if os.path.exists(path):
-            new_path = save_script("uploaded_script", open(path, encoding='utf-8').read())
-            res = run_script(new_path, state["target"])
-            stream_print("✅ 脚本上传完成")
+        p = input("脚本路径：")
+        if os.path.exists(p):
+            np = save_script("uploaded", open(p, encoding="utf-8").read())
+            res = run_script(np, state["target"])
+            register_script_tool("uploaded", np)
+            stream_print("✅ 上传并注册成功")
         else:
             stream_print("❌ 文件不存在")
 
     elif state["user_choice"] == "5":
-        desc = input("描述脚本功能：")
-        code = llm.invoke(f"""
-生成Python扫描脚本，纯代码无解释，必须包含 run(target) 函数，返回字典。
-功能：{desc}
-""").content.replace("```python", "").replace("```", "")
-        new_path = save_script("generated_script", code)
-        stream_print(f"\n📝 脚本已保存：{new_path}")
-        res = run_script(new_path, state["target"])
-        # 修复：合并成一个字符串输出
-        stream_print(f"执行结果：{res}")
+        desc = input("功能描述：")
+        code = llm.invoke(f"""生成Python扫描脚本，纯代码，必须含 run(target)，返回字典。功能：{desc}""").content.replace("```python","").replace("```","")
+        np = save_script("generated", code)
+        res = run_script(np, state["target"])
+        register_script_tool("generated", np)
+        stream_print("✅ 生成并注册成功")
 
-    new_state = append_chat_history(state, "system", f"自定义脚本执行结果：{res}")
-    new_state["task_result"]["custom_script"] = res
-    new_state["task_history"].append(f"[脚本任务] {res}")
+    stream_print(f"📦 脚本结果：{res}")
+    new_state = append_chat(state, "system", f"脚本结果：{res}")
+    new_state["task_result"]["custom"] = res
     return new_state
 
 # ==================== 路由 ====================
-def atom_router(state: ScanState):
-    if state["need_generate_script"]:
-        return "script_tool_atom"
-
+def router(state: ScanState):
+    if state["next_task"] == "end": return END
+    if state["need_generate_script"]: return "script_manager"
     c = state["user_choice"]
-    if c == "1": return "execute_analyze_atom"
+    if c == "1": return "execute_task"
     if c == "2": return END
-    if c == "3": return "chat_negotiate_atom"
-    if c in ["4", "5"]: return "script_tool_atom"
-    return "user_interact_atom"
+    if c == "3": return "chat"
+    if c in ["4","5"]: return "script_manager"
+    return "user_interact"
 
 # ==================== 工作流 ====================
-workflow = StateGraph(ScanState)
-workflow.add_node("ai_decision_atom", ai_decision_atom)
-workflow.add_node("user_interact_atom", user_interact_atom)
-workflow.add_node("execute_analyze_atom", execute_analyze_atom)
-workflow.add_node("chat_negotiate_atom", chat_negotiate_atom)
-workflow.add_node("script_tool_atom", script_tool_atom)
+wf = StateGraph(ScanState)
+wf.add_node("ai_decision", ai_decision)
+wf.add_node("user_interact", user_interact)
+wf.add_node("execute_task", execute_task)
+wf.add_node("chat", chat)
+wf.add_node("script_manager", script_manager)
 
-workflow.set_entry_point("ai_decision_atom")
-workflow.add_edge("ai_decision_atom", "user_interact_atom")
-workflow.add_conditional_edges("user_interact_atom", atom_router)
+wf.set_entry_point("ai_decision")
+wf.add_edge("ai_decision", "user_interact")
+wf.add_conditional_edges("user_interact", router)
+wf.add_edge("execute_task", "ai_decision")
+wf.add_edge("chat", "ai_decision")
+wf.add_edge("script_manager", "ai_decision")
 
-workflow.add_edge("execute_analyze_atom", "ai_decision_atom")
-workflow.add_edge("chat_negotiate_atom", "ai_decision_atom")
-workflow.add_edge("script_tool_atom", "ai_decision_atom")
-
-app = workflow.compile()
+app = wf.compile()
 
 # ==================== 启动 ====================
-if __name__ == '__main__':
-    stream_print("🚀 原子化智能扫描系统（脚本缺失自动引导版）", 0.03)
-    target = input("请输入扫描目标：").strip()
+if __name__ == "__main__":
+    stream_print("🚀 原子化智能扫描系统【完美修复版】", 0.02)
+    target = clean_target(input("请输入扫描目标："))
+    stream_print(f"✅ 标准化目标：{target}")
 
-    initial = ScanState(
+    init = ScanState(
         target=target,
         task_result={},
         task_history=[],
@@ -261,7 +334,7 @@ if __name__ == '__main__':
     )
 
     try:
-        app.invoke(initial)
+        app.invoke(init)
     except KeyboardInterrupt:
         stream_print("\n🛑 强制终止")
     stream_print("\n✅ 任务结束")
