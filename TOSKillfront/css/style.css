@@ -1153,3 +1153,214 @@ body {
     background: linear-gradient(135deg, #f6ffed 0%, #d9f7be 100%);
     box-shadow: 0 2px 8px rgba(82, 196, 26, 0.2);
 }
+
+.input-dialog {
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: var(--shadow-lg);
+    border: 1px solid var(--border-color);
+}
+
+.input-dialog .dialog-header {
+    font-size: 16px;
+    margin-bottom: 12px;
+    color: var(--primary-color);
+}
+
+.input-dialog .dialog-description {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+    padding: 10px;
+    background: var(--bg-color);
+    border-radius: 6px;
+}
+
+.input-dialog .dialog-body {
+    margin-bottom: 16px;
+}
+
+.input-dialog .dialog-input {
+    width: 100%;
+    height: 44px;
+    padding: 0 16px;
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.input-dialog .dialog-input:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.1);
+}
+
+.input-dialog .dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+}
+
+.input-dialog .dialog-btn {
+    padding: 10px 24px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.input-dialog .dialog-btn.cancel {
+    background: var(--bg-color);
+    color: var(--text-primary);
+}
+
+.input-dialog .dialog-btn.cancel:hover {
+    background: #e8ebf0;
+}
+
+.input-dialog .dialog-btn.confirm {
+    background: var(--primary-color);
+    color: white;
+}
+
+.input-dialog .dialog-btn.confirm:hover {
+    background: var(--primary-hover);
+}
+
+.workflow-progress-card {
+    background: linear-gradient(135deg, #e6f4ff 0%, #f0f5ff 100%);
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid #91caff;
+}
+
+.workflow-progress-card .progress-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.workflow-progress-card .progress-icon {
+    font-size: 20px;
+}
+
+.workflow-progress-card .progress-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    flex: 1;
+}
+
+.workflow-progress-card .progress-status {
+    font-size: 12px;
+    padding: 4px 10px;
+    background: var(--primary-color);
+    color: white;
+    border-radius: 12px;
+}
+
+.workflow-progress-card .progress-bar-container {
+    height: 8px;
+    background: rgba(22, 119, 255, 0.2);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+
+.workflow-progress-card .progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--primary-color), #667eea);
+    border-radius: 4px;
+    transition: width 0.5s ease;
+}
+
+.workflow-progress-card .progress-info {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.workflow-progress-card .progress-current-task {
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.8);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.workflow-progress-message.fade-out {
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: all 0.5s ease;
+}
+
+.tool-options-container {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.tool-option-btn {
+    padding: 10px 20px;
+    background: var(--card-bg);
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.tool-option-btn:hover {
+    border-color: var(--primary-color);
+    background: #f0f5ff;
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.input-dialog-message,
+.workflow-progress-message {
+    animation: slideInUp 0.3s ease;
+}
+
+.skeleton {
+    background: linear-gradient(90deg, var(--bg-color) 25%, #e8ebf0 50%, var(--bg-color) 75%);
+    background-size: 200% 100%;
+    animation: skeleton-loading 1.5s infinite;
+}
+
+@keyframes skeleton-loading {
+    0% {
+        background-position: 200% 0;
+    }
+    100% {
+        background-position: -200% 0;
+    }
+}
+
+.skeleton-text {
+    height: 16px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+}
+
+.skeleton-title {
+    height: 24px;
+    width: 60%;
+    border-radius: 4px;
+    margin-bottom: 12px;
+}

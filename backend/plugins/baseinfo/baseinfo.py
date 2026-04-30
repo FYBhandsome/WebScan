@@ -183,8 +183,16 @@ def getbaseinfo(url: str) -> Dict[str, Any]:
         "register": None
     }
     
+    # 规范化URL（自动添加协议前缀）
+    from ..common.common import check_url
+    normalized_url = check_url(url)
+    if not normalized_url:
+        info["msg"] = "URL格式无效"
+        logger.error(f"URL {url} 格式无效")
+        return info
+    
     # 提取域名
-    domain = get_domain(url)
+    domain = get_domain(normalized_url)
     if not domain:
         info["msg"] = "域名提取失败"
         logger.error(f"URL {url} 提取域名失败")
@@ -193,10 +201,10 @@ def getbaseinfo(url: str) -> Dict[str, Any]:
     info["domain"] = domain
     info["register"] = f"http://whois.chinaz.com/{domain}"  # WHOIS链接
     
-    # 发起HTTP请求(细化异常)
+    # 发起HTTP请求(使用规范化后的URL)
     try:
         resp = SESSION.get(
-            url,
+            normalized_url,
             headers=get_ua(),
             timeout=8,
             allow_redirects=True,  # 允许重定向,避免漏查
@@ -204,11 +212,11 @@ def getbaseinfo(url: str) -> Dict[str, Any]:
         )
     except ConnectTimeout:
         info["msg"] = "连接目标URL超时"
-        logger.error(f"URL {url} 连接超时")
+        logger.error(f"URL {normalized_url} 连接超时")
         return info
     except ConnectionError:
         info["msg"] = "无法连接目标URL"
-        logger.error(f"URL {url} 连接失败")
+        logger.error(f"URL {normalized_url} 连接失败")
         return info
     except ReadTimeout:
         info["msg"] = "读取目标URL响应超时"
@@ -245,7 +253,7 @@ def getbaseinfo(url: str) -> Dict[str, Any]:
 if __name__ == '__main__':
     # 测试示例
 
-
+    test_url = "www.baidu.com"
     result = getbaseinfo(test_url)
     # 格式化输出测试结果
     print(json.dumps(result, ensure_ascii=False, indent=2))

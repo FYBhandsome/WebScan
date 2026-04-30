@@ -149,7 +149,7 @@ class WSManager {
     }
 
     sendConfirm(choice = 'confirm') {
-        return this.send('user_confirm', { choice });
+        return this.send('user_choice', { choice });
     }
 
     sendChat(content) {

@@ -4,7 +4,7 @@ TOSKill AI 简化版状态定义
 类比 demo.py 的 ScanState，使用 TypedDict 定义状态。
 支持记忆化存储，简化数据结构。
 """
-from typing import TypedDict, List, Dict, Any, Optional
+from typing import TypedDict, List, Dict, Any, Optional, NotRequired
 from datetime import datetime
 
 
@@ -37,11 +37,52 @@ class ScanState(TypedDict, total=False):
     task_history: List[str]
     stage_status: Dict[str, Dict[str, Any]]
     websocket_session_id: Optional[str]
+    intent_type: str
+    direct_tool: str
+    direct_target: str
+    tool_formatted_result: str
+    user_input: str
+    intent_confidence: float
+    intent_valid: bool
+    intent_error: str
+    script_type: str
+    script_content: str
+    script_path: str
+    script_name: str
+    script_description: str
+    registered_tool_name: str
+    validation_status: str
+    missing_fields: List[str]
+    validation_message: str
+    extracted_params: Dict[str, Any]
+    needs_input: bool
+    input_field: str
+    intent_context: Dict[str, Any]
+    clarification_needed: bool
+    clarification_question: str
+    tool_exists: bool
+    report_url: str
+    report_id: str
+    last_activity_time: str
+    conversation_turn: int
+    auth_cookies: Dict[str, str]
+    auth_headers: Dict[str, str]
+    auth_token: str
+    session_cookies: Dict[str, str]
+    session_token: str
+    auth_config: Dict[str, Any]
+    authentication_used: bool
+    credentials_obtained: bool
+    auth_info: NotRequired[Dict[str, Any]]
+    auth_timestamp: NotRequired[str]
+    auth_expires_at: NotRequired[str]
 
 
 def create_initial_state(target: str, task_id: str = None, mode: str = "info_collection") -> ScanState:
     """创建初始状态"""
     import uuid
+    now = datetime.now().isoformat()
+    
     return ScanState(
         target=target,
         task_id=task_id or str(uuid.uuid4())[:8],
@@ -73,7 +114,46 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
             "tool_execution": {"status": "pending", "sub_status": "pending", "progress": 0, "logs": []},
             "report": {"status": "pending", "sub_status": "pending", "progress": 0, "logs": []}
         },
-        websocket_session_id=None
+        websocket_session_id=None,
+        intent_type="",
+        direct_tool="",
+        direct_target="",
+        tool_formatted_result="",
+        user_input="",
+        intent_confidence=0.0,
+        intent_valid=True,
+        intent_error="",
+        script_type="",
+        script_content="",
+        script_path="",
+        script_name="",
+        script_description="",
+        registered_tool_name="",
+        validation_status="",
+        missing_fields=[],
+        validation_message="",
+        extracted_params={},
+        needs_input=False,
+        input_field="",
+        intent_context={},
+        clarification_needed=False,
+        clarification_question="",
+        tool_exists=True,
+        report_url="",
+        report_id="",
+        last_activity_time=now,
+        conversation_turn=0,
+        auth_cookies={},
+        auth_headers={},
+        auth_token="",
+        session_cookies={},
+        session_token="",
+        auth_config={},
+        authentication_used=False,
+        credentials_obtained=False,
+        auth_info={},
+        auth_timestamp="",
+        auth_expires_at=""
     )
 
 

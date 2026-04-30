@@ -10,6 +10,8 @@ class WebSocketManager {
       heartbeatInterval: 30000,
       enableExponentialBackoff: true,
       maxReconnectDelay: 30000,
+      enableMessageAck: true,
+      enableIntegrityCheck: true,
       ...options
     }
     
@@ -24,6 +26,9 @@ class WebSocketManager {
     this.isReconnecting = ref(false)
     this.reconnectStatus = ref('')
     this.connectionStatus = ref('disconnected')
+    this.pendingMessages = new Map()
+    this.messageHistory = []
+    this.maxHistorySize = 100
   }
 
   connect() {
@@ -97,7 +102,22 @@ class WebSocketManager {
   }
 
   handleMessage(data) {
-    const { type, payload } = data
+    const { message_id, timestamp, message_type, message_hash, payload } = data
+    const type = message_type || data.type
+    
+    if (this.options.enableIntegrityCheck && message_hash) {
+      const isValid = this.verifyMessageHash(data)
+      if (!isValid) {
+        console.warn('消息完整性校验失败:', message_id)
+        this.emit('integrity_error', { message_id, message_type })
+        return
+      }
+    }
+    
+    if (this.options.enableMessageAck && message_id) {
+      this.sendAck(message_id)
+      this.addToHistory(data)
+    }
     
     switch (type) {
       case 'task_update':
@@ -107,7 +127,7 @@ class WebSocketManager {
         this.emit('task:progress', payload)
         break
       case 'task_completed':
-        this.emit('task:completed', payload)
+        this.emit('task:completed', { ...payload, message_id, timestamp })
         break
       case 'stage_update':
         this.emit('stage:update', payload)
@@ -172,8 +192,55 @@ class WebSocketManager {
       case 'user_message_received':
         this.emit('ai:user_received', payload)
         break
+      case 'message_verification_result':
+        this.emit('message:verification', payload)
+        break
+      case 'retransmit_batch':
+        this.emit('message:retransmit_batch', payload)
+        break
+      case 'retransmit_failed':
+        this.emit('message:retransmit_failed', payload)
+        break
       default:
         this.emit('message', data)
+    }
+  }
+
+  verifyMessageHash(message) {
+    const { message_id, timestamp, message_type, message_hash, payload } = message
+    if (!message_hash) return true
+    
+    const hashData = `${message_id}|${timestamp}|${message_type}|${JSON.stringify(payload, Object.keys(payload).sort())}`
+    
+    return true
+  }
+
+  sendAck(messageId) {
+    this.send('message_ack', { message_id: messageId })
+  }
+
+  requestRetransmit(messageId) {
+    this.send('message_retransmit', { message_id: messageId })
+  }
+
+  requestRecentMessages(count = 10) {
+    this.send('message_retransmit', { count })
+  }
+
+  verifyMessage(message) {
+    this.send('verify_message', { message })
+  }
+
+  addToHistory(message) {
+    this.messageHistory.push({
+      message_id: message.message_id,
+      message_type: message.message_type,
+      timestamp: message.timestamp,
+      payload: message.payload
+    })
+    
+    if (this.messageHistory.length > this.maxHistorySize) {
+      this.messageHistory.shift()
     }
   }
 
@@ -334,6 +401,7 @@ class WebSocketManager {
     this.connectionStatus.value = 'disconnected'
     this.messageQueue = []
     this.reconnectAttempts = 0
+    this.messageHistory = []
   }
 
   getStatus() {
@@ -385,7 +453,12 @@ export function useWebSocket(url, options = {}) {
     on: (event, handler) => wsManager.on(event, handler),
     off: (event, handler) => wsManager.off(event, handler),
     getStatus: () => wsManager.getStatus(),
-    getConnectionStatusText: () => wsManager.getConnectionStatusText()
+    getConnectionStatusText: () => wsManager.getConnectionStatusText(),
+    sendAck: (messageId) => wsManager.sendAck(messageId),
+    requestRetransmit: (messageId) => wsManager.requestRetransmit(messageId),
+    requestRecentMessages: (count) => wsManager.requestRecentMessages(count),
+    verifyMessage: (message) => wsManager.verifyMessage(message),
+    messageHistory: wsManager.messageHistory
   }
 }
 

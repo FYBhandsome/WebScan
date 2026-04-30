@@ -59,9 +59,11 @@ const Tools = {
         
         let filteredTools = this.tools;
         if (category === 'info') {
-            filteredTools = this.tools.filter(t => this.categories.info.includes(t.name));
+            filteredTools = this.tools.filter(t => t.category === 'info_collection' || this.categories.info.includes(t.name));
         } else if (category === 'vuln') {
-            filteredTools = this.tools.filter(t => this.categories.vuln.includes(t.name));
+            filteredTools = this.tools.filter(t => t.category === 'vuln_scan' || this.categories.vuln.includes(t.name));
+        } else if (category === 'custom') {
+            filteredTools = this.tools.filter(t => t.is_custom === true);
         }
 
         if (filteredTools.length === 0) {
@@ -70,10 +72,10 @@ const Tools = {
         }
 
         grid.innerHTML = filteredTools.map(tool => `
-            <div class="tool-card" data-tool="${tool.name}">
+            <div class="tool-card ${tool.is_custom ? 'custom-tool' : ''}" data-tool="${tool.name}">
                 <h4>${this.formatToolName(tool.name)}</h4>
                 <p>${tool.description || '安全扫描工具'}</p>
-                <span class="tool-category">${this.getToolCategory(tool.name)}</span>
+                <span class="tool-category ${tool.category}">${this.getToolCategoryLabel(tool)}</span>
             </div>
         `).join('');
 
@@ -82,6 +84,14 @@ const Tools = {
                 this.showExecution(card.dataset.tool);
             });
         });
+    },
+
+    getToolCategoryLabel(tool) {
+        if (tool.is_custom) return '自定义';
+        if (tool.category === 'info_collection') return '信息收集';
+        if (tool.category === 'vuln_scan') return '漏洞扫描';
+        if (tool.category === 'poc') return 'POC验证';
+        return '其他';
     },
 
     filterTools(category) {

@@ -50,8 +50,10 @@ const API = {
         return this.request(endpoint, { method: 'DELETE' });
     },
 
-    async createSession(target = '', mode = 'full_scan') {
-        return this.post('/toskill/sessions', { target, mode });
+    async createSession(target = '', tools = null) {
+        const body = { target };
+        if (tools) body.tools = tools;
+        return this.post('/toskill/sessions', body);
     },
 
     async getSession(sessionId) {
@@ -62,21 +64,21 @@ const API = {
         return this.delete(`/toskill/sessions/${sessionId}`);
     },
 
-    async startInfoScan(target, sessionId = null) {
-        const body = { target };
-        if (sessionId) body.session_id = sessionId;
+    async startInfoScan(target, tools = null, generateReport = true) {
+        const body = { target, generate_report: generateReport };
+        if (tools) body.tools = tools;
         return this.post('/toskill/scan/info', body);
     },
 
-    async startVulnScan(target, sessionId = null) {
-        const body = { target };
-        if (sessionId) body.session_id = sessionId;
+    async startVulnScan(target, tools = null, generateReport = true) {
+        const body = { target, generate_report: generateReport };
+        if (tools) body.tools = tools;
         return this.post('/toskill/scan/vuln', body);
     },
 
-    async startFullScan(target, sessionId = null) {
-        const body = { target };
-        if (sessionId) body.session_id = sessionId;
+    async startFullScan(target, tools = null, generateReport = true) {
+        const body = { target, generate_report: generateReport };
+        if (tools) body.tools = tools;
         return this.post('/toskill/scan/full', body);
     },
 
@@ -88,22 +90,37 @@ const API = {
         return this.get('/toskill/tools/categories');
     },
 
-    async executeTool(toolName, target) {
-        return this.post('/toskill/tools/execute', {
-            tool_name: toolName,
-            target: target,
-        });
+    async getToolInfo(toolName) {
+        return this.get(`/toskill/tools/${toolName}`);
     },
 
-    async executeToolsBatch(toolNames, target) {
+    async executeTool(toolName, target, params = null) {
+        const body = { tool_name: toolName, target: target };
+        if (params) body.params = params;
+        return this.post('/toskill/tools/execute', body);
+    },
+
+    async executeToolsBatch(toolNames, target, parallel = true) {
         return this.post('/toskill/tools/execute/batch', {
             tool_names: toolNames,
             target: target,
+            parallel: parallel,
         });
     },
 
     async getReports() {
-        return this.get('/reports/list');
+        const response = await this.get('/reports/list');
+        if (response.success !== undefined) {
+            return { 
+                code: 200, 
+                message: 'success', 
+                data: { 
+                    reports: response.reports, 
+                    total: response.total 
+                } 
+            };
+        }
+        return response;
     },
 
     getReportDownloadUrl(filename) {
@@ -111,27 +128,48 @@ const API = {
     },
 
     async getReportContent(filename) {
-        return this.get(`/reports/${filename}/content`);
+        const response = await this.get(`/reports/${filename}/content`);
+        if (response.success !== undefined) {
+            return { 
+                code: 200, 
+                message: 'success', 
+                data: { 
+                    filename: response.filename, 
+                    content: response.content 
+                } 
+            };
+        }
+        return response;
     },
 
     async deleteReport(filename) {
-        return this.delete(`/reports/${filename}`);
+        const response = await this.delete(`/reports/${filename}`);
+        if (response.success !== undefined) {
+            return { code: 200, message: response.message || '删除成功', data: null };
+        }
+        return response;
     },
 
-    async generateReport(sessionId) {
-        return this.post(`/toskill/reports/generate/${sessionId}`);
+    async getReportBySession(sessionId) {
+        const response = await this.get(`/reports/session/${sessionId}`);
+        if (response.success !== undefined) {
+            return { 
+                code: 200, 
+                message: 'success', 
+                data: { 
+                    report: response.report 
+                } 
+            };
+        }
+        return response;
     },
 
-    async sendChatMessage(sessionId, content, role = 'user') {
-        return this.post('/toskill/chat/message', {
-            session_id: sessionId,
-            role: role,
-            content: content,
-        });
-    },
-
-    async getChatHistory(sessionId, limit = 20) {
-        return this.get(`/toskill/chat/history/${sessionId}?limit=${limit}`);
+    async deleteReportBySession(sessionId) {
+        const response = await this.delete(`/reports/session/${sessionId}`);
+        if (response.success !== undefined) {
+            return { code: 200, message: response.message || '删除成功', data: null };
+        }
+        return response;
     },
 
     async healthCheck() {

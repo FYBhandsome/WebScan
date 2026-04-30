@@ -1,36 +1,56 @@
 """
 AI对话WebSocket处理器
 
-处理AI对话相关的WebSocket消息，支持交互式工作流暂停/恢复。
+处理AI对话相关的WebSocket消息，支持悬浮球对话功能。
 """
 import logging
 import asyncio
 import json
-from typing import Dict, Optional
+from typing import Dict, Any, List
+from datetime import datetime
 from uuid import uuid4
 
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
-from langgraph.types import Command
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
-from TOSKill.AI.core import (
-    create_session, get_session, delete_session,
-    run_scan, execute_tool, chat, get_chat_history, get_session_status,
-    get_all_tool_names
-)
 from TOSKill.AI.state import create_initial_state, append_chat, update_state
 from TOSKill.AI.graph import memory_store, get_agent_orchestrator
+from TOSKill.AI.tools import get_tool_by_name, get_all_tool_names, TOOL_MAP
+from TOSKill.config import settings
 
 router = APIRouter(prefix="/ai-chat", tags=["AI对话WebSocket"])
 logger = logging.getLogger(__name__)
 
+CHAT_SYSTEM_PROMPT = """你是WebScan AI，一个专业的Web安全顾问。
+专业领域：OWASP Top 10漏洞、Web框架漏洞、渗透测试、安全加固。
+回复要求：专业准确、清晰易懂、可执行。"""
+
+
+def _get_llm():
+    return ChatOpenAI(
+        model=settings.MODEL_ID,
+        temperature=0.7,
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL
+    )
+
+
+SCAN_MODE_MAP = {"info": "info_collection", "vuln": "vuln_scan", "full": "full_scan"}
+
 
 class AIChatManager:
-    """AI对话连接管理器 - 支持交互式工作流"""
+    """AI对话连接管理器"""
     
     def __init__(self):
         self.connections: Dict[str, WebSocket] = {}
-        self.scan_tasks: Dict[str, asyncio.Task] = {}
-        self.pending_choices: Dict[str, asyncio.Future] = {}
+        self.tasks: Dict[str, asyncio.Task] = {}
+        self.llm = None
+    
+    def _get_llm(self):
+        if not self.llm:
+            self.llm = _get_llm()
+        return self.llm
     
     async def connect(self, websocket: WebSocket, session_id: str = None) -> str:
         await websocket.accept()
@@ -38,29 +58,18 @@ class AIChatManager:
         self.connections[session_id] = websocket
         memory_store.save_session(session_id, create_initial_state(target="", task_id=session_id))
         
-        orchestrator = get_agent_orchestrator()
-        orchestrator.set_websocket_callback(session_id, self._send_interaction_required)
-        
         await self._send(session_id, {
             "type": "connected",
-            "payload": {
-                "session_id": session_id, 
-                "available_tools": get_all_tool_names(),
-                "default_mode": "full_scan"
-            }
+            "payload": {"session_id": session_id, "available_tools": get_all_tool_names()}
         })
         return session_id
     
     def disconnect(self, session_id: str):
         self.connections.pop(session_id, None)
-        if session_id in self.scan_tasks:
-            task = self.scan_tasks.pop(session_id)
+        if session_id in self.tasks:
+            task = self.tasks.pop(session_id)
             if not task.done():
                 task.cancel()
-        if session_id in self.pending_choices:
-            future = self.pending_choices.pop(session_id)
-            if not future.done():
-                future.cancel()
     
     async def _send(self, session_id: str, message: Dict):
         if ws := self.connections.get(session_id):
@@ -72,28 +81,14 @@ class AIChatManager:
     async def _send_error(self, session_id: str, error: str, **extra):
         await self._send(session_id, {"type": "error", "payload": {"error": error, **extra}})
     
-    async def _send_interaction_required(self, interaction_data: Dict):
-        """发送交互请求到前端"""
-        session_id = interaction_data.get("session_id")
-        msg_type = interaction_data.get("type", "interaction_required")
-        
-        if session_id:
-            await self._send(session_id, {
-                "type": msg_type,
-                "payload": interaction_data
-            })
-            logger.info(f"已发送消息: {msg_type} -> {session_id}")
-    
     async def handle_message(self, session_id: str, message: Dict):
         msg_type = message.get("type")
         payload = message.get("payload", {})
         
         handlers = {
             "user_input": self._handle_user_input,
-            "user_choice": self._handle_user_choice,
             "user_confirm": self._handle_user_confirm,
             "start_scan": self._handle_start_scan,
-            "stop_scan": self._handle_stop_scan,
             "get_history": self._handle_get_history,
             "get_status": self._handle_get_status,
             "chat": self._handle_chat,
@@ -113,29 +108,6 @@ class AIChatManager:
             memory_store.save_session(session_id, append_chat(state, "user", content))
         await self._send(session_id, {"type": "user_message_received", "payload": {"content": content}})
     
-    async def _handle_user_choice(self, session_id: str, payload: Dict):
-        """处理用户交互选择"""
-        choice = payload.get("choice", "1")
-        
-        if session_id in self.pending_choices:
-            future = self.pending_choices.pop(session_id)
-            if not future.done():
-                future.set_result(choice)
-                logger.info(f"用户选择已设置: {choice}")
-                await self._send(session_id, {
-                    "type": "workflow_resumed",
-                    "payload": {"choice": choice}
-                })
-        else:
-            orchestrator = get_agent_orchestrator()
-            orchestrator.resume_workflow(session_id, choice)
-            await self._send(session_id, {
-                "type": "workflow_resumed",
-                "payload": {"choice": choice}
-            })
-        
-        memory_store.append_chat(session_id, "system", f"用户选择: {choice}")
-    
     async def _handle_user_confirm(self, session_id: str, payload: Dict):
         choice = payload.get("choice", "confirm")
         state = memory_store.get_session(session_id)
@@ -149,113 +121,87 @@ class AIChatManager:
             await self._send_error(session_id, "目标地址不能为空")
             return
         
-        scan_mode = payload.get("scan_mode", "full")
-        self.scan_tasks[session_id] = asyncio.create_task(
-            self._run_interactive_scan(session_id, target, scan_mode)
-        )
-    
-    async def _handle_stop_scan(self, session_id: str, payload: Dict):
-        """停止扫描"""
-        if session_id in self.scan_tasks:
-            task = self.scan_tasks.pop(session_id)
-            if not task.done():
-                task.cancel()
-            await self._send(session_id, {"type": "scan_cancelled", "payload": {}})
-        
-        if session_id in self.pending_choices:
-            future = self.pending_choices.pop(session_id)
-            if not future.done():
-                future.set_result("2")
-    
-    async def _run_interactive_scan(self, session_id: str, target: str, mode: str):
-        """运行交互式扫描流程"""
         task_id = str(uuid4())[:8]
+        mode = SCAN_MODE_MAP.get(payload.get("scan_mode", "info"), "info_collection")
+        state = create_initial_state(target=target, task_id=task_id, mode=mode)
+        state["websocket_session_id"] = session_id
+        memory_store.save_session(session_id, state)
+        
+        self.tasks[session_id] = asyncio.create_task(self._run_scan(session_id, task_id, target, mode, state))
+    
+    async def _run_scan(self, session_id: str, task_id: str, target: str, mode: str, state: Dict):
+        orchestrator = get_agent_orchestrator()
         
         try:
-            await self._send(session_id, {
-                "type": "scan_started",
-                "payload": {"task_id": task_id, "target": target, "mode": mode}
-            })
+            await self._send(session_id, {"type": "scan_started", "payload": {"task_id": task_id, "target": target}})
             
-            state = memory_store.get_session(session_id)
-            if not state:
-                state = create_initial_state(target=target, task_id=task_id)
-            state = update_state(state, target=target, websocket_session_id=session_id)
-            
-            orchestrator = get_agent_orchestrator()
-            
-            async def websocket_callback(message_data: Dict):
-                msg_type = message_data.get("type", "info")
-                
-                if msg_type == "interaction_required":
-                    future = asyncio.Future()
-                    self.pending_choices[session_id] = future
-                    
-                    await self._send(session_id, {
-                        "type": "interaction_required",
-                        "payload": message_data
-                    })
-                    
-                    choice = await future
-                    return choice
-                else:
-                    await self._send(session_id, {
-                        "type": msg_type,
-                        "payload": message_data.get("payload", message_data)
-                    })
-                    return None
-            
-            orchestrator.set_websocket_callback(session_id, websocket_callback)
-            
-            result = await run_scan(mode, target, session_id)
+            methods = {
+                "full_scan": orchestrator.run_full_scan,
+                "info_collection": orchestrator.run_info_collection,
+                "vuln_scan": orchestrator.run_vuln_scan
+            }
+            result = await methods.get(mode, orchestrator.run_info_collection)(state)
+            memory_store.save_session(session_id, result)
             
             await self._send(session_id, {
                 "type": "scan_completed",
                 "payload": {
                     "task_id": task_id,
                     "target": target,
-                    "session_id": result.get("session_id"),
                     "completed_tasks": result.get("completed_tasks", []),
                     "vulnerabilities_count": len(result.get("vulnerabilities", [])),
-                    "report": result.get("report", ""),
-                    "report_url": result.get("report_url", ""),
-                    "report_id": result.get("report_id", "")
+                    "report": result.get("report", "")
                 }
             })
-            
         except asyncio.CancelledError:
             await self._send(session_id, {"type": "scan_cancelled", "payload": {"task_id": task_id}})
         except Exception as e:
-            logger.error(f"扫描失败: {e}")
             await self._send_error(session_id, str(e), task_id=task_id)
-        finally:
-            self.pending_choices.pop(session_id, None)
     
     async def _handle_get_history(self, session_id: str, payload: Dict):
-        history = get_chat_history(session_id)
+        history = memory_store.get_chat_history(session_id)
         await self._send(session_id, {"type": "history", "payload": {"history": history}})
     
     async def _handle_get_status(self, session_id: str, payload: Dict):
-        status = get_session_status(session_id)
-        orchestrator = get_agent_orchestrator()
-        pending = orchestrator.get_pending_interaction(session_id)
-        
-        await self._send(session_id, {
-            "type": "status", 
-            "payload": {
-                "state": status,
-                "waiting_for_user": pending is not None,
-                "pending_interaction": pending
-            }
-        })
+        state = memory_store.get_session(session_id)
+        if state:
+            await self._send(session_id, {
+                "type": "status",
+                "payload": {
+                    "state": {
+                        "task_id": state.get("task_id", ""),
+                        "target": state.get("target", ""),
+                        "mode": state.get("mode", ""),
+                        "completed_tasks": state.get("completed_tasks", []),
+                        "is_complete": state.get("is_complete", False)
+                    }
+                }
+            })
+        else:
+            await self._send(session_id, {"type": "status", "payload": {"state": None}})
     
     async def _handle_chat(self, session_id: str, payload: Dict):
         content = payload.get("content", "")
         if not content:
             return
         
+        memory_store.append_chat(session_id, "user", content)
+        
         try:
-            ai_content = await chat(session_id, content)
+            messages = [SystemMessage(content=CHAT_SYSTEM_PROMPT)]
+            for msg in memory_store.get_chat_history(session_id)[-10:]:
+                if msg["role"] == "user":
+                    messages.append(HumanMessage(content=msg["content"]))
+                elif msg["role"] == "assistant":
+                    messages.append(AIMessage(content=msg["content"]))
+            
+            if not any(isinstance(m, HumanMessage) for m in messages[1:]):
+                messages.append(HumanMessage(content=content))
+            
+            response = await self._get_llm().ainvoke(messages)
+            ai_content = response.content
+            memory_store.append_chat(session_id, "assistant", ai_content)
+            
             await self._send(session_id, {"type": "ai_message", "payload": {"content": ai_content}})
         except Exception as e:
             await self._send_error(session_id, f"AI对话失败: {str(e)}")
@@ -268,20 +214,15 @@ class AIChatManager:
             await self._send_error(session_id, "工具名称和目标地址不能为空")
             return
         
+        tool = get_tool_by_name(tool_name)
+        if not tool:
+            await self._send_error(session_id, f"工具 {tool_name} 不存在")
+            return
+        
         try:
-            await self._send(session_id, {
-                "type": "tool_execution_started",
-                "payload": {"tool_name": tool_name, "target": target}
-            })
-            
-            result = execute_tool(tool_name, target)
-            
-            await self._send(session_id, {
-                "type": "tool_execution_completed",
-                "payload": {"tool_name": tool_name, "result": result}
-            })
-        except ValueError as e:
-            await self._send_error(session_id, str(e), tool_name=tool_name)
+            await self._send(session_id, {"type": "tool_execution_started", "payload": {"tool_name": tool_name, "target": target}})
+            result = tool.invoke(target)
+            await self._send(session_id, {"type": "tool_execution_completed", "payload": {"tool_name": tool_name, "result": result}})
         except Exception as e:
             await self._send_error(session_id, f"工具执行失败: {str(e)}", tool_name=tool_name)
 

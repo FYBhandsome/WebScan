@@ -426,8 +426,25 @@ const Chat = {
                 break;
 
             case 'task_completed':
-                const vulnIcon = data.payload.vulnerable ? '⚠️' : '✅';
-                this.addStreamMessage(`${vulnIcon} ${data.payload.tool} 完成\n分析: ${data.payload.analysis}`, 'ai');
+                const taskData = data.payload;
+                const vulnIcon = taskData.vulnerable ? '⚠️' : '✅';
+                const authIcon = taskData.auth_obtained ? '🔐' : '';
+                
+                let taskMsg = `${vulnIcon} ${taskData.tool} 完成\n`;
+                if (taskData.target) {
+                    taskMsg += `目标: ${taskData.target}\n`;
+                }
+                taskMsg += `分析: ${taskData.analysis}`;
+                
+                if (taskData.raw_result) {
+                    console.log(`[${taskData.tool}] 原始数据:`, taskData.raw_result);
+                }
+                
+                this.addStreamMessage(taskMsg, 'ai');
+                
+                if (taskData.auth_obtained) {
+                    this.addStreamMessage(`${authIcon} 已获取认证信息，后续扫描将自动使用`, 'ai');
+                }
                 break;
 
             case 'task_error':
@@ -495,6 +512,156 @@ const Chat = {
                 this.addMessage(`✅ 工具执行完成: ${data.payload.tool_name}`, 'ai');
                 break;
 
+            case 'intent_recognized':
+                const intentType = data.payload.intent_type;
+                let intentMsg = `🎯 识别意图: `;
+                if (intentType === 'scan') {
+                    intentMsg += '漏洞扫描';
+                } else if (intentType === 'tool') {
+                    intentMsg += `工具直调 (${data.payload.tool_name || '未知工具'})`;
+                } else {
+                    intentMsg += '聊天咨询';
+                }
+                if (data.payload.target) {
+                    intentMsg += ` | 目标: ${data.payload.target}`;
+                }
+                this.addStreamMessage(intentMsg, 'ai');
+                break;
+
+            case 'intent_validation_error':
+                this.hideTypingIndicator();
+                this.addMessage(`❌ ${data.payload.error}`, 'ai');
+                break;
+
+            case 'direct_tool_started':
+                this.addStreamMessage(`🔧 开始执行工具: ${data.payload.tool} -> ${data.payload.target}`, 'ai');
+                break;
+
+            case 'direct_tool_completed':
+                this.hideTypingIndicator();
+                const toolData = data.payload;
+                let toolResultMsg = toolData.formatted_result || toolData.analysis || '执行完成';
+                
+                if (toolData.vulnerable) {
+                    toolResultMsg = '⚠️ ' + toolResultMsg;
+                }
+                
+                if (toolData.auth_obtained) {
+                    toolResultMsg += '\n🔐 已获取认证信息';
+                }
+                
+                this.addMessage(toolResultMsg, 'ai');
+                
+                if (toolData.raw_result) {
+                    console.log(`[${toolData.tool}] 原始数据:`, toolData.raw_result);
+                }
+                break;
+
+            case 'direct_tool_error':
+                this.hideTypingIndicator();
+                this.addMessage(`❌ 工具执行失败: ${data.payload.tool} - ${data.payload.error}`, 'ai');
+                break;
+
+            case 'tool_not_found':
+                this.hideTypingIndicator();
+                let toolMsg = `❌ 工具 '${data.payload.tool_name}' 不存在\n\n`;
+                toolMsg += `💡 您可以选择：\n`;
+                toolMsg += `1. 上传自定义脚本\n`;
+                toolMsg += `2. 让AI生成脚本\n`;
+                toolMsg += `3. 使用其他内置工具\n\n`;
+                toolMsg += `可用工具: ${data.payload.available_tools.slice(0, 8).join(', ')}`;
+                if (data.payload.available_tools.length > 8) {
+                    toolMsg += `... 等${data.payload.available_tools.length}个`;
+                }
+                this.addMessage(toolMsg, 'ai');
+                this.addToolNotFoundOptions(data.payload.options);
+                break;
+
+            case 'scan_flow_started':
+                this.hideTypingIndicator();
+                this.addMessage(`🔍 开始扫描流程: ${data.payload.target}`, 'ai');
+                break;
+
+            case 'user_message_received':
+                break;
+
+            case 'script_upload_request':
+                this.hideTypingIndicator();
+                this.showScriptUploadDialog();
+                break;
+
+            case 'script_generate_request':
+                this.hideTypingIndicator();
+                this.showScriptGenerateDialog();
+                break;
+
+            case 'script_analyzing':
+                this.addStreamMessage('🤖 AI正在分析脚本...', 'ai');
+                break;
+
+            case 'script_generating':
+                this.addStreamMessage('🤖 AI正在生成脚本...', 'ai');
+                break;
+
+            case 'script_registered':
+                this.hideTypingIndicator();
+                this.addMessage(`✅ ${data.payload.message}\n工具名: ${data.payload.tool_name}\n描述: ${data.payload.description}`, 'ai');
+                break;
+
+            case 'script_generated':
+                this.hideTypingIndicator();
+                this.addMessage(`✅ ${data.payload.message}\n工具名: ${data.payload.tool_name}\n描述: ${data.payload.description}`, 'ai');
+                if (data.payload.script_code) {
+                    this.addMessage(`📝 生成的脚本代码:\n\`\`\`python\n${data.payload.script_code}\n\`\`\``, 'ai');
+                }
+                break;
+
+            case 'script_error':
+                this.hideTypingIndicator();
+                this.addMessage(`❌ 脚本处理失败: ${data.payload.error}`, 'ai');
+                break;
+
+            case 'input_request':
+                this.hideTypingIndicator();
+                this.showInputDialog(data.payload);
+                break;
+
+            case 'input_validated':
+                this.hideTypingIndicator();
+                this.addMessage(`✅ 已设置${data.payload.field === 'target' ? '目标地址' : data.payload.field}: ${data.payload.value}`, 'ai');
+                break;
+
+            case 'input_validation_error':
+                this.hideTypingIndicator();
+                this.addMessage(`❌ ${data.payload.error}`, 'ai');
+                this.showInputDialog({ field: data.payload.field, description: data.payload.error });
+                break;
+
+            case 'workflow_progress':
+                this.updateWorkflowProgress(data.payload);
+                break;
+
+            case 'workflow_error':
+                this.hideTypingIndicator();
+                const errorLevel = data.payload.level || 'error';
+                const errorIcon = errorLevel === 'critical' ? '🚨' : (errorLevel === 'warning' ? '⚠️' : '❌');
+                this.addMessage(`${errorIcon} 错误 [${data.payload.node}]: ${data.payload.message}`, 'ai');
+                if (data.payload.suggestion) {
+                    this.addMessage(`💡 建议: ${data.payload.suggestion}`, 'ai');
+                }
+                break;
+
+            case 'validation_started':
+                this.showTypingIndicator();
+                break;
+
+            case 'validation_completed':
+                this.hideTypingIndicator();
+                if (data.payload.extracted_params?.target) {
+                    this.addMessage(`🎯 识别到目标: ${data.payload.extracted_params.target}`, 'ai');
+                }
+                break;
+
             case 'error':
                 this.hideTypingIndicator();
                 this.addMessage('❌ 错误: ' + data.payload.error, 'ai');
@@ -518,10 +685,15 @@ const Chat = {
         }
 
         try {
-            const result = await API.generateReport(sessionId);
-            this.addMessage('📄 报告已生成\n' + (result.data?.report || ''), 'ai');
+            const result = await API.getReportBySession(sessionId);
+            if (result.code === 200 && result.data?.report) {
+                const report = result.data.report;
+                this.addMessage(`📄 报告信息\n\n报告名称: ${report.name}\n创建时间: ${report.created_at}\n文件大小: ${(report.size / 1024).toFixed(2)} KB\n\n[点击下载报告](${API.getReportDownloadUrl(report.name)})`, 'ai');
+            } else {
+                App.showToast('报告生成中，请稍后再试', 'info');
+            }
         } catch (error) {
-            App.showToast('报告生成失败: ' + error.message, 'error');
+            App.showToast('获取报告失败: ' + error.message, 'error');
         }
     },
 
@@ -529,6 +701,211 @@ const Chat = {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    },
+
+    showScriptUploadDialog() {
+        const content = prompt('请粘贴您的Python脚本内容:\n\n要求:\n- 必须包含 run(target) 函数\n- 返回 Dict 类型结果');
+        if (content && content.trim()) {
+            App.ws.send({
+                type: 'script_content',
+                payload: { script_content: content.trim() }
+            });
+            this.showTypingIndicator();
+        }
+    },
+
+    showScriptGenerateDialog() {
+        const description = prompt('请描述您需要的扫描脚本功能:\n\n例如: 检测目标网站是否存在敏感文件泄露');
+        if (description && description.trim()) {
+            App.ws.send({
+                type: 'script_description',
+                payload: { description: description.trim() }
+            });
+            this.showTypingIndicator();
+        }
+    },
+
+    addToolNotFoundOptions(options) {
+        const container = document.getElementById('chatMessages');
+        
+        const optionsEl = document.createElement('div');
+        optionsEl.className = 'message ai tool-options';
+        
+        const buttonsHtml = options.map(opt => `
+            <button class="tool-option-btn" data-key="${opt.key}">
+                ${opt.label}
+            </button>
+        `).join('');
+        
+        optionsEl.innerHTML = `
+            <div class="message-avatar">AI</div>
+            <div class="message-content">
+                <div class="tool-options-container">
+                    ${buttonsHtml}
+                </div>
+            </div>
+        `;
+        
+        container.appendChild(optionsEl);
+        container.scrollTop = container.scrollHeight;
+        
+        optionsEl.querySelectorAll('.tool-option-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const key = btn.dataset.key;
+                if (key === 'upload') {
+                    this.showScriptUploadDialog();
+                } else if (key === 'generate') {
+                    this.showScriptGenerateDialog();
+                } else {
+                    this.addMessage('请输入您想使用的工具名称或描述您的需求', 'ai');
+                }
+                optionsEl.remove();
+            });
+        });
+    },
+
+    showInputDialog(payload) {
+        const field = payload.field || 'target';
+        const label = payload.label || '请输入信息';
+        const description = payload.description || '';
+        const placeholder = payload.placeholder || '';
+        const required = payload.required !== false;
+
+        const container = document.getElementById('chatMessages');
+        
+        const dialogEl = document.createElement('div');
+        dialogEl.className = 'message ai input-dialog-message';
+        dialogEl.id = 'inputDialogMessage';
+        
+        dialogEl.innerHTML = `
+            <div class="message-avatar">AI</div>
+            <div class="message-content">
+                <div class="input-dialog">
+                    <div class="dialog-header">
+                        <strong>📝 ${label}</strong>
+                    </div>
+                    ${description ? `<div class="dialog-description">${description}</div>` : ''}
+                    <div class="dialog-body">
+                        <input type="text" class="dialog-input" 
+                            id="dialogInput_${field}" 
+                            placeholder="${placeholder}"
+                            ${required ? 'required' : ''}>
+                    </div>
+                    <div class="dialog-footer">
+                        <button class="dialog-btn cancel" onclick="Chat.cancelInputDialog()">取消</button>
+                        <button class="dialog-btn confirm" onclick="Chat.submitInputDialog('${field}')">确认</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        container.appendChild(dialogEl);
+        container.scrollTop = container.scrollHeight;
+        
+        const input = document.getElementById(`dialogInput_${field}`);
+        if (input) {
+            input.focus();
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    this.submitInputDialog(field);
+                }
+            });
+        }
+    },
+
+    submitInputDialog(field) {
+        const input = document.getElementById(`dialogInput_${field}`);
+        if (!input) return;
+        
+        const value = input.value.trim();
+        if (!value) {
+            App.showToast('请输入有效内容', 'warning');
+            return;
+        }
+        
+        App.ws.send({
+            type: 'input_response',
+            payload: { field, value }
+        });
+        
+        this.addMessage(value, 'user');
+        this.removeInputDialog();
+        this.showTypingIndicator();
+    },
+
+    cancelInputDialog() {
+        this.removeInputDialog();
+        this.addMessage('已取消输入', 'user');
+    },
+
+    removeInputDialog() {
+        const dialog = document.getElementById('inputDialogMessage');
+        if (dialog) {
+            dialog.remove();
+        }
+    },
+
+    updateWorkflowProgress(payload) {
+        const { stage, status, completed, total, progress_percent, current_task } = payload;
+        
+        let progressEl = document.getElementById('workflowProgress');
+        
+        if (!progressEl) {
+            const container = document.getElementById('chatMessages');
+            progressEl = document.createElement('div');
+            progressEl.className = 'message ai workflow-progress-message';
+            progressEl.id = 'workflowProgress';
+            container.appendChild(progressEl);
+        }
+        
+        const stageNames = {
+            'info_collection': '信息收集',
+            'vuln_scan': '漏洞扫描',
+            'full_scan': '完整扫描'
+        };
+        
+        const statusIcons = {
+            'pending': '⏳',
+            'running': '🔄',
+            'completed': '✅',
+            'error': '❌'
+        };
+        
+        const icon = statusIcons[status] || '🔄';
+        const stageName = stageNames[stage] || stage;
+        
+        progressEl.innerHTML = `
+            <div class="message-avatar">AI</div>
+            <div class="message-content">
+                <div class="workflow-progress-card">
+                    <div class="progress-header">
+                        <span class="progress-icon">${icon}</span>
+                        <span class="progress-title">${stageName}</span>
+                        <span class="progress-status">${status === 'completed' ? '已完成' : (status === 'running' ? '进行中' : '等待中')}</span>
+                    </div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar-fill" style="width: ${progress_percent}%"></div>
+                    </div>
+                    <div class="progress-info">
+                        <span>进度: ${completed}/${total}</span>
+                        <span>${progress_percent}%</span>
+                    </div>
+                    ${current_task ? `<div class="progress-current-task">当前任务: ${current_task}</div>` : ''}
+                </div>
+            </div>
+        `;
+        
+        const container = document.getElementById('chatMessages');
+        container.scrollTop = container.scrollHeight;
+        
+        if (status === 'completed') {
+            setTimeout(() => {
+                if (progressEl && progressEl.parentNode) {
+                    progressEl.classList.add('fade-out');
+                    setTimeout(() => progressEl.remove(), 500);
+                }
+            }, 2000);
+        }
     },
 
     clear() {

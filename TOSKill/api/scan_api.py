@@ -1,60 +1,56 @@
 """
 TOSKill RESTful API 接口层
 
-直接调用工具集执行扫描任务，不依赖 graph 工作流。
-支持单个工具执行和批量工具执行。
+提供简洁高效的HTTP API接口。
+REST API 直接执行工具，不使用图的 interrupt 机制。
+WebSocket 用于交互式流程。
 """
 import logging
-import asyncio
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 from uuid import uuid4
-from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from TOSKill.AI.graph import memory_store, get_agent_orchestrator
+from TOSKill.AI.state import create_initial_state, append_chat, update_state, get_state_summary
 from TOSKill.AI.tools import (
-    TOOL_MAP, 
-    get_tool_by_name, 
-    get_all_tool_names,
-    TOOL_SEQUENCE_INFO,
-    TOOL_SEQUENCE_VULN,
-    INFO_COLLECTION_TOOLS,
-    VULN_SCAN_TOOLS,
-    ALL_TOOLS
+    TOOL_MAP, get_tool_by_name, get_all_tool_names,
+    INFO_COLLECTION_TOOLS, VULN_SCAN_TOOLS, clean_target
 )
-from TOSKill.AI.tools import clean_target
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/toskill", tags=["TOSKill API"])
 
-executor = ThreadPoolExecutor(max_workers=4)
 
-_scan_tasks: Dict[str, Dict] = {}
-
+# ==================== 请求模型 ====================
 
 class ScanRequest(BaseModel):
     target: str = Field(..., description="扫描目标")
-    tools: Optional[List[str]] = Field(None, description="指定工具列表，为空则使用默认工具集")
-    generate_report: bool = Field(default=True, description="是否生成报告")
+    session_id: Optional[str] = Field(None, description="会话ID")
+    tools: Optional[List[str]] = Field(None, description="指定工具列表")
 
 
 class ToolExecuteRequest(BaseModel):
     tool_name: str = Field(..., description="工具名称")
     target: str = Field(..., description="扫描目标")
-    params: Optional[Dict[str, Any]] = Field(None, description="工具参数")
 
 
 class BatchToolExecuteRequest(BaseModel):
     tool_names: List[str] = Field(..., description="工具名称列表")
     target: str = Field(..., description="扫描目标")
-    parallel: bool = Field(default=True, description="是否并行执行")
+
+
+class ChatRequest(BaseModel):
+    session_id: str = Field(..., description="会话ID")
+    role: str = Field(default="user", description="角色")
+    content: str = Field(..., description="消息内容")
 
 
 class SessionRequest(BaseModel):
     target: Optional[str] = Field(default="", description="扫描目标")
-    tools: Optional[List[str]] = Field(None, description="工具列表")
+    mode: str = Field(default="info_collection", description="扫描模式")
 
 
 class APIResponse(BaseModel):
@@ -63,124 +59,115 @@ class APIResponse(BaseModel):
     data: Optional[dict] = None
 
 
-def _execute_single_tool(tool_name: str, target: str) -> Dict[str, Any]:
-    """执行单个工具"""
-    tool = get_tool_by_name(tool_name)
-    if not tool:
-        return {"tool": tool_name, "success": False, "error": f"工具 {tool_name} 不存在"}
-    
+# ==================== 辅助函数 ====================
+
+def _create_session_id() -> str:
+    return str(uuid4())[:8]
+
+
+def _prepare_session(request: ScanRequest, mode: str) -> Tuple[str, Dict]:
+    session_id = request.session_id or _create_session_id()
+    state = memory_store.get_session(session_id)
+    if not state:
+        state = create_initial_state(target=request.target, task_id=session_id, mode=mode)
+    return session_id, update_state(state, target=request.target, mode=mode)
+
+
+def _get_tools_for_mode(mode: str, custom_tools: List[str] = None) -> List[str]:
+    if custom_tools:
+        return [t for t in custom_tools if t in TOOL_MAP]
+    if mode == "info_collection":
+        return [t.name for t in INFO_COLLECTION_TOOLS]
+    elif mode == "vuln_scan":
+        return [t.name for t in VULN_SCAN_TOOLS]
+    else:
+        return [t.name for t in INFO_COLLECTION_TOOLS] + [t.name for t in VULN_SCAN_TOOLS]
+
+
+def _execute_tools_sync(target: str, tools: List[str]) -> Tuple[List[Dict], List[str]]:
+    results = []
+    errors = []
     cleaned_target = clean_target(target)
-    logger.info(f"执行工具: {tool_name} -> {cleaned_target}")
     
-    try:
-        result = tool.invoke(cleaned_target)
-        return {
-            "tool": tool_name,
-            "success": True,
-            "result": result,
-            "timestamp": datetime.now().isoformat()
-        }
-    except Exception as e:
-        logger.error(f"工具执行失败 {tool_name}: {e}")
-        return {
-            "tool": tool_name,
-            "success": False,
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
-
-
-def _execute_tools_sequential(tool_names: List[str], target: str) -> List[Dict]:
-    """顺序执行多个工具"""
-    results = []
-    for tool_name in tool_names:
-        result = _execute_single_tool(tool_name, target)
-        results.append(result)
-    return results
-
-
-def _execute_tools_parallel(tool_names: List[str], target: str) -> List[Dict]:
-    """并行执行多个工具"""
-    futures = []
-    for tool_name in tool_names:
-        future = executor.submit(_execute_single_tool, tool_name, target)
-        futures.append((tool_name, future))
-    
-    results = []
-    for tool_name, future in futures:
+    for tool_name in tools:
+        tool = get_tool_by_name(tool_name)
+        if not tool:
+            errors.append(f"工具 {tool_name} 不存在")
+            continue
         try:
-            result = future.result(timeout=300)
-            results.append(result)
+            result = tool.invoke(cleaned_target)
+            results.append({
+                "tool": tool_name,
+                "success": True,
+                "result": result,
+                "timestamp": datetime.now().isoformat()
+            })
         except Exception as e:
+            errors.append(f"{tool_name}: {str(e)}")
             results.append({
                 "tool": tool_name,
                 "success": False,
-                "error": str(e)
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
             })
-    return results
+    
+    return results, errors
 
 
-@router.post("/scan", response_model=APIResponse)
-async def api_scan(request: ScanRequest):
-    """执行扫描 - 自动选择工具集或使用指定工具"""
-    target = request.target
-    if not target:
-        raise HTTPException(status_code=400, detail="扫描目标不能为空")
-    
-    if request.tools:
-        tool_names = request.tools
-        for t in tool_names:
-            if t not in TOOL_MAP:
-                raise HTTPException(status_code=400, detail=f"工具 {t} 不存在")
-    else:
-        tool_names = get_all_tool_names()
-    
-    logger.info(f"开始扫描: {target}, 工具数量: {len(tool_names)}")
-    
-    results = _execute_tools_parallel(tool_names, target)
-    
-    success_count = sum(1 for r in results if r.get("success"))
-    error_count = len(results) - success_count
-    
-    return APIResponse(
-        message=f"扫描完成: {success_count}/{len(results)} 工具执行成功",
-        data={
-            "target": target,
-            "total_tools": len(results),
-            "success_count": success_count,
-            "error_count": error_count,
-            "results": results,
-            "timestamp": datetime.now().isoformat()
-        }
-    )
+def _validate_session(session_id: str) -> Dict:
+    state = memory_store.get_session(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"会话 {session_id} 不存在")
+    return state
 
+
+# ==================== 会话管理接口 ====================
+
+@router.post("/sessions", response_model=APIResponse)
+async def api_create_session(request: SessionRequest):
+    session_id = _create_session_id()
+    state = create_initial_state(target=request.target, task_id=session_id, mode=request.mode)
+    memory_store.save_session(session_id, state)
+    return APIResponse(message="会话创建成功", data={"session_id": session_id})
+
+
+@router.get("/sessions/{session_id}", response_model=APIResponse)
+async def api_get_session(session_id: str):
+    state = _validate_session(session_id)
+    return APIResponse(data=get_state_summary(state))
+
+
+@router.delete("/sessions/{session_id}", response_model=APIResponse)
+async def api_delete_session(session_id: str):
+    _validate_session(session_id)
+    memory_store.delete_session(session_id)
+    return APIResponse(message="会话删除成功")
+
+
+# ==================== 扫描接口 ====================
 
 @router.post("/scan/info", response_model=APIResponse)
 async def api_info_collection(request: ScanRequest):
-    """信息收集扫描 - 执行信息收集工具集"""
-    target = request.target
-    if not target:
-        raise HTTPException(status_code=400, detail="扫描目标不能为空")
+    session_id, state = _prepare_session(request, "info_collection")
+    tools = _get_tools_for_mode("info_collection", request.tools)
     
-    tool_names = request.tools if request.tools else TOOL_SEQUENCE_INFO
+    results, errors = _execute_tools_sync(request.target, tools)
     
-    for t in tool_names:
-        if t not in TOOL_MAP:
-            raise HTTPException(status_code=400, detail=f"工具 {t} 不存在")
+    tool_results = {r["tool"]: r.get("result", r.get("error")) for r in results if r["success"]}
+    completed_tasks = [r["tool"] for r in results if r["success"]]
     
-    logger.info(f"开始信息收集: {target}")
-    
-    results = _execute_tools_parallel(tool_names, target)
-    
-    success_count = sum(1 for r in results if r.get("success"))
+    state = update_state(state, tool_results=tool_results, completed_tasks=completed_tasks, errors=errors)
+    memory_store.save_session(session_id, state)
     
     return APIResponse(
-        message=f"信息收集完成: {success_count}/{len(results)}",
+        message=f"信息收集完成: {len(completed_tasks)}/{len(tools)}",
         data={
-            "target": target,
+            "session_id": session_id,
+            "target": request.target,
             "scan_type": "info_collection",
-            "tools_used": tool_names,
+            "tools_used": tools,
             "results": results,
+            "errors": errors,
             "timestamp": datetime.now().isoformat()
         }
     )
@@ -188,32 +175,37 @@ async def api_info_collection(request: ScanRequest):
 
 @router.post("/scan/vuln", response_model=APIResponse)
 async def api_vuln_scan(request: ScanRequest):
-    """漏洞扫描 - 执行漏洞扫描工具集"""
-    target = request.target
-    if not target:
-        raise HTTPException(status_code=400, detail="扫描目标不能为空")
+    session_id, state = _prepare_session(request, "vuln_scan")
+    tools = _get_tools_for_mode("vuln_scan", request.tools)
     
-    tool_names = request.tools if request.tools else TOOL_SEQUENCE_VULN
+    results, errors = _execute_tools_sync(request.target, tools)
     
-    for t in tool_names:
-        if t not in TOOL_MAP:
-            raise HTTPException(status_code=400, detail=f"工具 {t} 不存在")
+    tool_results = {r["tool"]: r.get("result", r.get("error")) for r in results if r["success"]}
+    completed_tasks = [r["tool"] for r in results if r["success"]]
     
-    logger.info(f"开始漏洞扫描: {target}")
+    vulnerabilities = []
+    for r in results:
+        if r["success"] and isinstance(r.get("result"), dict):
+            if r["result"].get("vulnerable"):
+                vulnerabilities.append({
+                    "tool": r["tool"],
+                    "type": r["result"].get("vuln_type", "unknown"),
+                    "severity": r["result"].get("severity", "medium")
+                })
     
-    results = _execute_tools_parallel(tool_names, target)
-    
-    success_count = sum(1 for r in results if r.get("success"))
-    vuln_found = sum(1 for r in results if r.get("success") and r.get("result", {}).get("vulnerable"))
+    state = update_state(state, tool_results=tool_results, completed_tasks=completed_tasks, errors=errors, vulnerabilities=vulnerabilities)
+    memory_store.save_session(session_id, state)
     
     return APIResponse(
-        message=f"漏洞扫描完成: {success_count}/{len(results)}, 发现漏洞: {vuln_found}",
+        message=f"漏洞扫描完成: {len(completed_tasks)}/{len(tools)}",
         data={
-            "target": target,
+            "session_id": session_id,
+            "target": request.target,
             "scan_type": "vuln_scan",
-            "tools_used": tool_names,
-            "vulnerabilities_found": vuln_found,
+            "tools_used": tools,
             "results": results,
+            "vulnerabilities": vulnerabilities,
+            "errors": errors,
             "timestamp": datetime.now().isoformat()
         }
     )
@@ -221,237 +213,184 @@ async def api_vuln_scan(request: ScanRequest):
 
 @router.post("/scan/full", response_model=APIResponse)
 async def api_full_scan(request: ScanRequest):
-    """完整扫描 - 执行所有工具并生成报告"""
-    target = request.target
-    if not target:
-        raise HTTPException(status_code=400, detail="扫描目标不能为空")
+    session_id, state = _prepare_session(request, "full_scan")
+    tools = _get_tools_for_mode("full_scan", request.tools)
     
-    tool_names = request.tools if request.tools else (TOOL_SEQUENCE_INFO + TOOL_SEQUENCE_VULN)
+    results, errors = _execute_tools_sync(request.target, tools)
     
-    for t in tool_names:
-        if t not in TOOL_MAP:
-            raise HTTPException(status_code=400, detail=f"工具 {t} 不存在")
+    tool_results = {r["tool"]: r.get("result", r.get("error")) for r in results if r["success"]}
+    completed_tasks = [r["tool"] for r in results if r["success"]]
     
-    logger.info(f"开始完整扫描: {target}")
+    vulnerabilities = []
+    for r in results:
+        if r["success"] and isinstance(r.get("result"), dict):
+            if r["result"].get("vulnerable"):
+                vulnerabilities.append({
+                    "tool": r["tool"],
+                    "type": r["result"].get("vuln_type", "unknown"),
+                    "severity": r["result"].get("severity", "medium")
+                })
     
-    session_id = str(uuid4())[:8]
-    
-    info_results = _execute_tools_parallel(
-        [t for t in tool_names if t in TOOL_SEQUENCE_INFO],
-        target
-    )
-    
-    vuln_results = _execute_tools_parallel(
-        [t for t in tool_names if t in TOOL_SEQUENCE_VULN],
-        target
-    )
-    
-    all_results = info_results + vuln_results
-    success_count = sum(1 for r in all_results if r.get("success"))
-    vuln_found = sum(1 for r in vuln_results if r.get("success") and r.get("result", {}).get("vulnerable"))
-    
-    response_data = {
-        "session_id": session_id,
-        "target": target,
-        "scan_type": "full_scan",
-        "info_collection": {
-            "tools_count": len(info_results),
-            "results": info_results
-        },
-        "vuln_scan": {
-            "tools_count": len(vuln_results),
-            "vulnerabilities_found": vuln_found,
-            "results": vuln_results
-        },
+    scan_summary = {
+        "total_tools": len(tools),
+        "completed_tools": len(completed_tasks),
+        "vulnerabilities_found": len(vulnerabilities),
+        "errors_count": len(errors),
         "timestamp": datetime.now().isoformat()
     }
     
-    if request.generate_report and success_count > 0:
-        try:
-            from TOSKill.tools.report.report_manager import get_report_manager
-            report_manager = get_report_manager()
-            
-            tool_results = {}
-            vulnerabilities = []
-            
-            for r in all_results:
-                if r.get("success") and r.get("result"):
-                    tool_results[r["tool"]] = r["result"]
-                    if isinstance(r["result"], dict) and r["result"].get("vulnerable"):
-                        vulnerabilities.append({
-                            "type": r["tool"].replace("_scan", ""),
-                            "severity": r["result"].get("severity", "medium"),
-                            "url": target,
-                            "description": r["result"].get("description", "")
-                        })
-            
-            report_content = await report_manager.generate_ai_report_content_async(
-                tool_results, vulnerabilities, target
-            )
-            
-            report_info = report_manager.save_report(
-                session_id=session_id,
-                content=report_content,
-                metadata={
-                    "target": target,
-                    "tool_results": tool_results,
-                    "vulnerabilities": vulnerabilities,
-                    "scan_summary": {
-                        "tool_count": len(tool_results),
-                        "vulnerability_count": len(vulnerabilities)
-                    }
-                }
-            )
-            
-            response_data["report_url"] = report_info.get("download_url", "")
-            response_data["report_id"] = report_info.get("report_id", "")
-            
-            logger.info(f"报告已生成: {report_info.get('download_url')}")
-            
-        except Exception as e:
-            logger.error(f"生成报告失败: {e}")
+    state = update_state(
+        state, 
+        tool_results=tool_results, 
+        completed_tasks=completed_tasks, 
+        errors=errors, 
+        vulnerabilities=vulnerabilities,
+        scan_summary=scan_summary,
+        is_complete=True
+    )
+    memory_store.save_session(session_id, state)
     
     return APIResponse(
-        message=f"完整扫描完成: {success_count}/{len(all_results)}, 发现漏洞: {vuln_found}",
-        data=response_data
+        message=f"完整扫描完成: {len(completed_tasks)}/{len(tools)}",
+        data={
+            "session_id": session_id,
+            "target": request.target,
+            "scan_type": "full_scan",
+            "tools_used": tools,
+            "results": results,
+            "vulnerabilities": vulnerabilities,
+            "scan_summary": scan_summary,
+            "errors": errors,
+            "timestamp": datetime.now().isoformat()
+        }
     )
 
 
+# ==================== 工具执行接口 ====================
+
 @router.get("/tools", response_model=APIResponse)
 async def api_list_tools():
-    """获取所有可用工具列表"""
-    tools = [
-        {
-            "name": name,
-            "description": tool.description,
-            "category": "info_collection" if tool in INFO_COLLECTION_TOOLS else
-                       "vuln_scan" if tool in VULN_SCAN_TOOLS else "poc"
-        }
-        for name, tool in TOOL_MAP.items()
-    ]
+    tools = [{"name": n, "description": getattr(t, 'description', '')} for n, t in TOOL_MAP.items()]
     return APIResponse(data={"tools": tools, "count": len(tools)})
 
 
 @router.get("/tools/categories", response_model=APIResponse)
 async def api_list_tools_by_category():
-    """获取按类别分组的工具列表"""
     return APIResponse(data={
         "info_collection": [t.name for t in INFO_COLLECTION_TOOLS],
         "vuln_scan": [t.name for t in VULN_SCAN_TOOLS],
-        "poc": [t.name for t in ALL_TOOLS if t not in INFO_COLLECTION_TOOLS and t not in VULN_SCAN_TOOLS],
-        "all": get_all_tool_names()
+        "all": list(TOOL_MAP.keys())
     })
 
 
 @router.post("/tools/execute", response_model=APIResponse)
 async def api_execute_tool(request: ToolExecuteRequest):
-    """执行单个工具"""
-    if request.tool_name not in TOOL_MAP:
+    tool = get_tool_by_name(request.tool_name)
+    if not tool:
         raise HTTPException(status_code=404, detail=f"工具 {request.tool_name} 不存在")
     
-    if not request.target:
-        raise HTTPException(status_code=400, detail="扫描目标不能为空")
+    target = clean_target(request.target)
     
-    logger.info(f"执行单个工具: {request.tool_name} -> {request.target}")
-    
-    result = _execute_single_tool(request.tool_name, request.target)
-    
-    if result["success"]:
-        return APIResponse(message="工具执行完成", data=result)
-    else:
-        raise HTTPException(status_code=500, detail=result.get("error", "执行失败"))
+    try:
+        result = tool.invoke(target)
+        return APIResponse(message="工具执行完成", data={
+            "tool_name": request.tool_name,
+            "target": target,
+            "success": True,
+            "result": result,
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        return APIResponse(
+            code=500,
+            message=f"工具执行失败: {str(e)}",
+            data={
+                "tool_name": request.tool_name,
+                "target": target,
+                "success": False,
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
+        )
 
 
 @router.post("/tools/execute/batch", response_model=APIResponse)
 async def api_execute_tools_batch(request: BatchToolExecuteRequest):
-    """批量执行工具"""
-    if not request.tool_names:
-        raise HTTPException(status_code=400, detail="工具列表不能为空")
-    
-    if not request.target:
-        raise HTTPException(status_code=400, detail="扫描目标不能为空")
-    
-    for t in request.tool_names:
-        if t not in TOOL_MAP:
-            raise HTTPException(status_code=400, detail=f"工具 {t} 不存在")
-    
-    logger.info(f"批量执行工具: {request.tool_names} -> {request.target}")
-    
-    if request.parallel:
-        results = _execute_tools_parallel(request.tool_names, request.target)
-    else:
-        results = _execute_tools_sequential(request.tool_names, request.target)
-    
-    success_count = sum(1 for r in results if r.get("success"))
+    results, errors = _execute_tools_sync(request.target, request.tool_names)
     
     return APIResponse(
-        message=f"批量执行完成: {success_count}/{len(results)}",
-        data={
-            "target": request.target,
-            "tools": request.tool_names,
-            "total": len(results),
-            "success_count": success_count,
-            "results": results
-        }
+        message=f"批量执行完成: {len([r for r in results if r['success']])}/{len(request.tool_names)}",
+        data={"results": results, "errors": errors}
     )
 
 
-@router.get("/tools/{tool_name}", response_model=APIResponse)
-async def api_get_tool_info(tool_name: str):
-    """获取单个工具详情"""
-    tool = get_tool_by_name(tool_name)
-    if not tool:
-        raise HTTPException(status_code=404, detail=f"工具 {tool_name} 不存在")
+# ==================== 报告接口 ====================
+
+@router.post("/reports/generate/{session_id}", response_model=APIResponse)
+async def api_generate_report(session_id: str):
+    state = _validate_session(session_id)
     
-    return APIResponse(data={
-        "name": tool.name,
-        "description": tool.description,
-        "category": "info_collection" if tool in INFO_COLLECTION_TOOLS else
-                   "vuln_scan" if tool in VULN_SCAN_TOOLS else "poc"
+    tool_results = state.get("tool_results", {})
+    vulnerabilities = state.get("vulnerabilities", [])
+    target = state.get("target", "")
+    
+    if not tool_results:
+        return APIResponse(code=400, message="无扫描结果，无法生成报告", data=None)
+    
+    report = f"""# 安全扫描报告
+
+## 目标
+{target}
+
+## 扫描摘要
+- 扫描时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- 执行工具数: {len(tool_results)}
+- 发现漏洞数: {len(vulnerabilities)}
+
+## 工具执行结果
+"""
+    for tool_name, result in tool_results.items():
+        report += f"\n### {tool_name}\n```\n{str(result)[:500]}\n```\n"
+    
+    if vulnerabilities:
+        report += "\n## 发现的漏洞\n"
+        for vuln in vulnerabilities:
+            report += f"- **{vuln.get('tool', 'Unknown')}**: {vuln.get('type', 'Unknown')} ({vuln.get('severity', 'Medium')})\n"
+    
+    state = update_state(state, report=report, is_complete=True)
+    memory_store.save_session(session_id, state)
+    
+    return APIResponse(message="报告生成成功", data={
+        "report": report,
+        "vulnerabilities_count": len(vulnerabilities),
+        "tools_count": len(tool_results)
     })
 
 
+# ==================== 聊天接口 ====================
+
+@router.post("/chat/message", response_model=APIResponse)
+async def api_append_chat_message(request: ChatRequest):
+    state = _validate_session(request.session_id)
+    
+    new_state = append_chat(state, request.role, request.content)
+    memory_store.save_session(request.session_id, new_state)
+    memory_store.append_chat(request.session_id, request.role, request.content)
+    
+    return APIResponse(message="消息已添加")
+
+
+@router.get("/chat/history/{session_id}", response_model=APIResponse)
+async def api_get_chat_history(session_id: str, limit: int = 20):
+    history = memory_store.get_chat_history(session_id)
+    return APIResponse(data={"history": history[-limit:] if history else []})
+
+
+# ==================== 健康检查 ====================
+
 @router.get("/health", response_model=APIResponse)
 async def api_health_check():
-    """健康检查"""
     return APIResponse(
         message="TOSKill API 服务正常",
-        data={
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "tools_count": len(TOOL_MAP),
-            "available_tools": get_all_tool_names()
-        }
+        data={"status": "healthy", "timestamp": datetime.now().isoformat(), "tools_count": len(TOOL_MAP)}
     )
-
-
-@router.post("/sessions", response_model=APIResponse)
-async def api_create_session(request: SessionRequest):
-    """创建扫描会话"""
-    session_id = str(uuid4())[:8]
-    _scan_tasks[session_id] = {
-        "target": request.target,
-        "tools": request.tools or get_all_tool_names(),
-        "status": "created",
-        "created_at": datetime.now().isoformat()
-    }
-    return APIResponse(message="会话创建成功", data={"session_id": session_id})
-
-
-@router.get("/sessions/{session_id}", response_model=APIResponse)
-async def api_get_session(session_id: str):
-    """获取会话状态"""
-    if session_id not in _scan_tasks:
-        raise HTTPException(status_code=404, detail=f"会话 {session_id} 不存在")
-    
-    return APIResponse(data=_scan_tasks[session_id])
-
-
-@router.delete("/sessions/{session_id}", response_model=APIResponse)
-async def api_delete_session(session_id: str):
-    """删除会话"""
-    if session_id not in _scan_tasks:
-        raise HTTPException(status_code=404, detail=f"会话 {session_id} 不存在")
-    
-    del _scan_tasks[session_id]
-    return APIResponse(message="会话删除成功")

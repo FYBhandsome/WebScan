@@ -339,10 +339,16 @@ async def search_from_seebug(request: SeebugPOCSearchRequest):
             if not ssvid:
                 continue
             
+            cve_id = poc.get('cve_id', '')
+            if not cve_id or cve_id.strip() == '':
+                cve_id = f"SSVID-{ssvid}"
+            
             existing = await VulnerabilityKB.get_or_none(ssvid=ssvid)
+            if not existing:
+                existing = await VulnerabilityKB.get_or_none(cve_id=cve_id)
             
             vuln_data = {
-                'cve_id': poc.get('cve_id', ''),
+                'cve_id': cve_id,
                 'name': poc.get('name', poc.get('title', poc.get('vul_name', 'Unknown'))),
                 'description': poc.get('description', poc.get('summary', '')),
                 'severity': poc.get('level', poc.get('severity', 'Unknown')),

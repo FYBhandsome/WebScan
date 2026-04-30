@@ -16,6 +16,25 @@ from pathlib import Path
 request_id_var: ContextVar[Optional[str]] = ContextVar('request_id', default=None)
 
 
+class SafeStreamHandler(logging.StreamHandler):
+    """安全的流处理器，处理编码错误"""
+    
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            try:
+                stream.write(msg + self.terminator)
+            except UnicodeEncodeError:
+                try:
+                    safe_msg = msg.encode('utf-8', errors='replace').decode('utf-8')
+                    stream.write(safe_msg + self.terminator)
+                except Exception:
+                    stream.write(msg.encode('ascii', errors='replace').decode('ascii') + self.terminator)
+        except Exception:
+            self.handleError(record)
+
+
 class JsonFormatter(logging.Formatter):
     """JSON格式日志格式化器"""
     
@@ -91,7 +110,7 @@ def setup_structured_logging(
         formatter = ConsoleFormatter()
     
     if console_output:
-        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler = SafeStreamHandler(sys.stdout)
         console_handler.setFormatter(formatter)
         root_logger.addHandler(console_handler)
     

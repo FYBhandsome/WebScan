@@ -55,7 +55,7 @@ REQUEST_TIMEOUT = 3
 # 是否禁用SSL证书校验(生产环境建议设为True)
 VERIFY_SSL = False
 # 风险路径字典文件路径
-INFOLEAK_JSON_PATH = Path(__file__).parent.parent.parent / "database" / "infoleak.json"
+INFOLEAK_JSON_PATH = Path(__file__).parent.parent.parent / "geoip" / "infoleak.json"
 
 # === 日志配置(统一管理扫描日志) ===
 logging.basicConfig(
