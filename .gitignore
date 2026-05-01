@@ -75,6 +75,8 @@ logs/
 # Environment Variables
 
 .env.local
+.env
+*.env.*
 
 
 # OS
