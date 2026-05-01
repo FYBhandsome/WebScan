@@ -250,25 +250,27 @@ class TestWorkflowPauseResume:
         
         assert not clean_memory_store.has_pending_interaction(mock_state["task_id"])
     
-    def test_resume_workflow(self, mock_state, clean_memory_store):
+    @pytest.mark.asyncio
+    async def test_resume_workflow(self, mock_state, clean_memory_store):
         """测试恢复工作流"""
         from TOSKill.AI.graph import get_agent_orchestrator
         
         clean_memory_store.save_session(mock_state["task_id"], mock_state)
         
         orchestrator = get_agent_orchestrator()
-        result = orchestrator.resume_workflow(mock_state["task_id"], "1")
+        result = await orchestrator.resume_workflow(mock_state["task_id"], "1")
         
-        assert result == True
+        assert result is not None
     
-    def test_resume_nonexistent_workflow(self, clean_memory_store):
+    @pytest.mark.asyncio
+    async def test_resume_nonexistent_workflow(self, clean_memory_store):
         """测试恢复不存在的工作流"""
         from TOSKill.AI.graph import get_agent_orchestrator
         
         orchestrator = get_agent_orchestrator()
-        result = orchestrator.resume_workflow("nonexistent_session", "1")
+        result = await orchestrator.resume_workflow("nonexistent_session", "1")
         
-        assert result == False
+        assert result is None
     
     def test_get_pending_interaction(self, mock_state, clean_memory_store):
         """测试获取待处理交互"""
@@ -580,10 +582,14 @@ class TestIntentRecognition:
         state = update_state(mock_scan_state, user_input="扫描 example.com")
         clean_memory_store.save_session(state["task_id"], state)
         
-        with patch('TOSKill.AI.graph.get_llm') as mock_llm:
+        with patch('TOSKill.AI.graph.get_llm') as mock_get_llm:
+            mock_llm = MagicMock()
+            mock_bound = MagicMock()
             mock_response = MagicMock()
-            mock_response.content = '{"intent_type": "scan", "tool_name": "", "target": "example.com", "confidence": 0.9}'
-            mock_llm.return_value.invoke.return_value = mock_response
+            mock_response.tool_calls = [{'name': 'intent_scan', 'args': {'target': 'example.com'}}]
+            mock_bound.invoke.return_value = mock_response
+            mock_llm.bind_tools.return_value = mock_bound
+            mock_get_llm.return_value = mock_llm
             
             result = await intent_recognition(state)
             
@@ -598,10 +604,14 @@ class TestIntentRecognition:
         state = update_state(mock_scan_state, user_input="使用 sqli_scan 扫描 example.com")
         clean_memory_store.save_session(state["task_id"], state)
         
-        with patch('TOSKill.AI.graph.get_llm') as mock_llm:
+        with patch('TOSKill.AI.graph.get_llm') as mock_get_llm:
+            mock_llm = MagicMock()
+            mock_bound = MagicMock()
             mock_response = MagicMock()
-            mock_response.content = '{"intent_type": "tool", "tool_name": "sqli_scan", "target": "example.com", "confidence": 0.9}'
-            mock_llm.return_value.invoke.return_value = mock_response
+            mock_response.tool_calls = [{'name': 'intent_execute_tool', 'args': {'tool_name': 'sqli_scan', 'target': 'example.com'}}]
+            mock_bound.invoke.return_value = mock_response
+            mock_llm.bind_tools.return_value = mock_bound
+            mock_get_llm.return_value = mock_llm
             
             result = await intent_recognition(state)
             
@@ -616,10 +626,14 @@ class TestIntentRecognition:
         state = update_state(mock_scan_state, user_input="你好，请介绍一下SQL注入")
         clean_memory_store.save_session(state["task_id"], state)
         
-        with patch('TOSKill.AI.graph.get_llm') as mock_llm:
+        with patch('TOSKill.AI.graph.get_llm') as mock_get_llm:
+            mock_llm = MagicMock()
+            mock_bound = MagicMock()
             mock_response = MagicMock()
-            mock_response.content = '{"intent_type": "chat", "tool_name": "", "target": "", "confidence": 0.9}'
-            mock_llm.return_value.invoke.return_value = mock_response
+            mock_response.tool_calls = []
+            mock_bound.invoke.return_value = mock_response
+            mock_llm.bind_tools.return_value = mock_bound
+            mock_get_llm.return_value = mock_llm
             
             result = await intent_recognition(state)
             
@@ -652,9 +666,18 @@ class TestToolExistenceCheck:
         state = update_state(mock_scan_state, direct_tool="nonexistent_tool_xyz")
         clean_memory_store.save_session(state["task_id"], state)
         
-        result = await tool_existence_check(state)
-        
-        assert result["tool_exists"] == False
+        with patch('TOSKill.AI.graph.get_llm') as mock_get_llm:
+            mock_llm = MagicMock()
+            mock_bound = MagicMock()
+            mock_response = MagicMock()
+            mock_response.tool_calls = []
+            mock_bound.invoke.return_value = mock_response
+            mock_llm.bind_tools.return_value = mock_bound
+            mock_get_llm.return_value = mock_llm
+            
+            result = await tool_existence_check(state)
+            
+            assert result["tool_exists"] == False
 
 
 if __name__ == "__main__":

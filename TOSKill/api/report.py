@@ -14,11 +14,14 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from TOSKill.api.scan_api import APIResponse
+from TOSKill.config import settings, PROJECT_ROOT
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
-REPORTS_DIR = Path("reports")
+REPORTS_DIR = PROJECT_ROOT / "reports"
 REPORT_EXTENSIONS = ["*.md", "*.html"]
 
 
@@ -54,8 +57,8 @@ def build_report_info(file_path: Path) -> Dict[str, Any]:
     }
 
 
-@router.get("/list")
-async def list_reports() -> Dict[str, Any]:
+@router.get("/list", response_model=APIResponse)
+async def list_reports() -> APIResponse:
     """获取报告列表"""
     ensure_reports_dir()
     
@@ -87,15 +90,11 @@ async def list_reports() -> Dict[str, Any]:
     
     reports.sort(key=lambda x: x.get("modified_at") or x.get("created_at") or "", reverse=True)
     
-    return {
-        "success": True,
-        "reports": reports,
-        "total": len(reports)
-    }
+    return APIResponse(data={"reports": reports, "total": len(reports)})
 
 
-@router.get("/session/{session_id}")
-async def get_report_by_session(session_id: str) -> Dict[str, Any]:
+@router.get("/session/{session_id}", response_model=APIResponse)
+async def get_report_by_session(session_id: str) -> APIResponse:
     """根据会话ID获取报告信息"""
     try:
         from TOSKill.tools.report.report_manager import get_report_manager
@@ -105,10 +104,7 @@ async def get_report_by_session(session_id: str) -> Dict[str, Any]:
         if not report_info:
             raise HTTPException(status_code=404, detail=f"会话 {session_id} 的报告不存在")
         
-        return {
-            "success": True,
-            "report": report_info
-        }
+        return APIResponse(data={"report": report_info})
     except HTTPException:
         raise
     except Exception as e:
@@ -128,24 +124,21 @@ async def download_report(filename: str):
     )
 
 
-@router.delete("/{filename}")
-async def delete_report(filename: str):
+@router.delete("/{filename}", response_model=APIResponse)
+async def delete_report(filename: str) -> APIResponse:
     """删除报告文件"""
     file_path = validate_report_path(filename)
     
     try:
         file_path.unlink()
-        return {
-            "success": True,
-            "message": f"报告 {filename} 已删除"
-        }
+        return APIResponse(message=f"报告 {filename} 已删除")
     except Exception as e:
         logger.error(f"删除报告失败: {e}")
         raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
 
 
-@router.delete("/session/{session_id}")
-async def delete_report_by_session(session_id: str):
+@router.delete("/session/{session_id}", response_model=APIResponse)
+async def delete_report_by_session(session_id: str) -> APIResponse:
     """根据会话ID删除报告"""
     try:
         from TOSKill.tools.report.report_manager import get_report_manager
@@ -154,10 +147,7 @@ async def delete_report_by_session(session_id: str):
         success = rm.delete_report(session_id)
         
         if success:
-            return {
-                "success": True,
-                "message": f"会话 {session_id} 的报告已删除"
-            }
+            return APIResponse(message=f"会话 {session_id} 的报告已删除")
         else:
             raise HTTPException(status_code=404, detail=f"会话 {session_id} 的报告不存在")
             
@@ -168,8 +158,8 @@ async def delete_report_by_session(session_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{filename}/content")
-async def get_report_content(filename: str):
+@router.get("/{filename}/content", response_model=APIResponse)
+async def get_report_content(filename: str) -> APIResponse:
     """获取报告内容"""
     file_path = validate_report_path(filename)
     
@@ -177,11 +167,7 @@ async def get_report_content(filename: str):
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        return {
-            "success": True,
-            "filename": filename,
-            "content": content
-        }
+        return APIResponse(data={"filename": filename, "content": content})
     except Exception as e:
         logger.error(f"读取报告失败: {e}")
         raise HTTPException(status_code=500, detail=f"读取失败: {str(e)}")

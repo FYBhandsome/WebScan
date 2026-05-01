@@ -31,6 +31,7 @@ class ScanRequest(BaseModel):
     target: str = Field(..., description="扫描目标")
     session_id: Optional[str] = Field(None, description="会话ID")
     tools: Optional[List[str]] = Field(None, description="指定工具列表")
+    generate_report: bool = Field(default=True, description="是否自动生成报告")
 
     @field_validator("target")
     @classmethod
@@ -46,6 +47,7 @@ class ScanRequest(BaseModel):
 class ToolExecuteRequest(BaseModel):
     tool_name: str = Field(..., description="工具名称")
     target: str = Field(..., description="扫描目标")
+    params: Optional[dict] = Field(None, description="工具额外参数")
 
     @field_validator("tool_name")
     @classmethod
@@ -77,6 +79,11 @@ class ChatRequest(BaseModel):
     content: str = Field(..., description="消息内容")
 
 
+class ChatSendRequest(BaseModel):
+    session_id: str = Field(..., description="会话ID")
+    message: str = Field(..., description="消息内容")
+
+
 class SessionRequest(BaseModel):
     target: Optional[str] = Field(default="", description="扫描目标")
     mode: str = Field(default="info_collection", description="扫描模式")
@@ -86,7 +93,8 @@ class APIResponse(BaseModel):
     code: int = 200
     message: str = "success"
     data: Optional[dict] = None
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat(),
+        description="API 响应时间戳；data.timestamp 为业务时间戳（如扫描/注册时间），两者区分用途")
 
 
 # ==================== 辅助函数 ====================
@@ -110,7 +118,10 @@ def _get_tools_for_mode(mode: str, custom_tools: List[str] = None) -> List[str]:
         return [t.name for t in INFO_COLLECTION_TOOLS]
     elif mode == "vuln_scan":
         return [t.name for t in VULN_SCAN_TOOLS]
+    elif mode == "full_scan":
+        return [t.name for t in INFO_COLLECTION_TOOLS] + [t.name for t in VULN_SCAN_TOOLS]
     else:
+        logger.warning(f"未识别的扫描模式: {mode}，回退到全量工具")
         return [t.name for t in INFO_COLLECTION_TOOLS] + [t.name for t in VULN_SCAN_TOOLS]
 
 
@@ -125,7 +136,11 @@ def _execute_tools_sync(target: str, tools: List[str]) -> Tuple[List[Dict], List
             errors.append(f"工具 {tool_name} 不存在")
             continue
         try:
-            result = tool.invoke(cleaned_target)
+            if hasattr(tool, 'ainvoke') and callable(getattr(tool, 'ainvoke')):
+                import asyncio
+                result = asyncio.run(tool.ainvoke(cleaned_target))
+            else:
+                result = tool.invoke(cleaned_target)
             results.append({
                 "tool": tool_name,
                 "success": True,
@@ -316,9 +331,6 @@ async def api_list_tools_by_category():
 @router.post("/tools/execute", response_model=APIResponse)
 async def api_execute_tool(request: ToolExecuteRequest):
     tool = get_tool_by_name(request.tool_name)
-    if not tool:
-        raise HTTPException(status_code=404, detail=f"工具 {request.tool_name} 不存在")
-    
     target = clean_target(request.target)
     
     try:
@@ -500,3 +512,19 @@ def register_exception_handlers(app):
     """注册全局异常处理器"""
     app.add_exception_handler(Exception, global_exception_handler)
     logger.info("全局异常处理器已注册")
+
+
+chat_router = APIRouter(prefix="/chat", tags=["聊天兼容"])
+
+@chat_router.post("/send", response_model=APIResponse)
+async def api_chat_send(request: ChatSendRequest):
+    state = _validate_session(request.session_id)
+    new_state = append_chat(state, "user", request.message)
+    memory_store.save_session(request.session_id, new_state)
+    memory_store.append_chat(request.session_id, "user", request.message)
+    return APIResponse(message="消息已发送")
+
+@chat_router.get("/history/{session_id}", response_model=APIResponse)
+async def api_chat_history(session_id: str, limit: int = 20):
+    history = memory_store.get_chat_history(session_id)
+    return APIResponse(data={"history": history[-limit:] if history else []})

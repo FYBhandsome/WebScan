@@ -245,6 +245,32 @@ const Scanner = {
             case 'error':
                 App.showToast('扫描错误: ' + data.payload.error, 'error');
                 break;
+
+            case 'task_skipped':
+                this.updateTaskStatus(data.payload.tool, 'error');
+                App.showToast('任务跳过: ' + data.payload.reason, 'warning');
+                break;
+
+            case 'task_error':
+                this.updateTaskStatus(data.payload.tool, 'error');
+                App.showToast('任务失败: ' + data.payload.error, 'error');
+                break;
+
+            case 'workflow_progress':
+                const progressData = data.payload;
+                if (progressData.progress_percent !== undefined) {
+                    this.updateProgress(progressData.progress_percent, 
+                        `${progressData.stage || '扫描中'} - ${progressData.completed}/${progressData.total}`);
+                }
+                break;
+
+            case 'ai_decision':
+                const decisionData = data.payload;
+                this.updateProgress(
+                    Math.round((decisionData.completed_tasks?.length || 0) / (decisionData.total_tasks || 1) * 100),
+                    `AI决策: 下一步 ${decisionData.next_task}`
+                );
+                break;
         }
     }
 };

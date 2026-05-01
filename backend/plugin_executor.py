@@ -540,7 +540,7 @@ class PluginExecutor:
         """心跳循环"""
         while not self.stop_event.is_set():
             try:
-                url = f"{self.agent_url}/agent/task/{self.task_id}/plugin/{self.task_type}/heartbeat"
+                url = f"{self.agent_url}/api/ai_agents/tasks/{self.task_id}/plugin/{self.task_type}/heartbeat"
                 requests.put(url, json={"timestamp": time.time()}, timeout=5)
             except Exception:
                 pass
@@ -781,7 +781,7 @@ class PluginExecutor:
             result: 执行结果
         """
         try:
-            url = f"{self.agent_url}/agent/task/{self.task_id}/plugin/{self.task_type}/finish"
+            url = f"{self.agent_url}/api/ai_agents/tasks/{self.task_id}/plugin/{self.task_type}/finish"
             
             payload = {
                 "exitCode": 0 if result.success else 1,

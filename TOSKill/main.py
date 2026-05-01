@@ -45,6 +45,14 @@ async def lifespan(app: FastAPI):
     logger.info(f"服务地址: http://{settings.HOST}:{settings.PORT}")
     if FRONTEND_DIR.exists():
         logger.info(f"前端静态文件目录: {FRONTEND_DIR}")
+    
+    from TOSKill.AI.model_check import verify_model_connectivity
+    result = verify_model_connectivity()
+    if result["success"]:
+        logger.info(f"AI模型已连接: {result['message']} ({result['latency_ms']}ms)")
+    else:
+        logger.warning(f"AI模型未连接: {result['message']}，扫描功能仍可用但AI决策将使用回退策略")
+    
     yield
     logger.info("服务关闭")
 
@@ -118,25 +126,15 @@ async def serve_frontend_files(file_path: str):
     return {"error": f"File not found: {file_path}"}
 
 
-from TOSKill.api import ai_chat_router, report_router, scan_router
+from TOSKill.api import ai_chat_router, chat_router, report_router, scan_router
 app.include_router(scan_router, prefix="/api")
 app.include_router(ai_chat_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
+app.include_router(chat_router, prefix="/api")
 
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
     logger.info(f"静态文件服务已挂载: /static -> {FRONTEND_DIR}")
-
-
-@app.on_event("startup")
-async def startup_event():
-    """服务启动时检测 AI 模型连通性"""
-    from TOSKill.AI.model_check import verify_model_connectivity
-    result = verify_model_connectivity()
-    if result["success"]:
-        logger.info(f"AI模型已连接: {result['message']} ({result['latency_ms']}ms)")
-    else:
-        logger.warning(f"AI模型未连接: {result['message']}，扫描功能仍可用但AI决策将使用回退策略")
 
 
 if __name__ == "__main__":

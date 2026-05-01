@@ -14,7 +14,10 @@ import urllib.parse
 from typing import List, Dict, Set
 from bs4 import BeautifulSoup, Comment
 
-from .config import CRAWLER_CONFIG
+try:
+    from .config import CRAWLER_CONFIG
+except ImportError:
+    from config import CRAWLER_CONFIG
 
 
 class HTMLParser:

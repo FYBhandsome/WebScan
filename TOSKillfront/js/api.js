@@ -97,18 +97,7 @@ const API = {
     },
 
     async getReports() {
-        const response = await this.get('/reports/list');
-        if (response.success !== undefined) {
-            return { 
-                code: 200, 
-                message: 'success', 
-                data: { 
-                    reports: response.reports, 
-                    total: response.total 
-                } 
-            };
-        }
-        return response;
+        return this.get('/reports/list');
     },
 
     getReportDownloadUrl(filename) {
@@ -116,40 +105,15 @@ const API = {
     },
 
     async getReportContent(filename) {
-        const response = await this.get(`/reports/${filename}/content`);
-        if (response.success !== undefined) {
-            return { 
-                code: 200, 
-                message: 'success', 
-                data: { 
-                    filename: response.filename, 
-                    content: response.content 
-                } 
-            };
-        }
-        return response;
+        return this.get(`/reports/${filename}/content`);
     },
 
     async deleteReport(filename) {
-        const response = await this.delete(`/reports/${filename}`);
-        if (response.success !== undefined) {
-            return { code: 200, message: response.message || '删除成功', data: null };
-        }
-        return response;
+        return this.delete(`/reports/${filename}`);
     },
 
     async getReportBySession(sessionId) {
-        const response = await this.get(`/reports/session/${sessionId}`);
-        if (response.success !== undefined) {
-            return { 
-                code: 200, 
-                message: 'success', 
-                data: { 
-                    report: response.report 
-                } 
-            };
-        }
-        return response;
+        return this.get(`/reports/session/${sessionId}`);
     },
 
     async healthCheck() {

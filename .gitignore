@@ -73,10 +73,9 @@ logs/
 *.log.*
 
 # Environment Variables
-.env
+
 .env.local
-.env.*.local
-*.env
+
 
 # OS
 .DS_Store
@@ -162,3 +161,5 @@ playwright/.cache/
 # Trae IDE
 .trae/
 backup/
+
+RAG

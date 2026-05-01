@@ -312,7 +312,12 @@ async def sync_scans_from_awvs():
                     config = json.loads(existing_task.config)
                     config['scan_id'] = scan_id
                     existing_task.config = json.dumps(config)
-                    await existing_task.save()
+                    try:
+                        await existing_task.save()
+                    except ValueError as e:
+                        logger.warning(f"跳过任务 {existing_task.id} 状态更新: {str(e)}")
+                        target_task = existing_task
+                        continue
                     # 更新映射防止重复处理
                     db_task_map[scan_id] = existing_task
                     target_task = existing_task

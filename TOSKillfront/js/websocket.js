@@ -198,6 +198,21 @@ class WSManager {
         return this.send('user_choice', { choice });
     }
 
+    sendToolConfirm(confirmed = true) {
+        if (confirmed) {
+            return this.send('tool_confirmed', { confirmed: true });
+        } else {
+            return this.send('tool_rejected', { confirmed: false });
+        }
+    }
+
+    sendAlternativeChoice(choiceIndex, choiceLabel) {
+        return this.send('alternative_selected', {
+            choice_index: choiceIndex,
+            choice_label: choiceLabel
+        });
+    }
+
     sendChat(content) {
         return this.send('chat', { content });
     }

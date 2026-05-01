@@ -1,0 +1,86 @@
+{
+  "d2cd9ffc": {
+    "report_id": "scan_report_d2cd9ffc_20260501_190727",
+    "session_id": "d2cd9ffc",
+    "report_file": "scan_report_d2cd9ffc_20260501_190727.md",
+    "target": "example.com",
+    "created_at": "2026-05-01T19:07:27.663702",
+    "download_url": "/api/reports/download/scan_report_d2cd9ffc_20260501_190727.md",
+    "tool_results": {
+      "baseinfo_scan": {
+        "success": true,
+        "data": {
+          "server": "nginx"
+        }
+      },
+      "sqli_scan": {
+        "success": true,
+        "data": {
+          "vulnerable": false
+        }
+      }
+    },
+    "vulnerabilities": [],
+    "scan_summary": {
+      "timestamp": "2026-05-01T19:07:21.671018",
+      "tool_count": 2,
+      "vulnerability_count": 0
+    }
+  },
+  "6fadfaf1": {
+    "report_id": "scan_report_6fadfaf1_20260501_191041",
+    "session_id": "6fadfaf1",
+    "report_file": "scan_report_6fadfaf1_20260501_191041.md",
+    "target": "example.com",
+    "created_at": "2026-05-01T19:10:41.277260",
+    "download_url": "/api/reports/download/scan_report_6fadfaf1_20260501_191041.md",
+    "tool_results": {
+      "baseinfo_scan": {
+        "success": true,
+        "data": {
+          "server": "nginx"
+        }
+      },
+      "sqli_scan": {
+        "success": true,
+        "data": {
+          "vulnerable": false
+        }
+      }
+    },
+    "vulnerabilities": [],
+    "scan_summary": {
+      "timestamp": "2026-05-01T19:10:32.391411",
+      "tool_count": 2,
+      "vulnerability_count": 0
+    }
+  },
+  "a44fdf49": {
+    "report_id": "scan_report_a44fdf49_20260501_193710",
+    "session_id": "a44fdf49",
+    "report_file": "scan_report_a44fdf49_20260501_193710.md",
+    "target": "example.com",
+    "created_at": "2026-05-01T19:37:10.974899",
+    "download_url": "/api/reports/download/scan_report_a44fdf49_20260501_193710.md",
+    "tool_results": {
+      "baseinfo_scan": {
+        "success": true,
+        "data": {
+          "server": "nginx"
+        }
+      },
+      "sqli_scan": {
+        "success": true,
+        "data": {
+          "vulnerable": false
+        }
+      }
+    },
+    "vulnerabilities": [],
+    "scan_summary": {
+      "timestamp": "2026-05-01T19:37:04.751966",
+      "tool_count": 2,
+      "vulnerability_count": 0
+    }
+  }
+}

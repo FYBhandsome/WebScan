@@ -9,7 +9,7 @@
 
 **AI驱动的Web应用安全扫描平台**
 
-一个功能强大的Web应用安全扫描平台，集成POC漏洞扫描、端口扫描、AWVS集成、AI Agent等多种安全检测能力
+一个功能强大的Web应用安全扫描平台，集成POC漏洞扫描、端口扫描、AI Agent等多种安全检测能力
 
 [功能特性](#-功能特性) • [快速开始](#-快速开始) • [项目结构](#-项目结构) • [API文档](#-api文档)
 
@@ -19,13 +19,13 @@
 
 ## 目录
 - [项目简介](#-项目简介)
+- [项目版本说明](#-项目版本说明)
 - [功能特性](#-功能特性)
 - [技术栈](#-技术栈)
 - [快速开始](#-快速开始)
 - [项目结构](#-项目结构)
 - [配置说明](#-配置说明)
 - [API文档](#-api文档)
-- [API兼容性分析](#-api兼容性分析)
 - [开发指南](#-开发指南)
 - [部署指南](#-部署指南)
 - [常见问题](#-常见问题)
@@ -38,12 +38,44 @@ WebScan AI Security Platform 是一个基于AI技术的Web应用安全扫描平�
 
 ### 核心特点
 
-- **全面的漏洞检测** - 支持POC漏洞扫描、端口扫描、AWVS集成、AI Agent等多种扫描方式
+- **全面的漏洞检测** - 支持POC漏洞扫描、端口扫描、AI Agent等多种扫描方式
 - **AI智能分析** - 利用LangGraph和LangChain进行智能漏洞分析和风险评估
+- **RAG知识库增强** - 集成LlamaIndex实现专业知识库检索增强
 - **可视化报告** - 提供直观的扫描结果和详细的漏洞报告
-- **高性能架构** - 基于FastAPI和Vue 3构建，提供快速响应和流畅体验
+- **高性能架构** - 基于FastAPI和原生JavaScript构建，提供快速响应和流畅体验
 - **易于扩展** - 模块化设计，支持自定义扫描插件和规则
-- **Seebug集成** - 集成Seebug Agent进行POC智能生成和验证
+- **实时通信** - WebSocket实时推送扫描进度和结果
+
+---
+
+## 项目版本说明
+
+本项目包含新旧两个版本的项目代码：
+
+### 新版项目（推荐使用）
+
+| 项目 | 目录 | 描述 | 端口 |
+|------|------|------|------|
+| **TOSKill** | `TOSKill/` | 重构版后端项目，基于LangGraph的AI驱动安全扫描服务 | 8081 |
+| **TOSKillfront** | `TOSKillfront/` | 重构版前端项目，轻量级原生JavaScript实现 | 静态文件 |
+
+**新版特点：**
+- 基于LangGraph的ReACT推理框架
+- RAG知识库增强的智能决策
+- WebSocket实时通信
+- 用户交互中断/恢复机制
+- 认证信息自动提取与复用
+- AI脚本生成与安全审查
+- 简化的部署架构（单服务）
+
+### 旧版项目（已废弃）
+
+| 项目 | 目录 | 描述 | 端口 |
+|------|------|------|------|
+| **backend** | `backend/` | 旧版后端项目，功能较重，依赖较多 | 8888 |
+| **front** | `front/` | 旧版前端项目，Vue 3 + Element Plus | 5173 |
+
+> **注意**: 旧版项目（backend/front）已不再维护，建议使用新版项目（TOSKill/TOSKillfront）。
 
 ---
 
@@ -53,96 +85,67 @@ WebScan AI Security Platform 是一个基于AI技术的Web应用安全扫描平�
 
 | 功能模块 | 描述 | 状态 |
 |---------|------|------|
-| **POC漏洞扫描** | 基于POC的漏洞检测，支持多种常见漏洞类型 | ✅ 已实现 |
-| **端口扫描** | 快速扫描目标端口，识别开放服务和潜在风险 | ✅ 已实现 |
-| **AWVS集成** | 集成Acunetix Web Vulnerability Scanner进行深度扫描 | ✅ 已实现 |
+| **信息收集** | 端口扫描、子域名枚举、CMS识别、WAF检测、CDN检测等 | ✅ 已实现 |
+| **漏洞扫描** | SQL注入、XSS、命令注入、文件上传、SSRF、CSRF、LFI等 | ✅ 已实现 |
+| **POC验证** | Struts2、ThinkPHP、Weblogic等框架漏洞POC | ✅ 已实现 |
 | **AI Agent扫描** | 基于LangGraph的智能代理自动化扫描 | ✅ 已实现 |
-| **Seebug Agent** | 智能POC生成和验证 | ✅ 已实现 |
-| **漏洞管理** | 统一管理扫描发现的漏洞，支持分类和优先级排序 | ✅ 已实现 |
-| **扫描报告** | 生成详细的扫描报告，支持多种格式导出 | ✅ 已实现 |
-| **实时监控** | 实时监控扫描进度和结果 | ✅ 已实现 |
-| **漏洞知识库** | 查询和管理漏洞知识库信息 | ✅ 已实现 |
-| **通知中心** | 实时通知和消息管理 | ✅ 已实现 |
+| **RAG知识库** | LlamaIndex驱动的专业知识检索增强 | ✅ 已实现 |
+| **AI对话** | 智能安全咨询和漏洞分析 | ✅ 已实现 |
+| **脚本管理** | 自定义脚本上传、AI脚本生成、安全审查 | ✅ 已实现 |
+| **扫描报告** | 生成详细的扫描报告，支持Markdown格式 | ✅ 已实现 |
+| **实时监控** | WebSocket实时推送扫描进度和结果 | ✅ 已实现 |
 
 ### 高级特性
 
-- **智能扫描策略** - 根据目标类型自动选择最优扫描策略
-- **实时通知** - 扫描完成和发现高危漏洞时及时通知
-- **趋势分析** - 漏洞趋势分析和安全评分
-- **定时扫描** - 支持定时任务和周期性扫描
-- **多用户支持** - 支持多用户和权限管理
-- **响应式界面** - 适配桌面、平板和移动设备
-- **AI对话** - 智能安全咨询和漏洞分析
-- **API测试** - 完整的API测试套件
+- **ReACT推理决策** - AI使用Thought-Action-Reason模式进行智能决策
+- **用户交互中断** - 工作流支持暂停等待用户确认
+- **认证信息管理** - 自动提取、加密存储、复用认证信息
+- **智能工具选择** - 根据端口扫描结果推荐合适的扫描工具
+- **脚本安全审查** - 上传和生成的脚本自动进行安全检查
+- **会话状态管理** - 支持TTL过期清理、版本控制、状态恢复
 
 ---
 
 ## 技术栈
 
-### 后端技术
+### 新版后端 (TOSKill)
 
 ```yaml
 核心框架:
-  - FastAPI: 0.115.6          # 现代化Python Web框架
-  - Uvicorn: 0.34.0           # ASGI服务器
-  - Python-Multipart: 0.0.20  # 文件上传支持
-
-数据库:
-  - Tortoise-ORM: 0.21.7      # 异步ORM框架
-  - Aerich: 0.7.2             # 数据库迁移工具
-  - SQLite                    # 默认数据库（支持MySQL/PostgreSQL）
-
-数据验证:
-  - Pydantic: 2.10.4          # 数据验证和序列化
-  - Pydantic-Settings: 2.7.0 # 配置管理
+  - FastAPI: 0.115+           # 现代化Python Web框架
+  - Uvicorn: 0.34+            # ASGI服务器
+  - Pydantic: 2.10+           # 数据验证和序列化
 
 AI框架:
-  - LangChain: 0.3.14         # AI应用框架
-  - LangGraph: 0.2.59         # AI工作流框架
-  - OpenAI: 1.59.6            # OpenAI API客户端
+  - LangChain: 0.3+           # AI应用框架
+  - LangGraph: 0.2+           # AI工作流框架（StateGraph + interrupt）
+  - OpenAI: 1.59+             # OpenAI API客户端
 
-HTTP客户端:
-  - HTTPX: 0.28.1             # 异步HTTP客户端
-  - Requests: 2.32.3          # 同步HTTP客户端
+RAG知识库:
+  - LlamaIndex: 最新版        # RAG检索增强生成框架
 
 安全扫描:
-  - Nmap: 0.7.1               # 端口扫描
-  - BeautifulSoup4: 4.12.3    # HTML解析
-  - LXML: 5.3.0               # XML/HTML处理
-  - DNSLib: 0.9.24            # DNS解析
-  - GeoIP2: 4.8.0             # IP地理位置
-  - Pocsuite3: 2.1.0          # POC验证框架
-
-工具库:
-  - Loguru: 0.7.3             # 日志记录
-  - Python-Dotenv: 1.0.1     # 环境变量管理
-  - Colorama: 0.4.6           # 终端彩色输出
-  - TQDM: 4.67.1              # 进度条
+  - Nmap: 0.7+                # 端口扫描
+  - BeautifulSoup4: 4.12+     # HTML解析
+  - Requests: 2.32+           # HTTP请求
 ```
 
-### 前端技术
+### 新版前端 (TOSKillfront)
 
 ```yaml
-核心框架:
-  - Vue: 3.5.24               # Vue 3核心框架
-  - Vue Router: 4.5.24         # 官方路由管理器
-  - Pinia: 2.3.0              # 状态管理库
-  - Element Plus: 2.8.0        # UI组件库
+技术选型:
+  - 原生JavaScript            # 无框架依赖，轻量高效
+  - CSS3                      # 现代样式
+  - WebSocket API             # 实时通信
 
-构建工具:
-  - Vite: 5.4.0               # 下一代前端构建工具
-  - @Vitejs/Plugin-Vue: 5.2.1 # Vue 3插件
-
-HTTP客户端:
-  - Axios: 1.7.9              # HTTP请求库
-
-数据可视化:
-  - Chart.js: 4.4.0            # 图表库
-
-开发工具:
-  - ESLint: 9.17.0            # 代码检查
-  - ESLint-Plugin-Vue: 9.31.0 # Vue代码规范
-  - Vitest: 2.1.8             # 单元测试框架
+模块结构:
+  - app.js                    # 应用主入口
+  - api.js                    # API请求封装
+  - websocket.js              # WebSocket管理
+  - scanner.js                # 扫描器模块
+  - chat.js                   # AI对话模块
+  - tools.js                  # 工具管理
+  - reports.js                # 报告管理
 ```
 
 ---
@@ -152,10 +155,9 @@ HTTP客户端:
 ### 环境要求
 
 - Python 3.8 或更高版本
-- Node.js 16.0 或更高版本
-- npm 7.0 或更高版本（或 yarn 1.22+）
+- 现代浏览器（Chrome、Firefox、Edge等）
 
-### 安装步骤
+### 新版项目启动
 
 #### 1. 克隆项目
 
@@ -164,11 +166,11 @@ git clone https://github.com/yourusername/webscan-ai.git
 cd webscan-ai
 ```
 
-#### 2. 后端安装
+#### 2. 后端安装与启动
 
 ```bash
-# 进入后端目录
-cd backend
+# 进入新版后端目录
+cd TOSKill
 
 # 创建虚拟环境（推荐）
 python -m venv venv
@@ -181,130 +183,44 @@ source venv/bin/activate
 
 # 安装依赖
 pip install -r requirements.txt
-```
 
-#### 3. 配置后端
-
-编辑 `backend/.env` 文件，根据需要修改配置：
-
-```bash
-# 应用配置
-APP_NAME=WebScan AI Security Platform
-APP_VERSION=1.0.0
-DEBUG=False
-HOST=127.0.0.1
-PORT=8888
-
-# 数据库配置
-DATABASE_URL=sqlite://./data/webscan.db
-
-# CORS配置
-CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-
-# 日志配置
-LOG_LEVEL=INFO
-LOG_FILE=logs/app.log
-
-# AI API配置
-OPENAI_API_KEY=your_openai_api_key
-OPENAI_BASE_URL=https://maas-api.cn-huabei-1.xf-yun.com/v2
-MODEL_ID=xop3qwen1b7
-
-# AWVS配置
-AWVS_API_URL=https://127.0.0.1:3443
-AWVS_API_KEY=your_awvs_api_key
-
-# Seebug配置
-SEEBUG_API_KEY=your_seebug_api_key
-SEEBUG_API_BASE_URL=https://www.seebug.org/api
-
-# 扫描配置
-MAX_CONCURRENT_SCANS=5
-SCAN_TIMEOUT=300
-
-# 代码执行配置
-CODE_EXECUTOR_ENABLED=True
-CODE_EXECUTOR_TIMEOUT=30
-CODE_EXECUTOR_WORKSPACE=executor_workspace
-
-# AI Agent配置
-AGENT_MAX_EXECUTION_TIME=300
-AGENT_MAX_RETRIES=3
-
-# POC验证配置
-POC_VERIFICATION_ENABLED=True
-POC_MAX_CONCURRENT_EXECUTIONS=5
-POC_EXECUTION_TIMEOUT=60
-POC_RETRY_MAX_COUNT=3
-```
-
-#### 4. 启动后端服务
-
-```bash
-# 开发模式
-cd backend
+# 启动服务
 python main.py
-
-# 或使用uvicorn
-uvicorn backend.main:app --host 127.0.0.1 --port 8888 --reload
 ```
 
-后端服务将运行在：http://127.0.0.1:8888
+后端服务将运行在：http://localhost:8081
 
-**停止服务：**
-- 按 `Ctrl+C` 可优雅关闭服务
-- 系统会自动完成以下操作：
-  1. 停止接受新任务
-  2. 等待当前任务完成或超时(最多30秒)
-  3. 关闭所有WebSocket连接
-  4. 关闭数据库连接
-  5. 输出正常退出日志
+#### 3. 访问前端
 
-#### 5. 前端安装
+新版前端由后端直接提供静态文件服务，启动后端后直接访问：
+
+http://localhost:8081/frontend
+
+或使用首页跳转：
+
+http://localhost:8081 → 点击"前端页面"
+
+#### 4. API文档
+
+启动后端后，访问以下地址查看自动生成的API文档：
+
+- **Swagger UI**: http://localhost:8081/docs
+- **ReDoc**: http://localhost:8081/redoc
+
+### 旧版项目启动（已废弃）
+
+如需运行旧版项目，请参考：
 
 ```bash
-# 打开新终端，进入前端目录
-cd front
-
-# 安装依赖
-npm install
-```
-
-#### 6. 配置前端
-
-编辑 `front/.env.development` 文件：
-
-```env
-VITE_API_BASE_URL=http://127.0.0.1:8888/api
-VITE_REQUEST_TIMEOUT=8880
-```
-
-#### 7. 启动前端服务
-
-```bash
-npm run dev
-```
-
-前端服务将运行在：http://localhost:5173
-
-#### 8. 访问应用
-
-在浏览器中打开 http://localhost:5173 即可使用WebScan AI Security Platform
-
-#### 9. 运行测试（可选）
-
-```bash
-# 后端测试
+# 后端
 cd backend
-pytest
+pip install -r requirements.txt
+python main.py  # 端口 8888
 
-# 前端测试
+# 前端
 cd front
-npm run test
-
-# API测试
-cd api_tests
-python run_tests.py
+npm install
+npm run dev  # 端口 5173
 ```
 
 ---
@@ -313,282 +229,178 @@ python run_tests.py
 
 ```
 AI_WebSecurity/
-├── backend/                      # 后端项目
+├── TOSKill/                      # 新版后端项目（推荐）
+│   ├── AI/                       # AI核心模块
+│   │   ├── core.py              # 核心业务逻辑
+│   │   ├── graph.py             # LangGraph工作流定义
+│   │   ├── state.py             # 状态定义
+│   │   ├── tools.py             # 工具函数
+│   │   ├── validators.py        # 输入验证器
+│   │   └── script_safety.py     # 脚本安全审查
+│   │
+│   ├── RAG/                      # RAG知识库模块
+│   │   ├── rag_engine.py        # RAG引擎
+│   │   ├── retriever.py         # 检索器
+│   │   ├── knowledge/           # 知识文档
+│   │   └── storage/             # 向量存储
+│   │
+│   ├── api/                      # API路由
+│   │   ├── ai_chat_websocket.py # AI对话WebSocket
+│   │   ├── scan_api.py          # 扫描API
+│   │   └── report.py            # 报告API
+│   │
+│   ├── tools/                    # 扫描工具
+│   │   ├── info_collection/     # 信息收集工具
+│   │   │   ├── portscan.py      # 端口扫描
+│   │   │   ├── subdomain.py     # 子域名扫描
+│   │   │   ├── waf.py           # WAF检测
+│   │   │   ├── whatcms.py       # CMS识别
+│   │   │   └── ...
+│   │   │
+│   │   ├── vuln_scan/           # 漏洞扫描工具
+│   │   │   ├── sqli.py          # SQL注入
+│   │   │   ├── xss.py           # XSS扫描
+│   │   │   ├── cmdi.py          # 命令注入
+│   │   │   └── ...
+│   │   │
+│   │   ├── poc/                 # POC验证
+│   │   │   ├── struts2.py
+│   │   │   ├── thinkphp.py
+│   │   │   └── weblogic.py
+│   │   │
+│   │   └── report/              # 报告生成
+│   │       ├── report_manager.py
+│   │       └── ai_analyzer.py
+│   │
+│   ├── main.py                   # 应用入口
+│   ├── config.py                 # 配置管理
+│   ├── cli.py                    # 命令行接口
+│   ├── README.md                 # 后端文档
+│   └── API_DOCUMENTATION.md      # API文档
+│
+├── TOSKillfront/                 # 新版前端项目（推荐）
+│   ├── index.html               # 主页面
+│   ├── demo.html                # 演示页面
+│   ├── css/
+│   │   └── style.css            # 样式文件
+│   └── js/
+│       ├── app.js               # 应用主入口
+│       ├── api.js               # API封装
+│       ├── websocket.js         # WebSocket管理
+│       ├── scanner.js           # 扫描器模块
+│       ├── chat.js              # AI对话模块
+│       ├── tools.js             # 工具管理
+│       └── reports.js           # 报告管理
+│
+├── backend/                      # 旧版后端项目（已废弃）
 │   ├── api/                     # API路由
-│   │   ├── __init__.py         # 路由注册
-│   │   ├── scan.py             # 扫描功能API
-│   │   ├── poc.py              # POC扫描API
-│   │   ├── awvs.py             # AWVS集成API
-│   │   ├── ai.py               # AI对话API
-│   │   ├── agent.py            # AI Agent API
-│   │   ├── settings.py         # 系统设置API
-│   │   ├── tasks.py            # 任务管理API
-│   │   ├── reports.py          # 报告生成API
-│   │   ├── kb.py               # 知识库API
-│   │   ├── poc_gen.py          # POC智能生成API
-│   │   ├── poc_verification.py # POC验证API
-│   │   ├── poc_files.py        # POC文件管理API
-│   │   ├── seebug_agent.py     # Seebug Agent API
-│   │   ├── user.py             # 用户管理API
-│   │   ├── notifications.py    # 通知管理API
-│   │   └── workflow_schemas.py # 工作流数据标准化模块（合并自execution_optimizer.py）
-│   │
-│   ├── ai_agents/              # AI Agents智能代理系统
-│   │   ├── core/              # 核心组件
-│   │   ├── analyzers/         # 分析器模块
-│   │   ├── code_execution/     # 代码执行模块
-│   │   ├── poc_system/        # POC系统模块
-│   │   │   ├── poc_manager.py      # POC管理器（简化重构）
-│   │   │   ├── verification_engine.py # 验证引擎（简化重构）
-│   │   │   └── utils.py            # POC工具函数
-│   │   ├── tools/             # 工具模块
-│   │   ├── utils/             # 工具函数
-│   │   └── api/               # AI Agents API
-│   │
-│   ├── utils/                 # 工具模块
-│   │   └── seebug_utils.py    # Seebug工具模块（统一接口）
-│   │
-│   ├── plugins/               # 扫描插件模块
-│   │   ├── portscan/          # 端口扫描
-│   │   ├── infoleak/          # 信息泄露扫描
-│   │   ├── webside/           # 网站侧边栏扫描
-│   │   ├── baseinfo/          # 基础信息收集
-│   │   ├── webweight/         # 网站权重查询
-│   │   ├── iplocating/        # IP定位
-│   │   ├── cdnexist/          # CDN检测
-│   │   ├── waf/               # WAF检测
-│   │   ├── whatcms/           # CMS识别
-│   │   ├── subdomain/         # 子域名扫描
-│   │   ├── loginfo/           # 日志处理
-│   │   ├── randheader/        # 随机请求头生成
-│   │   └── common/            # 通用工具
-│   │
-│   ├── AVWS/                  # AWVS API封装
-│   ├── geoip/                 # GeoIP数据库
-│   ├── poc/                   # POC漏洞库
-│   ├── data/                  # 数据目录
-│   ├── logs/                  # 日志目录
-│   ├── main.py                # 应用入口
-│   ├── config.py              # 配置管理
-│   ├── models.py              # 数据模型
-│   ├── database.py            # 数据库连接
-│   ├── task_executor.py       # 任务执行器
-│   ├── requirements.txt       # Python依赖
-│   ├── pyproject.toml         # 项目配置
-│   ├── .env                   # 环境变量
-│   ├── AWVS_API_README.md     # AWVS API文档
-│   └── README.md              # 后端说明文档
+│   ├── ai_agents/               # AI代理系统
+│   ├── plugins/                 # 扫描插件
+│   ├── poc/                     # POC库
+│   └── ...
 │
-├── front/                      # 前端项目
-│   ├── src/
-│   │   ├── components/       # 组件
-│   │   ├── views/            # 页面视图
-│   │   ├── router/           # 路由配置
-│   │   ├── store/            # 状态管理
-│   │   ├── styles/           # 样式文件
-│   │   ├── utils/            # 工具函数
-│   │   ├── App.vue           # 根组件
-│   │   └── main.js           # 应用入口
-│   ├── tests/                 # 测试文件
-│   ├── .env                   # 环境变量
-│   ├── .env.development       # 开发环境变量
-│   ├── .env.production        # 生产环境变量
-│   ├── index.html             # HTML模板
-│   ├── package.json           # 项目配置
-│   ├── vite.config.js         # Vite配置
-│   ├── vitest.config.js       # Vitest配置
-│   ├── eslint.config.js       # ESLint配置
-│   └── README.md              # 前端说明文档
+├── front/                        # 旧版前端项目（已废弃）
+│   ├── src/                     # Vue 3源码
+│   └── ...
 │
-├── api_tests/                 # API测试
-│   ├── api_tester.py          # API测试工具
-│   ├── config.py              # 测试配置
-│   ├── run_tests.py           # 测试运行脚本
-│   ├── test_dashboard.py      # 仪表盘测试
-│   ├── test_tasks.py          # 任务测试
-│   ├── test_poc.py            # POC测试
-│   ├── test_awvs.py           # AWVS测试
-│   ├── test_agent.py          # Agent测试
-│   ├── test_reports.py        # 报告测试
-│   ├── test_scan.py           # 扫描测试
-│   ├── test_user_notification.py # 用户和通知测试
-│   ├── test_ai_chat.py        # AI对话测试
-│   ├── requirements.txt       # 测试依赖
-│   └── README.md              # 测试说明文档
+├── Seebug_Agent/                # Seebug Agent模块
+│   ├── client.py                # Seebug客户端
+│   ├── generator.py             # POC生成器
+│   └── README.md                # 模块文档
 │
-├── Seebug_Agent/              # Seebug Agent独立模块
-│   ├── client.py             # Seebug客户端
-│   ├── generator.py          # POC生成器
-│   ├── config.py             # 配置管理
-│   ├── main.py               # 主程序
-│   ├── requirements.txt       # Python依赖
-│   └── README.md             # Seebug Agent文档
+├── tests/                        # 测试文件
+│   ├── unit/                    # 单元测试
+│   ├── integration/             # 集成测试
+│   └── e2e/                     # 端到端测试
 │
-├── docs/                     # 文档目录
-│   ├── architecture_design.md # 架构设计文档
-│   └── ci_cd_pipeline.md     # CI/CD流水线文档
-│
-├── API_DOCUMENTATION.md       # API文档
-├── CHANGELOG.md               # 更新日志
-├── README.md                 # 项目说明文档
-└── .gitignore                # Git忽略文件
+├── reports/                      # 生成的报告
+├── logs/                         # 日志文件
+├── README.md                     # 项目说明文档
+└── .gitignore                    # Git忽略文件
 ```
-
-### 重构变更说明
-
-#### 模块合并
-
-1. **workflow_schemas.py** (合并自 `execution_optimizer.py`)
-   - 合并了 `NodeExecutionMetrics`, `ExecutionMetricsCollector`, `NodeExecutionOptimizer`
-   - 合并了 `optimized_node` 装饰器和 `get_execution_optimizer` 函数
-   - 统一了工作流数据的格式定义和转换逻辑
-
-2. **seebug_utils.py** (统一接口)
-   - 整合了 Seebug_Agent 的导入和配置
-   - 提供统一的 `SeebugUtils` 类访问 Seebug 功能
-   - 内置缓存和统计功能
-
-#### 接口简化
-
-1. **poc_manager.py**
-   - 移除重复的 `seebug_client` 和 `seebug_agent` 实例
-   - 统一使用 `seebug_utils` 访问 Seebug_Agent 功能
-   - 合并 `sync_from_seebug` 和 `search_seebug_pocs` 的重复逻辑
-   - 使用 `_search_seebug_pocs_internal` 统一处理搜索
-
-2. **verification_engine.py**
-   - `ResourceMonitor`: 移除复杂回调，使用简单阈值检查
-   - `ExecutionQueue`: 简化队列管理，移除不必要的锁竞争
-   - `ProgressCallback`: 统一使用简单的 Callable 类型
-   - 合并 `ResourceLimits` 和 `ExecutionConfig` 的重复配置
 
 ---
 
 ## 配置说明
 
-### 后端配置
+### 新版后端配置 (TOSKill)
 
-主要配置文件：`backend/config.py` 和 `backend/.env`
+主要配置文件：`TOSKill/config.py`
 
 ```python
-class Settings(BaseSettings):
+class TOSKillSettings(BaseSettings):
     # 应用基础配置
-    APP_NAME: str = "WebScan AI Security Platform"
+    APP_NAME: str = "TOSKill Security Scanner"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
     
     # 服务器配置
-    HOST: str = "127.0.0.1"
-    PORT: int = 8888
+    HOST: str = "0.0.0.0"
+    PORT: int = 8081
     
     # CORS配置
-    CORS_ORIGINS: list = ["http://localhost:5173", "http://127.0.0.1:5173"]
-    
-    # 数据库配置
-    DATABASE_URL: str = "sqlite://./data/webscan.db"
+    CORS_ORIGINS: list = ["*"]
     
     # 日志配置
     LOG_LEVEL: str = "INFO"
-    LOG_FILE: str = "logs/app.log"
+    LOG_FILE: str = "logs/toskill.log"
     
     # AI API配置
-    OPENAI_API_KEY: str = "your_openai_api_key"
+    OPENAI_API_KEY: str = "your_api_key"
     OPENAI_BASE_URL: str = "https://maas-api.cn-huabei-1.xf-yun.com/v2"
     MODEL_ID: str = "xop3qwen1b7"
-    
-    # AWVS配置
-    AWVS_API_URL: str = "https://127.0.0.1:3443"
-    AWVS_API_KEY: str = "your_awvs_api_key"
-    
-    # Seebug配置
-    SEEBUG_API_KEY: str = "your_seebug_api_key"
-    SEEBUG_API_BASE_URL: str = "https://www.seebug.org/api"
+    LLM_TEMPERATURE: float = 0.1
     
     # 扫描配置
-    MAX_CONCURRENT_SCANS: int = 5
     SCAN_TIMEOUT: int = 300
+    MAX_CONCURRENT_SCANS: int = 5
     
-    # 代码执行配置
-    CODE_EXECUTOR_ENABLED: bool = True
-    CODE_EXECUTOR_TIMEOUT: int = 30
-    CODE_EXECUTOR_WORKSPACE: str = "executor_workspace"
-    
-    # AI Agent配置
-    AGENT_MAX_EXECUTION_TIME: int = 300
-    AGENT_MAX_RETRIES: int = 3
-    
-    # POC验证配置
-    POC_VERIFICATION_ENABLED: bool = True
-    POC_MAX_CONCURRENT_EXECUTIONS: int = 5
-    POC_EXECUTION_TIMEOUT: int = 60
-    POC_RETRY_MAX_COUNT: int = 3
+    # 目录配置
+    REPORTS_DIR: str = "reports"
+    UPLOAD_DIR: str = "uploads"
 ```
 
-### 前端配置
+### 环境变量配置
 
-主要配置文件：`front/vite.config.js` 和 `front/.env.development`
-
-```javascript
-export default defineConfig({
-  server: {
-    port: 5173,
-    open: true,
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:8888',
-        changeOrigin: true,
-        secure: false
-      }
-    }
-  }
-})
-```
-
-环境变量配置：`front/.env.development`
+创建 `.env` 文件：
 
 ```env
-VITE_API_BASE_URL=http://127.0.0.1:8888/api
-VITE_REQUEST_TIMEOUT=8880
+# 应用配置
+APP_NAME=TOSKill Security Scanner
+APP_VERSION=1.0.0
+DEBUG=False
+HOST=0.0.0.0
+PORT=8081
+
+# AI配置
+OPENAI_API_KEY=your_api_key
+OPENAI_BASE_URL=https://maas-api.cn-huabei-1.xf-yun.com/v2
+MODEL_ID=xop3qwen1b7
+LLM_TEMPERATURE=0.1
+
+# 日志配置
+LOG_LEVEL=INFO
+LOG_FILE=logs/toskill.log
 ```
 
 ### WebSocket配置
 
-系统使用WebSocket实现实时通信：
-
 | 配置项 | 默认值 | 说明 |
 |-------|--------|------|
-| WebSocket URL | `ws://localhost:8888/api/ws` | WebSocket连接地址 |
+| WebSocket URL | `ws://localhost:8081/api/ai-chat/ws` | WebSocket连接地址 |
 | 重连次数 | 5 | 最大自动重连次数 |
 | 重连延迟 | 1-30秒 | 指数退避重连策略 |
 | 心跳间隔 | 30秒 | 心跳检测间隔 |
-
-**前端WebSocket使用：**
-```javascript
-import { useWebSocket } from '@/utils/websocket'
-
-const { connect, on, disconnect } = useWebSocket('ws://localhost:8888/api/ws')
-connect()
-on('task:update', (payload) => { /* 处理任务更新 */ })
-```
-
-### 端口配置
-
-| 服务 | 默认端口 | 配置位置 |
-|-----|---------|---------|
-| 后端API | 8888 | `backend/.env` → `PORT` |
-| 前端开发 | 5173 | `front/vite.config.js` |
-| WebSocket | 8888 | 与后端API共用 |
 
 ---
 
 ## API文档
 
-### 启动API文档
+### 新版API端点 (TOSKill)
 
-启动后端服务后，访问以下地址查看自动生成的API文档：
-
-- **Swagger UI**: http://127.0.0.1:8888/docs
-- **ReDoc**: http://127.0.0.1:8888/redoc
+启动后端服务后，访问：
+- **Swagger UI**: http://localhost:8081/docs
+- **ReDoc**: http://localhost:8081/redoc
 
 ### 主要API端点
 
@@ -597,284 +409,63 @@ on('task:update', (payload) => { /* 处理任务更新 */ })
 GET /health
 ```
 
-#### POC扫描
+#### WebSocket连接
 ```http
-POST /api/poc/scan
-Content-Type: application/json
+WebSocket /api/ai-chat/ws
+```
 
+#### 开始扫描
+```http
+WebSocket消息:
 {
-  "target": "http://example.com",
-  "poc_list": ["poc1", "poc2"]
+  "type": "start_scan",
+  "payload": {
+    "target": "http://example.com",
+    "scan_mode": "full"
+  }
 }
 ```
 
-#### 端口扫描
+#### 执行工具
 ```http
-POST /api/port/scan
-Content-Type: application/json
-
+WebSocket消息:
 {
-  "target": "example.com",
-  "ports": [80, 443, 8080]
+  "type": "execute_tool",
+  "payload": {
+    "tool_name": "portscan",
+    "target": "example.com"
+  }
 }
 ```
 
-#### AWVS扫描
+#### AI对话
 ```http
-POST /api/awvs/scan
-Content-Type: application/json
-
+WebSocket消息:
 {
-  "url": "http://example.com",
-  "scan_type": "full_scan"
+  "type": "chat",
+  "payload": {
+    "content": "请分析这个网站的安全状况"
+  }
 }
 ```
 
-#### AI Agent扫描
-```http
-POST /api/ai_agents/scan
-Content-Type: application/json
+### WebSocket消息类型
 
-{
-  "target": "http://example.com",
-  "enable_llm_planning": true
-}
-```
-
-#### 获取扫描任务
-```http
-GET /api/tasks
-```
-
-#### 获取漏洞列表
-```http
-GET /api/vulnerabilities
-```
-
-### 重构后模块使用示例
-
-#### 工作流数据标准化
-```python
-from backend.api.workflow_schemas import (
-    WorkflowDataConverter,
-    StandardizedWorkflowData,
-    get_execution_optimizer
-)
-
-# 转换工作流数据
-converter = WorkflowDataConverter()
-workflow_data = converter.from_agent_state(agent_state)
-
-# 使用执行优化器
-optimizer = get_execution_optimizer()
-result, success = await optimizer.execute_with_optimization(
-    node_func, "node_name", "task_id"
-)
-```
-
-#### Seebug 工具模块
-```python
-from backend.utils.seebug_utils import seebug_utils
-
-# 检查可用性
-if seebug_utils.is_available():
-    # 搜索 POC
-    response = await seebug_utils.search_poc("nginx", page=1, page_size=10)
-    
-    # 下载 POC
-    response = await seebug_utils.download_poc(ssvid=12345)
-    
-    # 获取统计信息
-    stats = seebug_utils.get_statistics()
-```
-
-#### POC 管理器
-```python
-from backend.ai_agents.poc_system.poc_manager import poc_manager
-
-# 从 Seebug 同步 POC
-pocs = await poc_manager.sync_from_seebug("nginx", limit=10)
-
-# 获取 POC 代码
-poc_code = await poc_manager.get_poc_code("seebug_12345")
-
-# 搜索本地 POC
-results = poc_manager.search_pocs("wordpress")
-
-# 获取统计信息
-stats = poc_manager.get_poc_statistics()
-```
-
-#### 验证引擎
-```python
-from backend.ai_agents.poc_system.verification_engine import (
-    VerificationEngine,
-    ExecutionPriority
-)
-
-# 创建引擎实例
-engine = VerificationEngine(max_concurrent=10)
-await engine.start()
-
-# 执行单个验证任务
-result = await engine.execute_verification_task(verification_task)
-
-# 批量执行
-results = await engine.execute_batch_verification(
-    verification_tasks,
-    max_concurrent=5
-)
-
-# 获取执行统计
-stats = engine.get_execution_statistics()
-
-await engine.shutdown()
-```
-
-详细API文档请参考：
-- [API_DOCUMENTATION.md](API_DOCUMENTATION.md)
-- 运行 `python analyze_all_apis_fixed.py` 查看完整的API兼容性分析
-
----
-## API兼容性分析
-
-### 概述
-本项目前后端API接口已实现100%兼容性匹配，确保前端所有功能都能正确调用后端服务。
-
-### 统计数据（最新更新：2026-03-13）
-
-| 指标 | 数量 | 说明 |
+| 类型 | 方向 | 描述 |
 |------|------|------|
-| **后端API总数** | 141 | 后端FastAPI提供的所有接口 |
-| **前端API总数** | 91 | 前端Vue3项目使用的API接口 |
-| **匹配成功** | 91 | 前后端接口完全匹配 |
-| **前端未匹配** | 0 | 前端所有API都有对应的后端实现 |
-| **后端未匹配** | 51 | 后端有51个接口前端暂未使用 |
+| `connected` | 服务端→客户端 | 连接成功，返回session_id |
+| `start_scan` | 客户端→服务端 | 开始扫描任务 |
+| `scan_started` | 服务端→客户端 | 扫描已启动 |
+| `task_started` | 服务端→客户端 | 单个任务开始 |
+| `task_completed` | 服务端→客户端 | 单个任务完成 |
+| `ai_decision` | 服务端→客户端 | AI决策结果 |
+| `interaction_required` | 服务端→客户端 | 需要用户交互 |
+| `user_confirm` | 客户端→服务端 | 用户确认选择 |
+| `workflow_resumed` | 服务端→客户端 | 工作流已恢复 |
+| `scan_completed` | 服务端→客户端 | 扫描完成 |
+| `report_generated` | 服务端→客户端 | 报告已生成 |
 
-### 匹配成功率
-- **前端API匹配率**: 100% (91/91) ✅
-- **后端API使用率**: 64.5% (91/141)
-
-### API模块分布
-
-#### 已匹配的API模块
-| 模块 | 接口数量 | 状态 |
-|------|---------|------|
-| scanApi | 11 | ✅ 全部匹配 |
-| tasksApi | 4 | ✅ 全部匹配 |
-| reportsApi | 3 | ✅ 全部匹配 |
-| settingsApi | 8 | ✅ 全部匹配 |
-| pocApi | 2 | ✅ 全部匹配 |
-| awvsApi | 9 | ✅ 全部匹配 |
-| aiApi | 3 | ✅ 全部匹配 |
-| kbApi | 4 | ✅ 全部匹配 |
-| userApi | 4 | ✅ 全部匹配 |
-| notificationsApi | 5 | ✅ 全部匹配 |
-| pocVerificationApi | 7 | ✅ 全部匹配 |
-| pocFilesApi | 5 | ✅ 全部匹配 |
-| seebugAgentApi | 3 | ✅ 全部匹配 |
-| aiAgentsApi | 18 | ✅ 全部匹配 |
-
-### 主要API端点示例
-
-#### 扫描功能
-- `POST /api/scan/port-scan` - 端口扫描
-- `POST /api/scan/info-leak` - 信息泄露扫描
-- `POST /api/scan/dir-scan` - 目录扫描
-- `POST /api/scan/web-side` - 网站侧边栏扫描
-- `POST /api/scan/baseinfo` - 基础信息收集
-- `POST /api/scan/subdomain` - 子域名扫描
-- `POST /api/scan/comprehensive` - 综合扫描
-- `POST /api/scan/web-weight` - 网站权重查询
-- `POST /api/scan/ip-locating` - IP定位
-- `POST /api/scan/cdn-check` - CDN检测
-- `POST /api/scan/waf-check` - WAF检测
-- `POST /api/scan/what-cms` - CMS识别
-
-#### 任务管理
-- `POST /api/tasks/create` - 创建任务
-- `GET /api/tasks/` - 获取任务列表
-- `GET /api/tasks/statistics/overview` - 获取统计概览
-- `GET /api/tasks/frozen` - 获取冻结任务
-
-#### 报告管理
-- `GET /api/reports/` - 获取报告列表
-- `POST /api/reports/` - 创建报告
-- `POST /api/reports/compare` - 比较报告
-
-#### AWVS集成
-- `GET /api/awvs/targets` - 获取目标列表
-- `POST /api/awvs/target` - 创建目标
-- `GET /api/awvs/scans` - 获取扫描列表
-- `POST /api/awvs/scan` - 创建扫描
-- `GET /api/awvs/vulnerabilities/rank` - 获取漏洞排名
-- `GET /api/awvs/vulnerabilities/stats` - 获取漏洞统计
-- `GET /api/awvs/middleware/poc-list` - 获取中间件POC列表
-- `GET /api/awvs/middleware/scans` - 获取中间件扫描
-- `POST /api/awvs/middleware/scan` - 中间件扫描
-- `POST /api/awvs/middleware/scan/start` - 启动中间件扫描
-- `GET /api/awvs/health` - 健康检查
-
-#### AI功能
-- `POST /api/ai/chat` - AI对话
-- `GET /api/ai/chat/instances` - 获取对话实例
-- `POST /api/ai/chat/instances` - 创建对话实例
-
-#### 知识库管理
-- `GET /api/kb/vulnerabilities` - 获取漏洞列表
-- `POST /api/kb/sync` - 同步知识库
-- `POST /api/kb/seebug/poc/search` - 搜索POC
-- `POST /api/kb/seebug/poc/download` - 下载POC
-
-#### POC验证
-- `POST /api/poc/verification/tasks` - 创建验证任务
-- `POST /api/poc/verification/tasks/batch` - 批量创建任务
-- `GET /api/poc/verification/tasks` - 获取任务列表
-- `GET /api/poc/verification/tasks/{task_id}` - 获取任务详情(含验证结果)
-- `POST /api/poc/verification/tasks/{task_id}/pause` - 暂停任务
-- `POST /api/poc/verification/tasks/{task_id}/resume` - 继续任务
-- `POST /api/poc/verification/tasks/{task_id}/cancel` - 取消任务
-- `POST /api/poc/verification/tasks/{task_id}/report` - 生成报告
-- `GET /api/poc/verification/health` - 健康检查(含统计信息)
-
-#### POC文件管理
-- `GET /api/poc/files/list` - 获取文件列表
-- `GET /api/poc/files/directories` - 获取目录列表
-- `POST /api/poc/files/sync` - 同步文件
-- `GET /api/poc/files/sync/status` - 获取同步状态
-
-#### AI Agents
-- `POST /api/ai_agents/scan` - 启动扫描
-- `GET /api/ai_agents/tasks` - 获取任务列表
-- `GET /api/ai_agents/tasks/frozen` - 获取冻结任务
-- `GET /api/ai_agents/tools` - 获取工具列表
-- `GET /api/ai_agents/config` - 获取配置
-- `POST /api/ai_agents/config` - 更新配置
-- `POST /api/ai_agents/code/generate` - 生成代码
-- `POST /api/ai_agents/code/execute` - 执行代码
-- `POST /api/ai_agents/code/generate-and-execute` - 生成并执行代码
-- `POST /api/ai_agents/capabilities/enhance` - 增强能力
-- `GET /api/ai_agents/capabilities/list` - 获取能力列表
-- `GET /api/ai_agents/environment/info` - 获取环境信息
-- `GET /api/ai_agents/environment/tools` - 获取环境工具
-- `GET /api/ai_agents/resources/usage` - 获取资源使用情况
-- `GET /api/ai_agents/resources/statistics` - 获取资源统计
-- `GET /api/ai_agents/workflow/metrics` - 获取工作流指标
-- `POST /api/ai_agents/poc/execute` - 执行POC
-- `POST /api/ai_agents/poc/batch-execute` - 批量执行POC
-- `POST /api/ai_agents/poc/search` - 搜索POC
-
-### API兼容性保证
-- 所有前端API调用都经过严格测试，确保与后端接口完全兼容
-- 前端API定义文件：`front/src/utils/api.js`
-- 后端API路由文件：`backend/api/` 目录
-- API文档自动生成：访问 http://127.0.0.1:8888/docs
-
-### API分析工具
-项目提供了完整的API分析工具：
-- `analyze_all_apis_fixed.py` - 完整的前后端API兼容性分析脚本
-- 运行命令：`python analyze_all_apis_fixed.py`
-- 分析结果保存在：`.trae/documents/all_apis_analysis_fixed.json`
+详细API文档请参考：[TOSKill/API_DOCUMENTATION.md](TOSKill/API_DOCUMENTATION.md)
 
 ---
 
@@ -882,159 +473,50 @@ await engine.shutdown()
 
 ### 后端开发
 
-#### 添加新的API端点
+#### 添加新的扫描工具
 
-1. 在 `backend/api/` 目录下创建或编辑API模块
-2. 定义路由和处理函数
-3. 在 `backend/api/__init__.py` 中注册路由
-
-示例：
+1. 在 `TOSKill/tools/` 对应目录下创建工具文件
+2. 实现工具函数并添加 `@tool` 装饰器
+3. 在 `TOSKill/AI/tools.py` 中注册工具
 
 ```python
-# backend/api/my_feature.py
-from fastapi import APIRouter
-from models import APIResponse
+from langchain_core.tools import tool
 
-router = APIRouter()
-
-@router.get("/my-feature")
-async def get_my_feature():
-    return APIResponse(
-        code=200,
-        message="Success",
-        data={"feature": "data"}
-    )
+@tool
+def my_new_scanner(target: str) -> dict:
+    """新扫描工具描述"""
+    result = do_scan(target)
+    return {"vulnerable": False, "data": result}
 ```
 
-#### 添加新的扫描插件
+#### 扩展AI工作流
 
-1. 在 `backend/plugins/` 目录下创建插件文件
-2. 实现扫描逻辑
-3. 在主程序中注册插件
-
-#### 扩展AI Agents功能
-
-1. 在 `backend/ai_agents/core/nodes.py` 中添加新的节点
-2. 在 `backend/ai_agents/core/graph.py` 中集成到工作流
-3. 添加相应的工具函数
+1. 在 `TOSKill/AI/graph.py` 中添加新节点
+2. 定义节点函数和路由逻辑
+3. 更新工作流图结构
 
 ### 前端开发
 
-#### 添加新页面
+#### 添加新消息处理器
 
-1. 在 `front/src/views/` 目录下创建Vue组件
-2. 在 `front/src/router/index.js` 中添加路由
-
-示例：
-
-```vue
-<!-- front/src/views/NewPage.vue -->
-<template>
-  <div class="page-container">
-    <h1>新页面</h1>
-  </div>
-</template>
-
-<script>
-export default {
-  name: 'NewPage'
-}
-</script>
-```
+在对应的JS模块中添加消息处理：
 
 ```javascript
-// front/src/router/index.js
-import NewPage from '../views/NewPage.vue'
-
-const routes = [
-  {
-    path: '/new-page',
-    name: 'NewPage',
-    component: NewPage,
-    meta: {
-      title: '新页面',
-      requiresAuth: false
-    }
-  }
-]
+// 在 scanner.js 或 chat.js 中
+case 'new_message_type':
+    this.handleNewMessage(data.payload);
+    break;
 ```
-
-#### 添加新组件
-
-1. 在 `front/src/components/` 目录下创建组件
-2. 在页面中引入和使用
 
 ### 测试
 
-#### 后端测试
-
-项目采用模块化的测试结构，测试文件按照功能模块组织：
-
 ```bash
-# 运行所有测试
-cd backend
+# 运行测试
+cd tests
 pytest
 
-# 运行特定模块的测试
-pytest ai_agents/core/tests/ -v
-pytest ai_agents/tools/tests/ -v
-pytest api/tests/ -v
-
-# 运行带覆盖率的测试
-pytest --cov=backend --cov-report=html
-
-# 运行集成测试（需要外部服务）
-pytest --run-integration -v
-```
-
-#### 测试目录结构
-
-```
-backend/
-├── tests/                    # 集成测试
-│   ├── conftest.py          # 测试配置和fixtures
-│   ├── test_integration.py  # 综合集成测试
-│   ├── test_ai_model.py     # AI模型连接测试
-│   └── test_report_generator.py # 报告生成器测试
-├── ai_agents/
-│   ├── core/tests/          # 核心模块测试
-│   ├── tools/tests/         # 工具适配器测试
-│   ├── poc_system/tests/    # POC系统测试
-│   └── analyzers/tests/     # 分析器测试
-├── api/tests/               # API模块测试
-└── plugins/tests/           # 插件测试
-```
-
-#### 测试要求
-
-- 所有新功能必须包含单元测试
-- 测试覆盖率应不低于70%
-- 测试应包含正常流程和异常情况
-- 使用pytest和pytest-asyncio进行测试
-- 涉及外部服务的测试使用`@pytest.mark.integration`标记
-
-#### 前端测试
-
-```bash
-cd front
-npm run test
-
-# 运行测试UI
-npm run test:ui
-
-# 生成覆盖率报告
-npm run test:coverage
-```
-
-#### API测试
-
-```bash
-cd api_tests
-python run_tests.py
-
-# 运行特定模块
-python run_tests.py test_dashboard
-python run_tests.py test_tasks
+# 运行特定测试
+pytest test_toskill_workflow.py -v
 ```
 
 ---
@@ -1043,18 +525,15 @@ python run_tests.py test_tasks
 
 ### 生产环境部署
 
-#### 后端部署
-
-1. **使用Gunicorn部署**
+#### 使用Gunicorn部署
 
 ```bash
 pip install gunicorn
 
-# 启动服务
-gunicorn backend.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8888
+gunicorn TOSKill.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8081
 ```
 
-2. **使用Nginx反向代理**
+#### 使用Nginx反向代理
 
 ```nginx
 server {
@@ -1062,119 +541,32 @@ server {
     server_name your-domain.com;
 
     location / {
-        proxy_pass http://127.0.0.1:8888;
+        proxy_pass http://127.0.0.1:8081;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-3. **配置SSL/TLS**
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name your-domain.com;
-
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:8888;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
-
-#### 前端部署
-
-1. **构建生产版本**
-
-```bash
-cd front
-npm run build
-```
-
-2. **使用Nginx部署**
-
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
-
-    root /path/to/front/dist;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    location /api {
-        proxy_pass http://127.0.0.1:8888;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+        
+        # WebSocket支持
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
     }
 }
 ```
 
 ### Docker部署
 
-#### 后端Dockerfile
-
 ```dockerfile
 FROM python:3.9-slim
 
 WORKDIR /app
 
-COPY backend/requirements.txt .
+COPY TOSKill/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY backend/ .
+COPY TOSKill/ .
 
 CMD ["python", "main.py"]
-```
-
-#### 前端Dockerfile
-
-```dockerfile
-FROM node:16-alpine as builder
-
-WORKDIR /app
-COPY front/package*.json ./
-RUN npm install
-COPY front/ .
-RUN npm run build
-
-FROM nginx:alpine
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-```
-
-#### Docker Compose
-
-```yaml
-version: '3.8'
-
-services:
-  backend:
-    build: ./backend
-    ports:
-      - "8888:8888"
-    environment:
-      - DATABASE_URL=sqlite:///data/webscan.db
-    volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-
-  frontend:
-    build: ./front
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
 ```
 
 ---
@@ -1183,129 +575,62 @@ services:
 
 ### 1. 后端服务启动失败
 
-**问题**: 后端服务无法启动，报错"Address already in use"
+**问题**: 端口被占用
 
 **解决方案**:
 ```bash
-# 检查端口占用
-netstat -ano | findstr :8888
+# Windows
+netstat -ano | findstr :8081
 
-# 更改端口或终止占用进程
+# Linux/Mac
+lsof -i :8081
 ```
 
-### 2. 前端无法连接后端API
+### 2. WebSocket连接失败
 
-**问题**: 前端页面显示"Network Error"
+**问题**: 前端无法建立WebSocket连接
 
 **解决方案**:
 - 检查后端服务是否正常运行
-- 检查 `front/.env.development` 中的 `VITE_API_BASE_URL` 配置
-- 检查CORS配置是否正确
+- 确认WebSocket URL配置正确
+- 检查防火墙设置
 
-### 3. AWVS连接失败
+### 3. AI模型连接失败
 
-**问题**: AWVS扫描功能无法使用，提示连接失败
-
-**解决方案**:
-- 检查AWVS服务是否正常运行
-- 检查 `backend/.env` 中的 `AWVS_API_URL` 和 `AWVS_API_KEY` 配置
-- 确保AWVS API地址可访问
-
-### 4. AI Agent执行超时
-
-**问题**: AI Agent任务执行时间过长导致超时
+**问题**: AI决策功能不可用
 
 **解决方案**:
-- 增加 `backend/.env` 中的 `AGENT_MAX_EXECUTION_TIME` 配置
-- 减少扫描任务数量
-- 优化工具超时时间
+- 检查 `OPENAI_API_KEY` 配置
+- 确认 `OPENAI_BASE_URL` 可访问
+- 查看日志中的错误信息
 
-### 5. POC验证失败
+### 4. RAG知识库检索失败
 
-**问题**: POC验证任务总是失败
-
-**解决方案**:
-- 检查目标URL/IP是否可访问
-- 检查POC脚本是否正确
-- 查看日志中的详细错误信息
-- 增加 `POC_EXECUTION_TIMEOUT` 配置
-
-### 6. 数据库连接错误
-
-**问题**: 应用启动时报数据库连接错误
+**问题**: 知识库检索返回空结果
 
 **解决方案**:
-- 检查数据库配置是否正确
-- 确保数据库服务正在运行
-- 检查数据库文件权限
-- 尝试删除数据库文件重新初始化
-
-### 7. 前端构建失败
-
-**问题**: `npm run build` 命令执行失败
-
-**解决方案**:
-```bash
-# 清除缓存
-rm -rf node_modules package-lock.json
-npm install
-
-# 检查Node.js版本
-node -v  # 应该 >= 16.0
-```
-
-### 8. 日志文件过大
-
-**问题**: 日志文件占用过多磁盘空间
-
-**解决方案**:
-- 配置日志轮转
-- 定期清理旧日志文件
-- 调整日志级别为WARNING或ERROR
-
-### 9. WebSocket连接断开
-
-**问题**: 前端WebSocket连接频繁断开
-
-**解决方案**:
-- 检查网络连接是否稳定
-- 前端会自动重连(最多5次)
-- 查看浏览器控制台的WebSocket错误信息
-- 确认后端服务正常运行
-
-### 10. 任务状态丢失
-
-**问题**: 服务重启后任务状态丢失
-
-**解决方案**:
-- 任务状态会自动持久化到 `data/task_states.json`
-- 服务启动时会自动恢复未完成的任务
-- 如需手动恢复，检查数据库中任务状态
-
-### 11. API端点404错误
-
-**问题**: 前端调用API返回404
-
-**解决方案**:
-- 确认API端点路径正确
-- AI Agent扫描使用 `/api/ai_agents/scan`
-- WebSocket使用 `ws://localhost:8888/api/ws`
-- 查看后端Swagger文档确认端点: http://127.0.0.1:8888/docs
+- 确认 `TOSKill/RAG/knowledge/` 目录下有知识文档
+- 检查向量存储文件是否存在
+- 重新构建向量索引
 
 ---
 
 ## 相关文档
 
-- [后端文档](backend/README.md)
-- [前端文档](front/README.md)
+### 新版项目文档
+- [TOSKill后端文档](TOSKill/README.md)
+- [TOSKill API文档](TOSKill/API_DOCUMENTATION.md)
+- [TOSKill工具文档](TOSKill/TOOLS_DOCUMENTATION.md)
+
+### 旧版项目文档（已废弃）
+- [旧版后端文档](backend/README.md)
+- [旧版前端文档](front/README.md)
 - [AI Agents文档](backend/ai_agents/README.md)
-- [API测试文档](api_tests/README.md)
-- [Seebug Agent文档](Seebug_Agent/README.md)
 - [插件文档](backend/plugins/README.md)
 - [POC文档](backend/poc/README.md)
-- [API文档](API_DOCUMENTATION.md)
-- [架构设计](docs/architecture_design.md)
-- [CI/CD流水线](docs/ci_cd_pipeline.md)
+
+### 其他文档
+- [Seebug Agent文档](Seebug_Agent/README.md)
 
 ---
 
@@ -1330,7 +655,7 @@ node -v  # 应该 >= 16.0
 ### 代码规范
 
 - 遵循 PEP 8 代码风格（Python）
-- 遵循 Vue 风格指南（Vue.js）
+- 遵循 JavaScript Standard Style（JavaScript）
 - 添加详细的文档字符串和注释
 - 使用有意义的变量和函数名
 - 保持代码简洁清晰
@@ -1341,7 +666,6 @@ node -v  # 应该 >= 16.0
 
 - 项目主页: https://github.com/yourusername/webscan-ai
 - 问题反馈: https://github.com/yourusername/webscan-ai/issues
-- 邮箱: your.email@example.com
 
 ---
 

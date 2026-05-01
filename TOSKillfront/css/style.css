@@ -1326,3 +1326,180 @@ body {
 .workflow-progress-message {
     animation: slideInUp 0.3s ease;
 }
+
+/* High Risk Dialog Styles */
+.high-risk-dialog-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.high-risk-dialog {
+    background: var(--card-bg);
+    border-radius: 12px;
+    width: 90%;
+    max-width: 500px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    animation: slideInUp 0.3s ease;
+    overflow: hidden;
+}
+
+.high-risk-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 20px 24px;
+    background: linear-gradient(135deg, #ff4d4f 0%, #fa8c16 100%);
+    color: white;
+}
+
+.high-risk-icon {
+    font-size: 28px;
+}
+
+.high-risk-header h3 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.high-risk-body {
+    padding: 24px;
+}
+
+.high-risk-message {
+    font-size: 16px;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+    font-weight: 500;
+}
+
+.high-risk-stats {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.risk-tag {
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.risk-tag.critical {
+    background: #fff1f0;
+    color: #cf1322;
+    border: 1px solid #ffa39e;
+}
+
+.risk-tag.high {
+    background: #fff7e6;
+    color: #d46b08;
+    border: 1px solid #ffd591;
+}
+
+.high-risk-vuln-list {
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.high-risk-vuln-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    margin-bottom: 8px;
+    background: var(--bg-color);
+    border-radius: 8px;
+    border-left: 4px solid var(--border-color);
+}
+
+.high-risk-vuln-item.critical {
+    border-left-color: #ff4d4f;
+    background: #fff1f0;
+}
+
+.high-risk-vuln-item.high {
+    border-left-color: #fa8c16;
+    background: #fff7e6;
+}
+
+.vuln-severity {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    background: var(--border-color);
+}
+
+.high-risk-vuln-item.critical .vuln-severity {
+    background: #ff4d4f;
+    color: white;
+}
+
+.high-risk-vuln-item.high .vuln-severity {
+    background: #fa8c16;
+    color: white;
+}
+
+.vuln-name {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.high-risk-footer {
+    display: flex;
+    gap: 12px;
+    padding: 16px 24px;
+    background: var(--bg-color);
+    border-top: 1px solid var(--border-color);
+}
+
+.high-risk-btn {
+    flex: 1;
+    padding: 12px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--border-color);
+    color: var(--text-primary);
+}
+
+.high-risk-btn:hover {
+    background: #d9d9d9;
+}
+
+.high-risk-btn.danger {
+    background: #ff4d4f;
+    color: white;
+}
+
+.high-risk-btn.danger:hover {
+    background: #d9363e;
+}
+
+.high-risk-btn:last-child {
+    background: #fa8c16;
+    color: white;
+}
+
+.high-risk-btn:last-child:hover {
+    background: #d46b08;
+}

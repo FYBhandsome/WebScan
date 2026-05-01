@@ -10,6 +10,7 @@ TOSKill AI 工作流图定义
 """
 import logging
 import asyncio
+import os
 import sys
 import base64
 import json
@@ -19,14 +20,14 @@ from dataclasses import dataclass, field
 import threading
 
 from langgraph.graph import StateGraph, END
-from langgraph.types import interrupt
+from langgraph.types import interrupt, Command
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_openai import ChatOpenAI
 
 from .state import ScanState, create_initial_state, append_chat, update_state
 from .tools import get_tool_by_name, get_tool_sequence, is_auth_expired, get_auth_remaining_time
 from ..config import settings
-from ..RAG.retriever import get_scan_strategy
+from ..RAGdemo.retriever import get_scan_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,70 @@ def get_llm():
     )
 
 
+def with_node_retry(max_retries=3, base_delay=1.0):
+    """
+    节点重试装饰器 - 异步版本
+    
+    捕获节点执行异常后自动重试，使用指数退避策略。
+    
+    Args:
+        max_retries: 最大重试次数，默认3次
+        base_delay: 基础延迟秒数，指数退避基值，默认1秒
+        
+    Returns:
+        装饰后的异步节点函数
+    """
+    import functools
+    
+    def decorator(node_func):
+        @functools.wraps(node_func)
+        async def wrapper(state, *args, **kwargs):
+            last_exception = None
+            session_id = state.get("websocket_session_id") or state.get("task_id", "unknown")
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    return await node_func(state, *args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning(
+                            f"[{session_id}] 节点 {node_func.__name__} 执行异常 "
+                            f"(尝试 {attempt + 1}/{max_retries + 1}): {e}，"
+                            f"{delay:.1f}秒后重试"
+                        )
+                        
+                        ws_callback = memory_store.get_websocket_callback(session_id)
+                        if ws_callback:
+                            try:
+                                await ws_callback({
+                                    "type": "node_retry",
+                                    "payload": {
+                                        "node": node_func.__name__,
+                                        "attempt": attempt + 1,
+                                        "max_retries": max_retries,
+                                        "error": str(e),
+                                        "next_retry_in": delay
+                                    }
+                                })
+                            except Exception:
+                                pass
+                        
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.error(
+                            f"[{session_id}] 节点 {node_func.__name__} 重试 {max_retries} 次后仍失败: {e}"
+                        )
+            
+            errors = state.get("errors", []).copy()
+            errors.append(f"{node_func.__name__}: {str(last_exception)}")
+            return update_state(state, errors=errors, is_complete=True)
+        
+        return wrapper
+    return decorator
+
+
 @dataclass
 class SessionMetadata:
     """会话元数据"""
@@ -302,6 +367,65 @@ class MemoryStore:
         self._cleanup_thread: Optional[threading.Thread] = None
         self._stop_cleanup: bool = False
         self._lock: threading.Lock = threading.Lock()
+        self._db_path = None
+        self._db_conn = None
+        self._init_sqlite()
+    
+    def _init_sqlite(self):
+        try:
+            from ..config import settings
+            db_path = getattr(settings, 'DB_PATH', 'data/toskill.db')
+            db_dir = os.path.dirname(db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
+            
+            self._db_path = db_path
+            import sqlite3
+            self._db_conn = sqlite3.connect(db_path, check_same_thread=False)
+            self._db_conn.execute("PRAGMA journal_mode=WAL")
+            self._db_conn.execute("PRAGMA synchronous=NORMAL")
+            self._db_conn.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    state_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    version INTEGER DEFAULT 1
+                )
+            """)
+            self._db_conn.execute("""
+                CREATE TABLE IF NOT EXISTS chat_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+                )
+            """)
+            self._db_conn.execute("""
+                CREATE TABLE IF NOT EXISTS decision_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    decision_json TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+                )
+            """)
+            self._db_conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_history(session_id, timestamp)
+            """)
+            self._db_conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_decision_session ON decision_history(session_id, timestamp)
+            """)
+            self._db_conn.commit()
+            
+            self._load_from_sqlite()
+            
+            logger.info(f"SQLite 持久化已初始化: {db_path}")
+        except Exception as e:
+            logger.warning(f"SQLite 初始化失败（将使用纯内存模式）: {e}")
+            self._db_conn = None
     
     @classmethod
     def get_instance(cls):
@@ -382,6 +506,19 @@ class MemoryStore:
             self._sessions[session_id] = state
             self._session_timestamps[session_id] = now
             
+            if self._db_conn:
+                try:
+                    state_json = json.dumps(self._sessions[session_id], ensure_ascii=False, default=str)
+                    self._db_conn.execute(
+                        """INSERT OR REPLACE INTO sessions (session_id, state_json, created_at, updated_at, version)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (session_id, state_json, metadata.created_at.isoformat(), 
+                         metadata.updated_at.isoformat(), metadata.version)
+                    )
+                    self._db_conn.commit()
+                except Exception as e:
+                    logger.error(f"SQLite 保存会话失败: {e}")
+            
             logger.debug(f"保存会话状态: {session_id}, 版本: {metadata.version}")
             return metadata.version
     
@@ -422,6 +559,16 @@ class MemoryStore:
             self._websocket_callbacks.pop(session_id, None)
             self._session_timestamps.pop(session_id, None)
             self._session_metadata.pop(session_id, None)
+            
+            if self._db_conn:
+                try:
+                    self._db_conn.execute("DELETE FROM chat_history WHERE session_id = ?", (session_id,))
+                    self._db_conn.execute("DELETE FROM decision_history WHERE session_id = ?", (session_id,))
+                    self._db_conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+                    self._db_conn.commit()
+                except Exception as e:
+                    logger.error(f"SQLite 删除会话失败: {e}")
+            
             logger.info(f"删除会话: {session_id}")
     
     def _cleanup_expired_sessions(self):
@@ -463,6 +610,53 @@ class MemoryStore:
         if cleaned_count > 0:
             logger.info(f"[清理] 本次清理聊天记录数: {cleaned_count}")
     
+    def _load_from_sqlite(self):
+        if not self._db_conn:
+            return
+        
+        try:
+            cursor = self._db_conn.execute(
+                "SELECT session_id, state_json FROM sessions"
+            )
+            loaded_count = 0
+            now = datetime.now()
+            
+            for row in cursor.fetchall():
+                session_id, state_json = row
+                try:
+                    state = json.loads(state_json)
+                    
+                    if session_id in self._session_metadata:
+                        continue
+                    
+                    self._sessions[session_id] = state
+                    self._session_timestamps[session_id] = now
+                    self._session_metadata[session_id] = SessionMetadata(
+                        version=state.get("_version", 1),
+                        created_at=datetime.now(),
+                        updated_at=datetime.now(),
+                        last_activity=datetime.now()
+                    )
+                    loaded_count += 1
+                except Exception as e:
+                    logger.warning(f"恢复会话 {session_id} 失败: {e}")
+            
+            chat_cursor = self._db_conn.execute(
+                "SELECT session_id, role, content, timestamp FROM chat_history ORDER BY timestamp"
+            )
+            for row in chat_cursor.fetchall():
+                sid, role, content, ts = row
+                if sid not in self._chat_histories:
+                    self._chat_histories[sid] = []
+                self._chat_histories[sid].append({
+                    "role": role, "content": content, "timestamp": ts
+                })
+            
+            if loaded_count > 0:
+                logger.info(f"从 SQLite 恢复了 {loaded_count} 个会话")
+        except Exception as e:
+            logger.error(f"从 SQLite 加载会话失败: {e}")
+    
     def append_chat(self, session_id: str, role: str, content: str):
         """追加聊天历史（自动清理超出限制的记录）"""
         with self._lock:
@@ -479,6 +673,16 @@ class MemoryStore:
                 removed = len(self._chat_histories[session_id]) - self._max_chat_history
                 self._chat_histories[session_id] = self._chat_histories[session_id][-self._max_chat_history:]
                 logger.debug(f"聊天历史自动清理: 移除 {removed} 条旧记录")
+            
+            if self._db_conn:
+                try:
+                    self._db_conn.execute(
+                        "INSERT INTO chat_history (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+                        (session_id, role, content, datetime.now().isoformat())
+                    )
+                    self._db_conn.commit()
+                except Exception as e:
+                    logger.error(f"SQLite 保存聊天历史失败: {e}")
     
     def get_chat_history(self, session_id: str) -> List[Dict]:
         """获取聊天历史"""
@@ -488,39 +692,29 @@ class MemoryStore:
         """从状态同步聊天历史到 memory_store（带冗余检测与合并）
         
         去重策略：
-        1. 按时间戳去重，保留最新数据
-        2. 相同时间戳的消息按内容去重
-        3. 合并后按时间戳排序
+        1. 先按内容（role + content）去重，相同内容只保留最新时间戳的版本
+        2. 合并后按时间戳排序
         """
         with self._lock:
             state_history = state.get("chat_history", [])
             store_history = self._chat_histories.get(session_id, [])
             
-            all_messages = {}
+            content_map = {}
             duplicate_count = 0
             
             for msg in state_history + store_history:
+                content_key = f"{msg.get('role', '')}:{msg.get('content', '')}"
                 timestamp = msg.get("timestamp", "")
-                content_key = f"{msg.get('role', '')}:{msg.get('content', '')[:50]}"
-                unique_key = f"{timestamp}:{content_key}"
                 
-                if unique_key in all_messages:
+                if content_key in content_map:
                     duplicate_count += 1
-                    if msg.get("timestamp", "") > all_messages[unique_key].get("timestamp", ""):
-                        all_messages[unique_key] = msg
+                    existing_ts = content_map[content_key].get("timestamp", "")
+                    if timestamp > existing_ts:
+                        content_map[content_key] = msg
                 else:
-                    all_messages[unique_key] = msg
+                    content_map[content_key] = msg
             
-            timestamp_map = {}
-            for msg in all_messages.values():
-                ts = msg.get("timestamp", "")
-                if ts in timestamp_map:
-                    if msg.get("timestamp", "") > timestamp_map[ts].get("timestamp", ""):
-                        timestamp_map[ts] = msg
-                else:
-                    timestamp_map[ts] = msg
-            
-            merged = sorted(timestamp_map.values(), key=lambda x: x.get("timestamp", ""))
+            merged = sorted(content_map.values(), key=lambda x: x.get("timestamp", ""))
             
             if len(merged) > self._max_chat_history:
                 merged = merged[-self._max_chat_history:]
@@ -855,18 +1049,21 @@ async def intent_validation(state: ScanState) -> ScanState:
     session_id = state.get("websocket_session_id") or state.get("task_id")
     ws_callback = memory_store.get_websocket_callback(session_id)
     
-    validation_result = {"valid": True, "error": "", "needs_input": False, "input_field": ""}
+    validation_result = {"valid": True, "error": "", "needs_input": False, "input_field": "", "tool_exists": True}
     
     if intent_type == "tool":
-        tool = get_tool_by_name(direct_tool)
-        if not tool:
-            validation_result = {"valid": False, "error": f"工具 '{direct_tool}' 不存在，请检查工具名称"}
+        if not direct_tool:
+            validation_result = {"valid": False, "error": "请提供工具名称", "needs_input": True, "input_field": "tool_name", "tool_exists": False}
         elif not target:
-            validation_result = {"valid": False, "error": "请提供扫描目标地址", "needs_input": True, "input_field": "target"}
+            validation_result = {"valid": False, "error": "请提供扫描目标地址", "needs_input": True, "input_field": "target", "tool_exists": True}
+        else:
+            tool = get_tool_by_name(direct_tool)
+            if not tool:
+                validation_result = {"valid": False, "error": f"工具 '{direct_tool}' 不存在，请检查工具名称或使用其他工具", "needs_input": False, "tool_exists": False}
     
     elif intent_type == "scan":
         if not target:
-            validation_result = {"valid": False, "error": "请提供扫描目标地址", "needs_input": True, "input_field": "target"}
+            validation_result = {"valid": False, "error": "请提供扫描目标地址", "needs_input": True, "input_field": "target", "tool_exists": True}
     
     if validation_result["needs_input"] and ws_callback:
         input_request = DataInputRequest.build_request(
@@ -883,7 +1080,7 @@ async def intent_validation(state: ScanState) -> ScanState:
             try:
                 await ws_callback({
                     "type": "intent_validation_error",
-                    "payload": {"error": validation_result["error"]}
+                    "payload": {"error": validation_result["error"], "tool_exists": validation_result.get("tool_exists", True)}
                 })
             except Exception as e:
                 logger.error(f"WebSocket推送失败: {e}")
@@ -892,7 +1089,8 @@ async def intent_validation(state: ScanState) -> ScanState:
         intent_valid=validation_result["valid"],
         intent_error=validation_result["error"],
         needs_input=validation_result.get("needs_input", False),
-        input_field=validation_result.get("input_field", "")
+        input_field=validation_result.get("input_field", ""),
+        tool_exists=validation_result.get("tool_exists", True)
     )
 
 
@@ -900,6 +1098,12 @@ def intent_router(state: ScanState) -> str:
     """意图路由 - 根据意图类型分流"""
     intent_valid = state.get("intent_valid", True)
     if not intent_valid:
+        needs_input = state.get("needs_input", False)
+        if needs_input:
+            return "intent_recognition"
+        tool_exists = state.get("tool_exists", True)
+        if not tool_exists:
+            return "chat"
         return "intent_recognition"
     
     intent_type = state.get("intent_type", "chat")
@@ -907,7 +1111,11 @@ def intent_router(state: ScanState) -> str:
     if intent_type == "scan":
         return "start_scan"
     elif intent_type == "tool":
-        return "tool_existence_check"
+        tool_exists = state.get("tool_exists", True)
+        if tool_exists:
+            return "tool_existence_check"
+        else:
+            return "chat"
     elif intent_type == "upload_script":
         return "script_upload_process"
     elif intent_type == "generate_script":
@@ -982,6 +1190,7 @@ def tool_check_router(state: ScanState) -> str:
         return "intent_recognition"
 
 
+@with_node_retry(max_retries=3)
 async def direct_tool_execute(state: ScanState) -> ScanState:
     """工具直调节点 - 直接执行指定工具"""
     tool_name = state.get("direct_tool", "")
@@ -989,26 +1198,62 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
     session_id = state.get("websocket_session_id") or state.get("task_id")
     ws_callback = memory_store.get_websocket_callback(session_id)
     
+    confirm_message = {
+        "type": "tool_confirm_required",
+        "payload": {
+            "tool_name": tool_name,
+            "target": target,
+            "description": f"即将直接执行工具 {tool_name} 对 {target} 进行扫描",
+            "rejection_count": 0
+        }
+    }
+    
+    memory_store.set_pending_interaction(session_id, confirm_message)
+    
+    if ws_callback:
+        try:
+            await ws_callback(confirm_message)
+        except Exception as e:
+            logger.error(f"WebSocket 发送确认请求失败: {e}")
+    
+    confirm_result = interrupt(confirm_message)
+    memory_store.clear_pending_interaction(session_id)
+    
+    if isinstance(confirm_result, dict):
+        confirmed = confirm_result.get("confirmed", False)
+    else:
+        confirmed = str(confirm_result).lower() in ("true", "yes", "1", "confirm")
+    
+    if not confirmed:
+        logger.info(f"[{session_id}] 用户拒绝执行工具: {tool_name}")
+        return update_state(state, 
+            pending_action_type="rejection",
+            rejection_count=1,
+            confirm_tool=tool_name,
+            confirm_target=target
+        )
+    else:
+        logger.info(f"[{session_id}] 用户确认执行工具: {tool_name}")
+    
     logger.info(f"[{session_id}] 工具直调: {tool_name} -> {target}")
     
     if is_auth_expired(state):
-        logger.warning(f"[{session_id}] 认证信息已过期")
+        logger.warning(f"[{session_id}] 未能获取有效认证信息，将以未认证模式继续执行")
+        state = update_state(state, auth_status="expired_no_auth_mode")
         if ws_callback:
             try:
                 remaining = get_auth_remaining_time(state)
                 await ws_callback({
-                    "type": "auth_expired",
+                    "type": "auth_unavailable",
                     "payload": {
                         "session_id": session_id,
                         "remaining_seconds": remaining,
-                        "message": "认证信息已过期，请重新认证"
+                        "message": "未能获取有效认证信息，将以未认证模式继续执行",
+                        "continue_execution": True
                     }
                 })
             except Exception as e:
                 logger.error(f"WebSocket推送失败: {e}")
-        return update_state(state,
-            errors=state.get("errors", []) + ["认证信息已过期，请重新认证后再执行工具"],
-            is_complete=True)
     
     if ws_callback:
         try:
@@ -1027,7 +1272,7 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
         SystemMessage(content=f"用户想执行工具: {tool_name}。请从可用工具中选择最匹配的工具。"),
         HumanMessage(content=f"目标: {target}\n工具名: {tool_name}")
     ]
-    response_with_tc = llm_with_tools.invoke(messages)
+    response_with_tc = llm_with_tools.invoke(messages, timeout=30)
     llm_tool_calls = getattr(response_with_tc, 'tool_calls', [])
     
     tool = None
@@ -1221,6 +1466,7 @@ async def start_scan_node(state: ScanState) -> ScanState:
 async def script_upload_process(state: ScanState) -> ScanState:
     """脚本上传处理节点"""
     from .tools import script_manager
+    from .script_safety import validate_script_safety, sanitize_script_name
     from datetime import datetime
     
     session_id = state.get("websocket_session_id") or state.get("task_id")
@@ -1242,6 +1488,17 @@ async def script_upload_process(state: ScanState) -> ScanState:
     script_content = upload_data.get("script_content", "")
     script_name = upload_data.get("script_name", f"custom_{datetime.now().strftime('%Y%m%d%H%M%S')}")
     
+    safe_name, name_err = sanitize_script_name(script_name)
+    if name_err:
+        if ws_callback:
+            await ws_callback({
+                "type": "script_error",
+                "payload": {"error": f"脚本名称不合法: {name_err}"}
+            })
+        return update_state(state, is_complete=True,
+            errors=state.get("errors", []) + [f"脚本名称不合法: {name_err}"])
+    script_name = safe_name
+    
     if not script_content:
         if ws_callback:
             await ws_callback({
@@ -1249,6 +1506,17 @@ async def script_upload_process(state: ScanState) -> ScanState:
                 "payload": {"error": "脚本内容为空"}
             })
         return update_state(state, is_complete=True)
+    
+    is_safe, safety_err = validate_script_safety(script_content)
+    if not is_safe:
+        logger.warning(f"[{session_id}] 脚本安全审查未通过: {safety_err}")
+        if ws_callback:
+            await ws_callback({
+                "type": "script_error",
+                "payload": {"error": f"脚本安全审查未通过: {safety_err}"}
+            })
+        return update_state(state, is_complete=True,
+            errors=state.get("errors", []) + [f"安全审查未通过: {safety_err}"])
     
     if ws_callback:
         try:
@@ -1298,6 +1566,7 @@ async def script_upload_process(state: ScanState) -> ScanState:
 async def script_generate_process(state: ScanState) -> ScanState:
     """AI脚本生成处理节点"""
     from .tools import script_manager
+    from .script_safety import validate_script_safety, sanitize_script_name
     from datetime import datetime
     
     session_id = state.get("websocket_session_id") or state.get("task_id")
@@ -1344,11 +1613,29 @@ async def script_generate_process(state: ScanState) -> ScanState:
             })
         return update_state(state, is_complete=True)
     
+    is_safe, safety_err = validate_script_safety(script_code)
+    if not is_safe:
+        logger.warning(f"[{session_id}] AI生成脚本安全审查未通过: {safety_err}")
+        if ws_callback:
+            await ws_callback({
+                "type": "script_error",
+                "payload": {"error": f"AI生成脚本安全审查未通过: {safety_err}"}
+            })
+        return update_state(state, is_complete=True,
+            errors=state.get("errors", []) + [f"安全审查未通过: {safety_err}"])
+    
     analysis = await script_manager.analyze_script_with_ai(script_code)
+    
+    default_name = f"ai_gen_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    tool_name = analysis.get("tool_name", default_name)
+    safe_name, name_err = sanitize_script_name(tool_name)
+    if name_err:
+        safe_name = default_name
+    tool_name = safe_name or default_name
     
     result = script_manager.register_script_as_tool(
         script_content=script_code,
-        script_name=analysis.get("tool_name", f"ai_gen_{datetime.now().strftime('%Y%m%d%H%M%S')}"),
+        script_name=tool_name,
         description=analysis.get("description", description),
         category=analysis.get("category", "custom")
     )
@@ -1426,11 +1713,18 @@ def parse_react_response(response_text: str) -> dict:
     return result
 
 
+@with_node_retry(max_retries=3)
 async def ai_decision(state: ScanState) -> ScanState:
     """原子1: AI智能决策（RAG增强版）"""
     logger.info(f"[{state.get('task_id')}] AI决策节点开始执行（RAG增强版）")
     
     session_id = state.get("websocket_session_id") or state.get("task_id")
+    
+    # 检查是否需要跳过剩余任务（高危漏洞确认后用户选择停止）
+    if state.get("skip_remaining_tasks"):
+        logger.info(f"[{session_id}] 跳过剩余任务，直接生成报告")
+        return update_state(state, next_task="end", need_generate_script=False)
+    
     done = list(state.get("tool_results", {}).keys())
     mode = state.get("mode", "full_scan")
     tool_sequence = get_tool_sequence(mode)
@@ -1496,12 +1790,16 @@ async def ai_decision(state: ScanState) -> ScanState:
             is_react_selected = True
             logger.info(f"✅ ReACT 决策分配任务：{react_action}")
 
-    if next_task_assigned is None:
-        for t in tool_sequence:
-            if t not in done:
-                next_task_assigned = t
-                logger.info(f"✅ 顺序分配任务：{t}")
-                break
+    if next_task_assigned is None and len(done) < len(tool_sequence):
+        remaining = [t for t in tool_sequence if t not in done]
+        logger.warning(f"ReACT 决策未选出任务，回退到默认序列。待处理任务: {remaining}")
+        next_task_assigned = remaining[0] if remaining else None
+        is_react_selected = False
+        
+        if next_task_assigned is None:
+            logger.info("所有任务已完成")
+            return update_state(state, next_task="end", need_generate_script=False,
+                rag_last_strategy=rag_strategy)
 
     if next_task_assigned:
         t = next_task_assigned
@@ -1624,11 +1922,15 @@ async def user_interact(state: ScanState) -> ScanState:
     
     memory_store.clear_pending_interaction(session_id)
     
+    if isinstance(user_choice, dict):
+        user_choice = user_choice.get("choice", "1")
+    
     logger.info(f"👤 用户选择: {user_choice}")
     
-    return update_state(state, user_choice=user_choice)
+    return update_state(state, user_choice=str(user_choice))
 
 
+@with_node_retry(max_retries=3)
 async def execute_task(state: ScanState) -> ScanState:
     """原子3: 执行任务"""
     logger.info(f"[{state.get('task_id')}] 执行任务节点")
@@ -1641,24 +1943,67 @@ async def execute_task(state: ScanState) -> ScanState:
     session_id = state.get("websocket_session_id") or state.get("task_id")
     ws_callback = memory_store.get_websocket_callback(session_id)
     
+    if task not in ("end", ""):
+        rejection_count = state.get("rejection_count", 0)
+        skipped = state.get("skipped_tasks", [])
+        
+        confirm_message = {
+            "type": "tool_confirm_required",
+            "payload": {
+                "tool_name": task,
+                "target": target,
+                "description": f"即将执行 {task} 对 {target} 进行扫描",
+                "rejection_count": rejection_count
+            }
+        }
+        
+        memory_store.set_pending_interaction(session_id, confirm_message)
+        
+        if ws_callback:
+            try:
+                await ws_callback(confirm_message)
+            except Exception as e:
+                logger.error(f"WebSocket 发送确认请求失败: {e}")
+        
+        confirm_result = interrupt(confirm_message)
+        memory_store.clear_pending_interaction(session_id)
+        
+        if isinstance(confirm_result, dict):
+            confirmed = confirm_result.get("confirmed", False)
+        else:
+            confirmed = str(confirm_result).lower() in ("true", "yes", "1", "confirm")
+        
+        if not confirmed:
+            logger.info(f"[{session_id}] 用户拒绝执行工具: {task}")
+            new_count = rejection_count + 1
+            return update_state(state, 
+                pending_action_type="rejection",
+                rejection_count=new_count,
+                confirm_tool=task,
+                confirm_target=target,
+                user_choice="rejected"
+            )
+        else:
+            logger.info(f"[{session_id}] 用户确认执行工具: {task}")
+            state = update_state(state, rejection_count=0)
+    
     if is_auth_expired(state):
-        logger.warning(f"[{session_id}] 认证信息已过期")
+        logger.warning(f"[{session_id}] 未能获取有效认证信息，将以未认证模式继续执行")
+        state = update_state(state, auth_status="expired_no_auth_mode")
         if ws_callback:
             try:
                 remaining = get_auth_remaining_time(state)
                 await ws_callback({
-                    "type": "auth_expired",
+                    "type": "auth_unavailable",
                     "payload": {
                         "session_id": session_id,
                         "remaining_seconds": remaining,
-                        "message": "认证信息已过期，请重新认证"
+                        "message": "未能获取有效认证信息，将以未认证模式继续执行",
+                        "continue_execution": True
                     }
                 })
             except Exception as e:
                 logger.error(f"WebSocket推送失败: {e}")
-        return update_state(state,
-            errors=state.get("errors", []) + ["认证信息已过期，请重新认证后再执行任务"],
-            is_complete=True)
     
     if ws_callback:
         try:
@@ -1680,7 +2025,7 @@ async def execute_task(state: ScanState) -> ScanState:
         SystemMessage(content=f"当前需要执行的安全任务: {task}。请从可用工具中选择最匹配的工具来执行此任务。"),
         HumanMessage(content=f"任务名称: {task}\n目标: {target}")
     ]
-    response_with_tc = llm_with_tools.invoke(messages)
+    response_with_tc = llm_with_tools.invoke(messages, timeout=30)
     llm_tool_calls = getattr(response_with_tc, 'tool_calls', [])
     
     tool = None
@@ -1694,13 +2039,22 @@ async def execute_task(state: ScanState) -> ScanState:
         tool = get_tool_by_name(task)
     
     if not tool:
-        logger.warning(f"工具 {task} 不存在")
+        logger.warning(f"工具 {task} 不存在，跳过并继续下一个任务")
         if ws_callback:
-            await ws_callback({
-                "type": "task_error",
-                "payload": {"tool": task, "error": f"工具 {task} 不存在"}
-            })
-        return update_state(state, errors=state.get("errors", []) + [f"工具 {task} 不存在"])
+            try:
+                await ws_callback({
+                    "type": "task_skipped",
+                    "payload": {"tool": task, "reason": f"工具 {task} 不存在，已跳过"}
+                })
+            except Exception as e:
+                logger.error(f"WebSocket推送失败: {e}")
+        completed_tasks = state.get("completed_tasks", []).copy()
+        if task not in completed_tasks:
+            completed_tasks.append(task)
+        return update_state(state, 
+            errors=state.get("errors", []) + [f"工具 {task} 不存在，已跳过"],
+            completed_tasks=completed_tasks,
+            next_task="continue")
     
     try:
         from .tools import invoke_tool_with_auth, extract_auth_from_result
@@ -1891,19 +2245,71 @@ async def chat(state: ScanState) -> ScanState:
 
 
 async def script_manager(state: ScanState) -> ScanState:
-    """原子5: 脚本管理"""
-    logger.info(f"[{state.get('task_id')}] 脚本管理节点")
-    
-    user_choice = state.get("user_choice", "")
-    
-    if user_choice == "4":
-        logger.info("📁 脚本上传功能")
-    elif user_choice == "5":
-        logger.info("🔧 脚本生成功能")
-    
     return update_state(state, need_generate_script=False)
 
 
+async def vulnerability_check(state: ScanState) -> ScanState:
+    """
+    漏洞风险检查节点
+    
+    检测到高危/严重漏洞时：
+    1. 暂停工作流（interrupt）
+    2. 通过 WebSocket 通知前端
+    3. 等待用户确认
+    4. 根据用户决策更新状态
+    """
+    vulnerabilities = state.get("vulnerabilities", [])
+    session_id = state.get("websocket_session_id") or state.get("task_id")
+    
+    risk_summary = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for vuln in vulnerabilities:
+        severity = vuln.get("severity", "info").lower()
+        if severity in risk_summary:
+            risk_summary[severity] += 1
+    
+    state = update_state(state, risk_summary=risk_summary)
+    
+    if risk_summary["critical"] > 0 or risk_summary["high"] > 0:
+        highest_risk = "critical" if risk_summary["critical"] > 0 else "high"
+        
+        interrupt_data = {
+            "type": "high_risk_vulnerability_detected",
+            "highest_risk_level": highest_risk,
+            "risk_summary": risk_summary,
+            "vulnerabilities": [
+                v for v in vulnerabilities 
+                if v.get("severity", "").lower() in ("critical", "high")
+            ],
+            "message": f"检测到 {risk_summary['critical']} 个严重漏洞, {risk_summary['high']} 个高危漏洞",
+            "options": [
+                {"key": "continue", "label": "继续扫描", "description": "继续执行剩余扫描任务"},
+                {"key": "stop", "label": "停止并报告", "description": "立即停止扫描并生成报告"},
+                {"key": "poc_verify", "label": "POC验证", "description": "对已发现漏洞进行POC验证"}
+            ]
+        }
+        
+        ws_callback = memory_store.get_websocket_callback(session_id)
+        if ws_callback:
+            await ws_callback(interrupt_data)
+        
+        user_decision = interrupt(interrupt_data)
+        
+        decision = user_decision.get("choice", "continue") if isinstance(user_decision, dict) else "continue"
+        
+        logger.info(f"[{session_id}] 高危漏洞确认 - 用户决策: {decision}")
+        
+        if decision == "stop":
+            state = update_state(state, skip_remaining_tasks=True, confirmed=True)
+            return update_state(state, next_task="end", need_generate_script=False)
+        elif decision == "poc_verify":
+            state = update_state(state, next_task="poc_verification", confirmed=True)
+        else:
+            state = update_state(state, confirmed=True)
+    
+    return state
+
+
+@with_node_retry(max_retries=3)
 async def report_generation(state: ScanState) -> ScanState:
     """原子6: 报告生成 - 使用AI分析并保存报告到文件"""
     logger.info(f"[{state.get('task_id')}] 报告生成节点")
@@ -2011,6 +2417,183 @@ async def report_generation(state: ScanState) -> ScanState:
         return update_state(state, is_complete=True, report="报告生成失败", scan_summary=scan_summary)
 
 
+def execute_task_router(state: ScanState) -> str:
+    """execute_task 后的路由：确认通过→漏洞检查，拒绝→否决处理"""
+    if state.get("pending_action_type") == "rejection":
+        return "rejection_handler"
+    return "vulnerability_check"
+
+
+async def rejection_handler(state: ScanState) -> ScanState:
+    """否决处理节点 - 用户拒绝当前方案后生成替代方案"""
+    session_id = state.get("websocket_session_id") or state.get("task_id")
+    rejection_count = state.get("rejection_count", 1)
+    rejected_tool = state.get("confirm_tool", "")
+    target = state.get("target", "")
+    ws_callback = memory_store.get_websocket_callback(session_id)
+    
+    logger.info(f"[{session_id}] 否决处理 - 第{rejection_count}次拒绝, 被拒工具: {rejected_tool}")
+    
+    if rejection_count >= 3:
+        logger.warning(f"[{session_id}] 连续拒绝超过3次，终止扫描")
+        if ws_callback:
+            try:
+                await ws_callback({
+                    "type": "scan_terminated",
+                    "payload": {
+                        "reason": "连续拒绝超过3次",
+                        "suggestion": "建议手动指定扫描方向或生成已有结果的报告",
+                        "rejection_count": rejection_count
+                    }
+                })
+            except Exception as e:
+                logger.error(f"WebSocket 推送失败: {e}")
+        
+        memory_store.append_chat(session_id, "system", 
+            f"用户连续拒绝 {rejection_count} 次，扫描已终止。建议手动指定方向或生成报告。")
+        
+        return update_state(state, 
+            next_task="end", 
+            pending_action_type="terminated",
+            is_complete=False
+        )
+    
+    done = state.get("completed_tasks", [])
+    skipped = state.get("skipped_tasks", [])
+    mode = state.get("mode", "full_scan")
+    tool_sequence = get_tool_sequence(mode)
+    remaining = [t for t in tool_sequence if t not in done and t not in skipped]
+    
+    chat_context = memory_store.get_chat_history(session_id)
+    chat_summary = "\n".join([
+        f"{m['role']}: {m['content'][:100]}" 
+        for m in chat_context[-8:]
+    ]) if chat_context else ""
+    
+    try:
+        llm = get_llm()
+        alt_prompt = f"""用户拒绝了执行工具 "{rejected_tool}" 对 "{target}" 的扫描请求（第{rejection_count}次拒绝）。
+
+你是安全扫描专家，请生成替代方案：
+- 已完成任务: {done if done else '无'}
+- 剩余可执行任务: {remaining if remaining else '无'}
+- 已跳过任务: {skipped if skipped else '无'}
+- 对话上下文: {chat_summary[:500]}
+
+请按以下JSON格式回复（不要输出其他内容）：
+```json
+[
+  {{"label": "方案名称(简短)", "action": "工具名称", "description": "方案说明(一句话)"}}
+]
+```
+要求：
+1. 生成2-4个替换方案
+2. 每个方案的action必须是剩余任务列表或备选工具列表中的有效工具名
+3. 至少一个方案是从剩余任务中顺序选择下一个
+4. 如果剩余任务为0，建议 "skip" 跳过或 "report" 生成报告
+"""
+        
+        alt_response = llm.invoke(alt_prompt, timeout=30)
+        alt_text = alt_response.content if hasattr(alt_response, 'content') else str(alt_response)
+        
+        import re
+        json_match = re.search(r'```json\s*([\s\S]*?)\s*```', alt_text)
+        if json_match:
+            alternatives = json.loads(json_match.group(1))
+        else:
+            json_match = re.search(r'\[[\s\S]*\]', alt_text)
+            if json_match:
+                alternatives = json.loads(json_match.group(0))
+            else:
+                alternatives = []
+        
+        if not alternatives:
+            raise ValueError("无法解析替代方案")
+            
+    except Exception as e:
+        logger.warning(f"[{session_id}] AI 生成替代方案失败: {e}，使用默认方案")
+        alternatives = [
+            {"label": "跳过当前工具", "action": "skip", "description": f"跳过 {rejected_tool}，继续下一个任务"},
+            {"label": "重试当前工具", "action": rejected_tool, "description": f"重新尝试执行 {rejected_tool}"},
+        ]
+        if remaining:
+            alt = remaining[0]
+            if alt != rejected_tool:
+                alternatives.append({"label": f"执行 {alt}", "action": alt, "description": f"改为执行剩余任务: {alt}"})
+        alternatives.append({"label": "停止扫描", "action": "stop", "description": "停止扫描并生成已有结果的报告"})
+    
+    alt_message = {
+        "type": "alternative_options",
+        "payload": {
+            "rejected_tool": rejected_tool,
+            "rejection_count": rejection_count,
+            "alternatives": alternatives
+        }
+    }
+    
+    memory_store.set_pending_interaction(session_id, alt_message)
+    
+    if ws_callback:
+        try:
+            await ws_callback(alt_message)
+        except Exception as e:
+            logger.error(f"WebSocket 发送替代方案失败: {e}")
+    
+    user_choice = interrupt(alt_message)
+    memory_store.clear_pending_interaction(session_id)
+    
+    if isinstance(user_choice, dict):
+        chosen = user_choice
+    else:
+        chosen = {"choice_index": int(user_choice) if str(user_choice).isdigit() else 0}
+    
+    choice_idx = chosen.get("choice_index", chosen.get("index", 0))
+    if isinstance(choice_idx, str) and choice_idx.isdigit():
+        choice_idx = int(choice_idx)
+    
+    if 0 <= choice_idx < len(alternatives):
+        selected = alternatives[choice_idx]
+    else:
+        selected = alternatives[0] if alternatives else {"action": "skip", "label": "跳过"}
+    
+    action = selected.get("action", "skip")
+    
+    logger.info(f"[{session_id}] 用户选择替代方案: {selected.get('label')} -> {action}")
+    
+    memory_store.append_chat(session_id, "system", 
+        f"用户选择替代方案: {selected.get('label', '')} ({action})")
+    
+    if action == "stop":
+        return update_state(state, next_task="end", pending_action_type="")
+    elif action == "skip":
+        new_skipped = skipped.copy()
+        if rejected_tool and rejected_tool not in new_skipped:
+            new_skipped.append(rejected_tool)
+        if rejected_tool not in done:
+            done_copy = done.copy()
+            done_copy.append(rejected_tool)
+        else:
+            done_copy = done
+        return update_state(state,
+            pending_action_type="",
+            next_task="continue",
+            skipped_tasks=new_skipped,
+            completed_tasks=done_copy,
+            confirm_tool="",
+            confirm_target=""
+        )
+    elif action == "report":
+        return update_state(state, next_task="end", pending_action_type="")
+    else:
+        return update_state(state,
+            pending_action_type="",
+            next_task=action,
+            confirm_tool=action,
+            confirm_target=target,
+            rejection_count=rejection_count
+        )
+
+
 def router(state: ScanState) -> str:
     """路由决策"""
     next_task = state.get("next_task", "")
@@ -2019,6 +2602,9 @@ def router(state: ScanState) -> str:
     
     if next_task == "end":
         return "report_generation"
+    
+    if next_task == "continue":
+        return "ai_decision"
     
     if need_generate_script:
         return "script_manager"
@@ -2034,6 +2620,9 @@ def router(state: ScanState) -> str:
         return "script_upload_process"
     if c == "5":
         return "script_generate_process"
+    
+    if state.get("pending_action_type") == "rejection":
+        return "rejection_handler"
     
     return "user_interact"
 
@@ -2078,6 +2667,8 @@ class InfoCollectionGraph:
         workflow.add_node("ai_decision", ai_decision)
         workflow.add_node("user_interact", user_interact)
         workflow.add_node("execute_task", execute_task)
+        workflow.add_node("vulnerability_check", vulnerability_check)
+        workflow.add_node("rejection_handler", rejection_handler)
         workflow.add_node("chat", chat)
         workflow.add_node("script_manager", script_manager)
         workflow.add_node("script_upload_process", script_upload_process)
@@ -2087,7 +2678,9 @@ class InfoCollectionGraph:
         workflow.set_entry_point("ai_decision")
         workflow.add_edge("ai_decision", "user_interact")
         workflow.add_conditional_edges("user_interact", router)
-        workflow.add_edge("execute_task", "ai_decision")
+        workflow.add_conditional_edges("execute_task", execute_task_router)
+        workflow.add_edge("vulnerability_check", "ai_decision")
+        workflow.add_edge("rejection_handler", "user_interact")
         workflow.add_edge("chat", "ai_decision")
         workflow.add_edge("script_manager", "ai_decision")
         workflow.add_edge("script_upload_process", "ai_decision")
@@ -2107,6 +2700,8 @@ class VulnScanGraph:
         workflow.add_node("ai_decision", ai_decision)
         workflow.add_node("user_interact", user_interact)
         workflow.add_node("execute_task", execute_task)
+        workflow.add_node("vulnerability_check", vulnerability_check)
+        workflow.add_node("rejection_handler", rejection_handler)
         workflow.add_node("chat", chat)
         workflow.add_node("script_manager", script_manager)
         workflow.add_node("script_upload_process", script_upload_process)
@@ -2116,7 +2711,9 @@ class VulnScanGraph:
         workflow.set_entry_point("ai_decision")
         workflow.add_edge("ai_decision", "user_interact")
         workflow.add_conditional_edges("user_interact", router)
-        workflow.add_edge("execute_task", "ai_decision")
+        workflow.add_conditional_edges("execute_task", execute_task_router)
+        workflow.add_edge("vulnerability_check", "ai_decision")
+        workflow.add_edge("rejection_handler", "user_interact")
         workflow.add_edge("chat", "ai_decision")
         workflow.add_edge("script_manager", "ai_decision")
         workflow.add_edge("script_upload_process", "ai_decision")
@@ -2156,29 +2753,60 @@ class AgentOrchestrator:
         memory_store.set_websocket_callback(session_id, callback)
     
     async def resume_workflow(self, session_id: str, user_choice: str) -> Optional[ScanState]:
-        """恢复暂停的工作流"""
+        """恢复暂停的工作流 - 使用 Command(resume=...) 恢复 interrupt"""
         state = memory_store.get_session(session_id)
         if not state:
             logger.warning(f"会话 {session_id} 不存在")
             return None
         
-        state = update_state(state, user_choice=user_choice)
-        memory_store.save_session(session_id, state)
-        
         mode = state.get("mode", "")
         config = {"configurable": {"thread_id": session_id}}
         
-        if mode == "info_collection":
-            result = await self.info_graph.ainvoke(state, config=config)
-        elif mode == "vuln_scan":
-            result = await self.vuln_graph.ainvoke(state, config=config)
+        if isinstance(user_choice, dict):
+            resume_value = user_choice
         else:
-            result = await self.intent_graph.ainvoke(state, config=config)
+            resume_value = {"choice": user_choice}
         
-        memory_store.save_session(session_id, result)
+        logger.info(f"[{session_id}] 恢复工作流，用户选择: {user_choice}, 模式: {mode}")
         
-        logger.info(f"工作流 {session_id} 已恢复，用户选择: {user_choice}, 模式: {mode}")
-        return result
+        try:
+            if mode == "info_collection":
+                result = await self.info_graph.ainvoke(
+                    Command(resume=resume_value),
+                    config=config
+                )
+            elif mode == "vuln_scan":
+                result = await self.vuln_graph.ainvoke(
+                    Command(resume=resume_value),
+                    config=config
+                )
+            else:
+                result = await self.intent_graph.ainvoke(
+                    Command(resume=resume_value),
+                    config=config
+                )
+            
+            if result and not isinstance(result, dict):
+                result = dict(result)
+
+            if result:
+                old_state = memory_store.get_session(session_id)
+                if old_state:
+                    for key in ("completed_tasks", "tool_results", "vulnerabilities",
+                               "task_history", "decision_history", "is_complete", "report"):
+                        if key in result:
+                            old_state = update_state(old_state, **{key: result[key]})
+                    result = old_state
+
+            memory_store.save_session(session_id, result)
+            logger.info(f"工作流 {session_id} 已恢复完成")
+            return result
+            
+        except Exception as e:
+            logger.error(f"恢复工作流失败: {e}")
+            state = update_state(state, user_choice=user_choice)
+            memory_store.save_session(session_id, state)
+            return state
     
     def get_pending_interaction(self, session_id: str) -> Optional[Dict]:
         """获取待处理的交互请求"""
@@ -2286,7 +2914,10 @@ class AgentOrchestrator:
             )
             memory_store.save_session(session_id, state)
             
-            state = await self.report_graph.ainvoke(state)
+            state = await self.report_graph.ainvoke(
+                state,
+                config={"configurable": {"thread_id": session_id}}
+            )
             memory_store.save_session(session_id, state)
             
             logger.info(f"[{state.get('task_id')}] 完整扫描流程完成")
@@ -2324,7 +2955,11 @@ class AgentOrchestrator:
     
     async def run_report(self, state: ScanState) -> ScanState:
         """仅生成报告"""
-        return await self.report_graph.ainvoke(state)
+        session_id = state.get("websocket_session_id") or state.get("task_id")
+        return await self.report_graph.ainvoke(
+            state,
+            config={"configurable": {"thread_id": session_id}}
+        )
 
 
 agent_orchestrator = AgentOrchestrator()

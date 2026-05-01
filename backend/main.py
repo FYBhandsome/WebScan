@@ -18,6 +18,8 @@ import asyncio
 from pathlib import Path
 
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="paramiko")
+from cryptography.utils import CryptographyDeprecationWarning
+warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
 
 import socket
 

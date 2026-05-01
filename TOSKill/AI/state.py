@@ -1,7 +1,7 @@
 """
 TOSKill AI 简化版状态定义
 
-类比 demo.py 的 ScanState，使用 TypedDict 定义状态。
+ScanState，使用 TypedDict 定义状态。
 支持记忆化存储，简化数据结构。
 """
 from typing import TypedDict, List, Dict, Any, Optional, NotRequired
@@ -9,7 +9,7 @@ from datetime import datetime
 
 
 class ScanState(TypedDict, total=False):
-    """扫描状态 - 类比 demo.py 的 ScanState"""
+    """扫描状态"""
     target: str
     task_id: str
     mode: str
@@ -78,6 +78,25 @@ class ScanState(TypedDict, total=False):
     auth_expires_at: NotRequired[str]
     rag_last_strategy: str
     rag_enabled: bool
+    rejection_count: NotRequired[int]
+    alternative_options: NotRequired[List[Dict]]
+    pending_action_type: NotRequired[str]
+    skipped_tasks: NotRequired[List[str]]
+    tool_confirm_required: NotRequired[bool]
+    confirm_target: NotRequired[str]
+    confirm_tool: NotRequired[str]
+    
+    # 交互控制
+    pending_confirmation: NotRequired[bool]
+    confirmation_type: NotRequired[str]
+    confirmation_message: NotRequired[str]
+    confirmation_options: NotRequired[List[Dict]]
+    confirmed: NotRequired[bool]
+    
+    # 风险控制
+    highest_risk_level: NotRequired[str]
+    risk_summary: NotRequired[Dict[str, int]]
+    skip_remaining_tasks: NotRequired[bool]
 
 
 def create_initial_state(target: str, task_id: str = None, mode: str = "info_collection") -> ScanState:
@@ -157,7 +176,14 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         auth_timestamp="",
         auth_expires_at="",
         rag_last_strategy="",
-        rag_enabled=True
+        rag_enabled=True,
+        rejection_count=0,
+        alternative_options=[],
+        pending_action_type="",
+        skipped_tasks=[],
+        tool_confirm_required=False,
+        confirm_target="",
+        confirm_tool="",
     )
 
 

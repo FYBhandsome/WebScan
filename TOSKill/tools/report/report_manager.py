@@ -62,13 +62,14 @@ class ReportManager:
         if hasattr(self, '_initialized') and self._initialized:
             return
         
-        self.reports_dir = Path("reports")
+        from TOSKill.config import settings
+        self.reports_dir = settings.REPORTS_PATH
         self.mapping_file = self.reports_dir / "mapping.json"
         self._mapping: Dict[str, Dict] = {}
         self._ensure_dirs()
         self._load_mapping()
         self._initialized = True
-        logger.info("报告管理器初始化完成")
+        logger.info(f"报告管理器初始化完成，报告目录: {self.reports_dir}")
     
     def _ensure_dirs(self):
         """确保目录存在"""

@@ -1,12 +1,15 @@
 # WebScan AI - 前端项目
 
+> ⚠️ **注意**: 这是旧版前端项目，已不再维护。建议使用新版前端项目 [TOSKillfront](../TOSKillfront/)。
+
 <div align="center">
 
 ![Vue](https://img.shields.io/badge/vue-3.5+-brightgreen.svg)
 ![Vite](https://img.shields.io/badge/vite-5.4+-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
+![Status](https://img.shields.io/badge/status-deprecated-red.svg)
 
-**WebScan AI Security Platform 前端界面**
+**WebScan AI Security Platform 前端界面（旧版）**
 
 基于 Vue 3 + Vite + Element Plus 构建的现代化Web应用安全扫描平台前端
 

@@ -444,6 +444,16 @@ const Chat = {
                 this.addMessage(data.payload.content, 'ai');
                 break;
 
+            case 'high_risk_vulnerability_detected':
+                this.hideTypingIndicator();
+                this.showHighRiskDialog(data.payload);
+                break;
+
+            case 'high_risk_confirmed':
+                this.hideTypingIndicator();
+                this.addMessage(`✅ 用户已确认: ${this.getChoiceLabel(data.payload.choice)}`, 'ai');
+                break;
+
             case 'interaction_required':
                 this.hideTypingIndicator();
                 this.addInteractionMessage(data.payload);
@@ -653,6 +663,94 @@ const Chat = {
             case 'error':
                 this.hideTypingIndicator();
                 this.addMessage('❌ 错误: ' + data.payload.error, 'ai');
+                break;
+
+            case 'task_skipped':
+                this.addStreamMessage(`⏭️ 任务已跳过: ${data.payload.tool} - ${data.payload.reason}`, 'ai');
+                break;
+
+            case 'auth_unavailable':
+                this.addStreamMessage(`⚠️ ${data.payload.message}`, 'ai');
+                break;
+
+            case 'auth_refresh_required':
+                this.addStreamMessage(`🔄 认证需要刷新 (${data.payload.retry_count}/${data.payload.max_retries})`, 'ai');
+                break;
+
+            case 'auth_retry_exhausted':
+                this.hideTypingIndicator();
+                this.addMessage(`❌ ${data.payload.message}`, 'ai');
+                break;
+
+            case 'auth_info_obtained':
+            case 'auth_refresh_success':
+                this.addStreamMessage(`🔐 ${data.payload.message}`, 'ai');
+                break;
+
+            case 'history':
+                if (data.payload.history && data.payload.history.length > 0) {
+                    const lastMsg = data.payload.history.slice(-1)[0];
+                    if (lastMsg && lastMsg.role === 'assistant') {
+                        this.hideTypingIndicator();
+                        this.addMessage(lastMsg.content, 'ai');
+                    }
+                }
+                break;
+
+            case 'status':
+                if (data.payload.state) {
+                    const stateData = data.payload.state;
+                    if (stateData.target) {
+                        App.updateCurrentTarget(stateData.target);
+                    }
+                }
+                break;
+
+            case 'ai_message':
+                this.hideTypingIndicator();
+                this.addMessage(data.payload.content, 'ai');
+                break;
+
+            case 'tool_confirm_required':
+                this.hideTypingIndicator();
+                this.showToolConfirm(data.payload);
+                break;
+
+            case 'tool_execution_proceed':
+                this.addStreamMessage('✅ 确认通过，正在执行工具...', 'ai');
+                break;
+
+            case 'tool_rejected_processing':
+                this.addStreamMessage('🔄 已拒绝，AI正在生成替代方案...', 'ai');
+                break;
+
+            case 'alternative_options':
+                this.hideTypingIndicator();
+                this.showAlternativeOptions(data.payload);
+                break;
+
+            case 'alternative_applied':
+                this.hideTypingIndicator();
+                this.addMessage(`✅ 已应用替代方案: ${data.payload.choice_label || '方案 ' + (data.payload.choice_index + 1)}`, 'ai');
+                break;
+
+            case 'scan_terminated':
+                this.hideTypingIndicator();
+                this.addMessage(`⛔ 扫描已终止: ${data.payload.reason}\n💡 ${data.payload.suggestion}`, 'ai');
+                this.waitingForChoice = false;
+                break;
+
+            case 'workflow_fallback':
+                this.addStreamMessage(`⚠️ ${data.payload.message || 'AI 响应超时，使用默认策略'}`, 'ai');
+                break;
+
+            case 'node_retry':
+                const retryPayload = data.payload;
+                this.addStreamMessage(`🔄 节点 ${retryPayload.node} 异常重试 (${retryPayload.attempt}/${retryPayload.max_retries})`, 'ai');
+                break;
+
+            default:
+                console.log('未处理的WebSocket消息类型:', data.type, data);
                 break;
         }
     },
@@ -885,6 +983,203 @@ const Chat = {
                 }
             }, 2000);
         }
+    },
+
+    showHighRiskDialog(payload) {
+        const existing = document.getElementById('highRiskDialog');
+        if (existing) existing.remove();
+
+        const { message, risk_summary, vulnerabilities, options } = payload;
+        
+        const vulnListHtml = (vulnerabilities || []).map(vuln => `
+            <div class="high-risk-vuln-item ${vuln.severity}">
+                <span class="vuln-severity">${vuln.severity?.toUpperCase() || 'HIGH'}</span>
+                <span class="vuln-name">${vuln.name || vuln.title || '未知漏洞'}</span>
+            </div>
+        `).join('');
+
+        const optionsHtml = (options || [
+            { key: 'continue', label: '继续扫描', description: '继续执行剩余扫描任务' },
+            { key: 'stop', label: '停止并报告', description: '立即停止扫描并生成报告' },
+            { key: 'poc_verify', label: 'POC验证', description: '对已发现漏洞进行POC验证' }
+        ]).map(opt => `
+            <button class="high-risk-btn ${opt.key === 'stop' ? 'danger' : ''}" data-choice="${opt.key}">
+                ${opt.label}
+            </button>
+        `).join('');
+
+        const dialogEl = document.createElement('div');
+        dialogEl.className = 'high-risk-dialog-overlay';
+        dialogEl.id = 'highRiskDialog';
+        dialogEl.innerHTML = `
+            <div class="high-risk-dialog">
+                <div class="high-risk-header">
+                    <span class="high-risk-icon">⚠️</span>
+                    <h3>高危漏洞检测</h3>
+                </div>
+                <div class="high-risk-body">
+                    <p class="high-risk-message">${message || '检测到高危漏洞'}</p>
+                    <div class="high-risk-stats">
+                        ${risk_summary?.critical ? `<span class="risk-tag critical">严重: ${risk_summary.critical}</span>` : ''}
+                        ${risk_summary?.high ? `<span class="risk-tag high">高危: ${risk_summary.high}</span>` : ''}
+                    </div>
+                    <div class="high-risk-vuln-list">
+                        ${vulnListHtml}
+                    </div>
+                </div>
+                <div class="high-risk-footer">
+                    ${optionsHtml}
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(dialogEl);
+
+        dialogEl.querySelectorAll('.high-risk-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const choice = btn.dataset.choice;
+                this.sendHighRiskConfirm(choice);
+            });
+        });
+    },
+
+    showToolConfirm(payload) {
+        const existing = document.getElementById('toolConfirmDialog');
+        if (existing) existing.remove();
+
+        const { tool_name, target, description, rejection_count } = payload;
+
+        const dialogEl = document.createElement('div');
+        dialogEl.className = 'high-risk-dialog-overlay';
+        dialogEl.id = 'toolConfirmDialog';
+        dialogEl.innerHTML = `
+            <div class="high-risk-dialog">
+                <div class="high-risk-header">
+                    <span class="high-risk-icon">🔧</span>
+                    <h3>工具执行确认</h3>
+                </div>
+                <div class="high-risk-body">
+                    <p class="high-risk-message">${description || '即将执行工具扫描'}</p>
+                    <div class="tool-confirm-info">
+                        <div class="confirm-item">
+                            <span class="confirm-label">工具名称:</span>
+                            <code>${tool_name || '未知工具'}</code>
+                        </div>
+                        <div class="confirm-item">
+                            <span class="confirm-label">目标:</span>
+                            <code>${target || '--'}</code>
+                        </div>
+                        ${rejection_count > 0 ? `<div class="confirm-warning">⚠️ 此前已被拒绝 ${rejection_count} 次</div>` : ''}
+                    </div>
+                </div>
+                <div class="high-risk-footer">
+                    <button class="high-risk-btn primary" onclick="Chat.sendToolConfirm(true)">✅ 确认执行</button>
+                    <button class="high-risk-btn danger" onclick="Chat.sendToolConfirm(false)">❌ 拒绝</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(dialogEl);
+    },
+
+    hideToolConfirm() {
+        const dialog = document.getElementById('toolConfirmDialog');
+        if (dialog) {
+            dialog.remove();
+        }
+    },
+
+    showAlternativeOptions(payload) {
+        const existing = document.getElementById('alternativeDialog');
+        if (existing) existing.remove();
+
+        this.hideToolConfirm();
+
+        const { rejected_tool, rejection_count, alternatives } = payload;
+
+        const alternativesHtml = (alternatives || []).map((alt, idx) => `
+            <button class="high-risk-btn" data-choice="${idx}" onclick="Chat.sendAlternativeChoice(${idx}, '${alt.label.replace(/'/g, "\\'")}')">
+                <span class="choice-key">[${idx + 1}]</span>
+                <span class="choice-label">${alt.label}</span>
+                ${alt.description ? `<span class="choice-desc">${alt.description}</span>` : ''}
+            </button>
+        `).join('');
+
+        const dialogEl = document.createElement('div');
+        dialogEl.className = 'high-risk-dialog-overlay';
+        dialogEl.id = 'alternativeDialog';
+        dialogEl.innerHTML = `
+            <div class="high-risk-dialog">
+                <div class="high-risk-header">
+                    <span class="high-risk-icon">🔄</span>
+                    <h3>选择替代方案</h3>
+                </div>
+                <div class="high-risk-body">
+                    <p class="high-risk-message">已拒绝: <code>${rejected_tool || '当前工具'}</code> (第 ${rejection_count || 1} 次拒绝)</p>
+                    <p class="high-risk-sub">请选择替代方案:</p>
+                </div>
+                <div class="high-risk-footer alternative-list">
+                    ${alternativesHtml}
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(dialogEl);
+    },
+
+    hideAlternativeOptions() {
+        const dialog = document.getElementById('alternativeDialog');
+        if (dialog) {
+            dialog.remove();
+        }
+    },
+
+    sendToolConfirm(confirmed) {
+        this.hideToolConfirm();
+        
+        if (App.ws && App.ws.isConnected()) {
+            App.ws.sendToolConfirm(confirmed);
+        }
+        
+        if (confirmed) {
+            this.showTypingIndicator();
+        }
+    },
+
+    sendAlternativeChoice(choiceIndex, choiceLabel) {
+        this.hideAlternativeOptions();
+        
+        if (App.ws && App.ws.isConnected()) {
+            App.ws.sendAlternativeChoice(choiceIndex, choiceLabel);
+        }
+        
+        this.showTypingIndicator();
+    },
+
+    hideHighRiskDialog() {
+        const dialog = document.getElementById('highRiskDialog');
+        if (dialog) {
+            dialog.remove();
+        }
+    },
+
+    sendHighRiskConfirm(choice) {
+        this.hideHighRiskDialog();
+        
+        if (App.ws && App.ws.isConnected()) {
+            App.ws.send('high_risk_confirm', { choice });
+        }
+        
+        this.addMessage(`用户选择: ${this.getChoiceLabel(choice)}`, 'user');
+    },
+
+    getChoiceLabel(choice) {
+        const labels = {
+            'continue': '继续扫描',
+            'stop': '停止并报告',
+            'poc_verify': 'POC验证'
+        };
+        return labels[choice] || choice;
     }
 };
 

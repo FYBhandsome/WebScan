@@ -74,11 +74,20 @@ class AIChatManager:
         handlers = {
             "user_input": self._handle_user_input,
             "user_confirm": self._handle_user_confirm,
+            "user_choice": self._handle_user_confirm,
             "start_scan": self._handle_start_scan,
             "get_history": self._handle_get_history,
             "get_status": self._handle_get_status,
             "chat": self._handle_chat,
             "execute_tool": self._handle_execute_tool,
+            "script_content": self._handle_script_content,
+            "script_description": self._handle_script_description,
+            "input_response": self._handle_input_response,
+            "subscribe": self._handle_subscribe,
+            "high_risk_confirm": self._handle_high_risk_confirm,
+            "tool_confirmed": self._handle_tool_confirmed,
+            "tool_rejected": self._handle_tool_rejected,
+            "alternative_selected": self._handle_alternative_selected,
         }
         
         if handler := handlers.get(msg_type):
@@ -96,10 +105,49 @@ class AIChatManager:
     
     async def _handle_user_confirm(self, session_id: str, payload: Dict):
         choice = payload.get("choice", "confirm")
-        state = memory_store.get_session(session_id)
-        if state:
-            memory_store.save_session(session_id, update_state(state, user_choice="1" if choice == "confirm" else "2"))
-        memory_store.append_chat(session_id, "system", f"用户选择: {choice}")
+        
+        orchestrator = get_agent_orchestrator()
+        
+        if orchestrator.has_pending_interaction(session_id):
+            logger.info(f"[{session_id}] 用户确认交互，选择: {choice}")
+            
+            memory_store.append_chat(session_id, "system", f"用户选择: {choice}")
+            
+            try:
+                result = await orchestrator.resume_workflow(session_id, choice)
+                
+                if result:
+                    await self._send(session_id, {
+                        "type": "workflow_resumed",
+                        "payload": {
+                            "choice": choice,
+                            "completed_tasks": result.get("completed_tasks", []),
+                            "is_complete": result.get("is_complete", False)
+                        }
+                    })
+                    
+                    if result.get("is_complete"):
+                        await self._send(session_id, {
+                            "type": "scan_completed",
+                            "payload": {
+                                "session_id": session_id,
+                                "target": result.get("target", ""),
+                                "completed_tasks": result.get("completed_tasks", []),
+                                "vulnerabilities_count": len(result.get("vulnerabilities", [])),
+                                "report": result.get("report", "")
+                            }
+                        })
+                else:
+                    await self._send_error(session_id, "恢复工作流失败：会话不存在")
+                    
+            except Exception as e:
+                logger.error(f"[{session_id}] 恢复工作流失败: {e}")
+                await self._send_error(session_id, f"恢复工作流失败: {str(e)}")
+        else:
+            state = memory_store.get_session(session_id)
+            if state:
+                memory_store.save_session(session_id, update_state(state, user_choice="1" if choice == "confirm" else "2"))
+            memory_store.append_chat(session_id, "system", f"用户选择: {choice}")
     
     async def _handle_start_scan(self, session_id: str, payload: Dict):
         target = payload.get("target", "")
@@ -127,21 +175,29 @@ class AIChatManager:
                 "vuln_scan": orchestrator.run_vuln_scan
             }
             result = await methods.get(mode, orchestrator.run_info_collection)(state)
+            
+            if result and result.get("__interrupt__"):
+                logger.info(f"[{session_id}] 工作流中断，等待用户交互")
+                memory_store.save_session(session_id, result)
+                return
+            
             memory_store.save_session(session_id, result)
             
-            await self._send(session_id, {
-                "type": "scan_completed",
-                "payload": {
-                    "task_id": task_id,
-                    "target": target,
-                    "completed_tasks": result.get("completed_tasks", []),
-                    "vulnerabilities_count": len(result.get("vulnerabilities", [])),
-                    "report": result.get("report", "")
-                }
-            })
+            if result and result.get("is_complete"):
+                await self._send(session_id, {
+                    "type": "scan_completed",
+                    "payload": {
+                        "task_id": task_id,
+                        "target": target,
+                        "completed_tasks": result.get("completed_tasks", []),
+                        "vulnerabilities_count": len(result.get("vulnerabilities", [])),
+                        "report": result.get("report", "")
+                    }
+                })
         except asyncio.CancelledError:
             await self._send(session_id, {"type": "scan_cancelled", "payload": {"task_id": task_id}})
         except Exception as e:
+            logger.error(f"[{session_id}] 扫描任务异常: {e}")
             await self._send_error(session_id, str(e), task_id=task_id)
     
     async def _handle_get_history(self, session_id: str, payload: Dict):
@@ -211,6 +267,239 @@ class AIChatManager:
             await self._send(session_id, {"type": "tool_execution_completed", "payload": {"tool_name": tool_name, "result": result}})
         except Exception as e:
             await self._send_error(session_id, f"工具执行失败: {str(e)}", tool_name=tool_name)
+    
+    async def _handle_script_content(self, session_id: str, payload: Dict):
+        script_content = payload.get("script_content", "")
+        if not script_content:
+            await self._send_error(session_id, "脚本内容不能为空")
+            return
+        
+        try:
+            from TOSKill.AI.script_safety import validate_script_safety, sanitize_script_name
+            
+            is_safe, safety_err = validate_script_safety(script_content)
+            if not is_safe:
+                await self._send_error(session_id, f"脚本安全审查未通过: {safety_err}")
+                return
+            
+            from TOSKill.AI.tools import script_manager
+            from datetime import datetime
+            script_name = payload.get("script_name", f"custom_{datetime.now().strftime('%Y%m%d%H%M%S')}")
+            safe_name, name_err = sanitize_script_name(script_name)
+            script_name = safe_name or f"custom_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            
+            analysis = await script_manager.analyze_script_with_ai(script_content)
+            result = script_manager.register_script_as_tool(
+                script_content=script_content,
+                script_name=analysis.get("tool_name", script_name),
+                description=analysis.get("description", "自定义扫描脚本"),
+                category=analysis.get("category", "custom")
+            )
+            
+            if result.get("success"):
+                await self._send(session_id, {
+                    "type": "script_registered",
+                    "payload": {
+                        "tool_name": result["tool_name"],
+                        "description": analysis.get("description"),
+                        "message": f"脚本已注册为工具: {result['tool_name']}"
+                    }
+                })
+            else:
+                await self._send_error(session_id, result.get("error", "注册失败"))
+        except Exception as e:
+            logger.error(f"脚本内容处理失败: {e}")
+            await self._send_error(session_id, f"脚本处理失败: {str(e)}")
+    
+    async def _handle_script_description(self, session_id: str, payload: Dict):
+        description = payload.get("description", "")
+        if not description:
+            await self._send_error(session_id, "脚本描述不能为空")
+            return
+        
+        try:
+            from TOSKill.AI.tools import script_manager
+            from TOSKill.AI.script_safety import validate_script_safety, sanitize_script_name
+            from datetime import datetime
+            
+            await self._send(session_id, {"type": "script_generating", "payload": {"message": "AI正在生成脚本..."}})
+            script_code = await script_manager.generate_script_with_ai(description)
+            
+            if not script_code:
+                await self._send_error(session_id, "AI生成脚本失败")
+                return
+            
+            is_safe, safety_err = validate_script_safety(script_code)
+            if not is_safe:
+                await self._send_error(session_id, f"AI生成脚本安全审查未通过: {safety_err}")
+                return
+            
+            analysis = await script_manager.analyze_script_with_ai(script_code)
+            default_name = f"ai_gen_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            tool_name = analysis.get("tool_name", default_name)
+            safe_name, name_err = sanitize_script_name(tool_name)
+            tool_name = safe_name or default_name
+            
+            result = script_manager.register_script_as_tool(
+                script_content=script_code,
+                script_name=tool_name,
+                description=analysis.get("description", description),
+                category=analysis.get("category", "custom")
+            )
+            
+            if result.get("success"):
+                await self._send(session_id, {
+                    "type": "script_generated",
+                    "payload": {
+                        "tool_name": result["tool_name"],
+                        "description": analysis.get("description"),
+                        "script_code": script_code,
+                        "message": f"AI生成的脚本已注册为工具: {result['tool_name']}"
+                    }
+                })
+            else:
+                await self._send_error(session_id, result.get("error", "注册失败"))
+        except Exception as e:
+            logger.error(f"脚本生成处理失败: {e}")
+            await self._send_error(session_id, f"脚本生成失败: {str(e)}")
+    
+    async def _handle_input_response(self, session_id: str, payload: Dict):
+        field = payload.get("field", "")
+        value = payload.get("value", "")
+        state = memory_store.get_session(session_id)
+        if state and field:
+            from TOSKill.AI.state import update_state
+            memory_store.save_session(session_id, update_state(state, **{field: value}))
+            await self._send(session_id, {
+                "type": "input_received",
+                "payload": {"field": field, "value": value}
+            })
+            logger.info(f"[{session_id}] 输入响应: {field}={value}")
+    
+    async def _handle_subscribe(self, session_id: str, payload: Dict):
+        subscribe_id = payload.get("session_id", "")
+        if not subscribe_id:
+            await self._send_error(session_id, "订阅的会话ID不能为空")
+            return
+        
+        state = memory_store.get_session(subscribe_id)
+        if not state:
+            state = create_initial_state(target="", task_id=subscribe_id)
+            memory_store.save_session(subscribe_id, state)
+        
+        old_ws = self.connections.pop(session_id, None)
+        old_session = session_id
+        self.connections[subscribe_id] = self.connections.get(session_id) or old_ws
+        if old_session != subscribe_id:
+            self.connections.pop(old_session, None)
+        
+        await self._send(subscribe_id, {
+            "type": "subscribed",
+            "payload": {
+                "session_id": subscribe_id,
+                "available_tools": get_all_tool_names(),
+                "state": {
+                    "task_id": state.get("task_id", ""),
+                    "target": state.get("target", ""),
+                    "mode": state.get("mode", ""),
+                    "completed_tasks": state.get("completed_tasks", []),
+                    "is_complete": state.get("is_complete", False)
+                }
+            }
+        })
+        logger.info(f"会话订阅: {old_session} -> {subscribe_id}")
+    
+    async def _handle_high_risk_confirm(self, session_id: str, payload: Dict):
+        """处理高危漏洞确认"""
+        choice = payload.get("choice", "continue")
+        
+        state = memory_store.get_session(session_id)
+        if not state:
+            await self._send_error(session_id, "会话不存在")
+            return
+        
+        memory_store.update_session(session_id, confirmed=True, user_choice=choice)
+        
+        orchestrator = get_agent_orchestrator()
+        result = await orchestrator.resume_workflow(session_id, choice)
+        
+        await self._send(session_id, {
+            "type": "high_risk_confirmed",
+            "payload": {"choice": choice, "resumed": result is not None}
+        })
+        logger.info(f"[{session_id}] 高危漏洞确认: {choice}")
+
+    async def _handle_tool_confirmed(self, session_id: str, payload: Dict):
+        orchestrator = get_agent_orchestrator()
+
+        if orchestrator.has_pending_interaction(session_id):
+            logger.info(f"[{session_id}] 用户确认执行工具")
+            memory_store.append_chat(session_id, "system", "用户确认执行工具")
+
+            try:
+                result = await orchestrator.resume_workflow(session_id, {"confirmed": True})
+                if result:
+                    await self._send(session_id, {
+                        "type": "tool_execution_proceed",
+                        "payload": {"status": "executing"}
+                    })
+            except Exception as e:
+                logger.error(f"[{session_id}] 恢复工作流失败: {e}")
+                await self._send_error(session_id, f"恢复工作流失败: {str(e)}")
+
+    async def _handle_tool_rejected(self, session_id: str, payload: Dict):
+        orchestrator = get_agent_orchestrator()
+
+        if orchestrator.has_pending_interaction(session_id):
+            logger.info(f"[{session_id}] 用户拒绝执行工具")
+            memory_store.append_chat(session_id, "system", "用户拒绝执行工具，等待替代方案")
+
+            try:
+                result = await orchestrator.resume_workflow(session_id, {"confirmed": False})
+                if result:
+                    await self._send(session_id, {
+                        "type": "tool_rejected_processing",
+                        "payload": {"status": "generating_alternatives"}
+                    })
+            except Exception as e:
+                logger.error(f"[{session_id}] 恢复工作流失败: {e}")
+                await self._send_error(session_id, f"恢复工作流失败: {str(e)}")
+
+    async def _handle_alternative_selected(self, session_id: str, payload: Dict):
+        choice_index = payload.get("choice_index", 0)
+        choice_label = payload.get("choice_label", "")
+
+        orchestrator = get_agent_orchestrator()
+
+        if orchestrator.has_pending_interaction(session_id):
+            logger.info(f"[{session_id}] 用户选择替代方案: [{choice_index}] {choice_label}")
+            memory_store.append_chat(session_id, "system", f"用户选择替代方案: {choice_label}")
+
+            try:
+                result = await orchestrator.resume_workflow(session_id, {
+                    "choice_index": choice_index,
+                    "choice_label": choice_label
+                })
+                if result:
+                    await self._send(session_id, {
+                        "type": "alternative_applied",
+                        "payload": {"choice_index": choice_index, "choice_label": choice_label}
+                    })
+
+                    if result.get("is_complete"):
+                        await self._send(session_id, {
+                            "type": "scan_completed",
+                            "payload": {
+                                "session_id": session_id,
+                                "target": result.get("target", ""),
+                                "completed_tasks": result.get("completed_tasks", []),
+                                "vulnerabilities_count": len(result.get("vulnerabilities", [])),
+                                "report": result.get("report", "")
+                            }
+                        })
+            except Exception as e:
+                logger.error(f"[{session_id}] 恢复工作流失败: {e}")
+                await self._send_error(session_id, f"恢复工作流失败: {str(e)}")
 
 
 manager = AIChatManager()

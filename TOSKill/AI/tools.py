@@ -280,17 +280,20 @@ def clean_target(target: str) -> str:
 
 
 def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None) -> Any:
-    """带认证信息的工具调用辅助函数
+    """带认证信息的工具调用辅助函数（非强制性）
     
-    优先使用 state.get("auth_info", {})，支持向后兼容旧字段
+    认证机制为非强制性要求：
+    - 优先使用 state.get("auth_info", {}) 中的认证信息
+    - 若无有效认证信息，将以未认证模式继续执行
+    - 不会因缺少认证而中断流程或抛出阻断性错误
     
     Args:
         tool: LangChain工具实例
         params_or_target: 扫描目标URL(str)或tool_call参数字典(dict)
-        state: 包含认证信息的状态字典
+        state: 包含认证信息的状态字典（可选，无认证信息时忽略）
         
     Returns:
-        工具执行结果
+        工具执行结果（无论是否有认证信息都会返回）
     """
     if isinstance(params_or_target, str):
         params = {"target": params_or_target}
@@ -1380,19 +1383,6 @@ def get_tool_sequence(mode: str) -> List[str]:
     return TOOL_SEQUENCE_INFO
 
 
-def register_custom_tool(tool, category: str = "custom"):
-    """动态注册自定义工具到工具映射表"""
-    global TOOL_MAP, ALL_TOOLS
-    
-    if tool and hasattr(tool, 'name'):
-        TOOL_MAP[tool.name] = tool
-        if tool not in ALL_TOOLS:
-            ALL_TOOLS.append(tool)
-        logger.info(f"动态注册工具: {tool.name}")
-        return True
-    return False
-
-
 def get_custom_tool_names() -> List[str]:
     """获取自定义工具名称列表"""
     return [name for name in TOOL_MAP.keys() if name.startswith('custom_') or name.startswith('ai_gen_')]
@@ -1420,8 +1410,8 @@ class ScriptManager:
     def get_instance(cls):
         if cls._instance is None:
             cls._instance = cls()
-            from pathlib import Path
-            cls._scripts_dir = Path("scripts/custom")
+            from TOSKill.config import settings
+            cls._scripts_dir = settings.CUSTOM_SCRIPTS_PATH
             cls._scripts_dir.mkdir(parents=True, exist_ok=True)
         return cls._instance
     
@@ -1481,11 +1471,19 @@ class ScriptManager:
         import importlib.util
         
         try:
+            from ..AI.script_safety import validate_script_safety
+            is_safe, safety_err = validate_script_safety(script_content)
+            if not is_safe:
+                return {"success": False, "error": f"脚本安全审查未通过: {safety_err}"}
+        except ImportError:
+            pass
+        
+        try:
             script_path = self._scripts_dir / f"{script_name}.py"
             with open(script_path, 'w', encoding='utf-8') as f:
                 f.write(script_content)
             
-            def create_tool_func(script_path):
+            def create_tool_func(script_path, script_name):
                 def tool_func(target: str):
                     try:
                         spec = importlib.util.spec_from_file_location("custom_module", script_path)
@@ -1493,7 +1491,25 @@ class ScriptManager:
                             return {"success": False, "error": "无法加载脚本"}
                         
                         module = importlib.util.module_from_spec(spec)
+                        safe_builtins = {
+                            'print': print, 'len': len, 'range': range,
+                            'str': str, 'int': int, 'float': float, 'bool': bool,
+                            'list': list, 'dict': dict, 'set': set, 'tuple': tuple,
+                            'True': True, 'False': False, 'None': None,
+                            'isinstance': isinstance, 'type': type,
+                            'Exception': Exception, 'ValueError': ValueError,
+                            'TypeError': TypeError, 'KeyError': KeyError,
+                            'ImportError': ImportError, 'AttributeError': AttributeError,
+                            'min': min, 'max': max, 'sum': sum, 'sorted': sorted,
+                            'abs': abs, 'round': round, 'enumerate': enumerate,
+                            'zip': zip, 'map': map, 'filter': filter, 'any': any, 'all': all,
+                            'hasattr': hasattr, 'getattr': getattr, 'setattr': setattr,
+                            '__import__': lambda name, *args, **kwargs: __import__(name, *args, **kwargs)
+                        }
+                        module.__builtins__ = safe_builtins
                         spec.loader.exec_module(module)
+                        
+                        logger.info(f"自定义脚本执行: {script_name} -> {target}")
                         
                         if hasattr(module, 'run'):
                             return module.run(target)
@@ -1502,16 +1518,21 @@ class ScriptManager:
                         else:
                             return {"success": False, "error": "脚本缺少run或scan函数"}
                     except Exception as e:
+                        logger.error(f"自定义脚本 {script_name} 执行失败: {e}")
                         return {"success": False, "error": str(e)}
                 return tool_func
             
             tool = Tool(
                 name=script_name,
                 description=description,
-                func=create_tool_func(str(script_path))
+                func=create_tool_func(str(script_path), script_name)
             )
             
-            if register_custom_tool(tool, category):
+            if tool and hasattr(tool, 'name'):
+                TOOL_MAP[tool.name] = tool
+                if tool not in ALL_TOOLS:
+                    ALL_TOOLS.append(tool)
+                logger.info(f"动态注册工具: {tool.name}")
                 self._registered_scripts[script_name] = {
                     "path": str(script_path),
                     "description": description,
@@ -1520,7 +1541,8 @@ class ScriptManager:
                 }
                 return {"success": True, "tool_name": script_name, "tool": tool}
             
-            return {"success": False, "error": "工具注册失败"}
+            script_path.unlink(missing_ok=True)
+            return {"success": False, "error": "工具注册失败，脚本文件已清理"}
             
         except Exception as e:
             logger.error(f"注册脚本工具失败: {e}")
@@ -1528,7 +1550,7 @@ class ScriptManager:
     
     async def generate_script_with_ai(self, description: str) -> str:
         """使用AI生成扫描脚本"""
-        import re
+        from ..AI.script_safety import extract_code_block
         
         llm = self._get_llm()
         prompt = f"""根据以下需求生成一个Python安全扫描脚本：
@@ -1542,13 +1564,19 @@ class ScriptManager:
 4. 使用 requests 库进行HTTP请求
 5. 代码简洁高效
 
+安全约束（必须严格遵守）：
+- 禁止导入 os, subprocess, shutil, socket, ctypes, signal, multiprocessing 模块
+- 禁止使用 eval(), exec(), compile(), __import__() 函数
+- 禁止执行系统命令或访问文件系统
+- 仅使用 requests, json, re, urllib, base64, hashlib, time 等安全库
+
 只输出Python代码，使用```python包裹代码。
 """
         try:
             response = llm.invoke(prompt).content
-            code_match = re.search(r'```(?:python)?\s*([\s\S]*?)\s*```', response)
-            if code_match:
-                return code_match.group(1).strip()
+            code = extract_code_block(response)
+            if code:
+                return code
             return response.strip()
         except Exception as e:
             logger.error(f"AI生成脚本失败: {e}")
