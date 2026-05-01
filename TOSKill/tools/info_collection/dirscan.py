@@ -5,7 +5,7 @@
 """
 
 from langchain.tools import tool
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 
 
 @tool

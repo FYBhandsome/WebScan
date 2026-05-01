@@ -109,10 +109,7 @@ def sqli_scan(
                 "plugin_name": result.plugin_name,
                 "vulnerability_count": len(vulnerabilities),
                 "detected_database": result.metadata.get("detected_database")
-            },
-            "authentication_used": result.authentication_used,
-            "cookies_obtained": result.cookies_obtained,
-            "tokens_obtained": result.tokens_obtained
+            }
         }
     except ImportError as e:
         return {

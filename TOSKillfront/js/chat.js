@@ -328,10 +328,7 @@ const Chat = {
         }
 
         if (App.ws && App.ws.isConnected()) {
-            App.ws.send({
-                type: 'user_choice',
-                payload: { choice: choice }
-            });
+            App.ws.sendConfirm(choice);
         }
 
         this.waitingForChoice = false;
@@ -366,15 +363,6 @@ const Chat = {
 
         const container = document.getElementById('chatMessages');
         container.scrollTop = container.scrollHeight;
-    },
-
-    finalizeStreamMessage() {
-        const messageEl = document.querySelector('.message.streaming');
-        if (messageEl) {
-            messageEl.classList.remove('streaming');
-            const content = messageEl.querySelector('.message-bubble').textContent;
-            this.messages.push({ type: 'ai', content, timestamp: Date.now() });
-        }
     },
 
     showTypingIndicator() {
@@ -706,10 +694,7 @@ const Chat = {
     showScriptUploadDialog() {
         const content = prompt('请粘贴您的Python脚本内容:\n\n要求:\n- 必须包含 run(target) 函数\n- 返回 Dict 类型结果');
         if (content && content.trim()) {
-            App.ws.send({
-                type: 'script_content',
-                payload: { script_content: content.trim() }
-            });
+            App.ws.send('script_content', { script_content: content.trim() });
             this.showTypingIndicator();
         }
     },
@@ -717,10 +702,7 @@ const Chat = {
     showScriptGenerateDialog() {
         const description = prompt('请描述您需要的扫描脚本功能:\n\n例如: 检测目标网站是否存在敏感文件泄露');
         if (description && description.trim()) {
-            App.ws.send({
-                type: 'script_description',
-                payload: { description: description.trim() }
-            });
+            App.ws.send('script_description', { description: description.trim() });
             this.showTypingIndicator();
         }
     },
@@ -823,10 +805,7 @@ const Chat = {
             return;
         }
         
-        App.ws.send({
-            type: 'input_response',
-            payload: { field, value }
-        });
+        App.ws.send('input_response', { field, value });
         
         this.addMessage(value, 'user');
         this.removeInputDialog();
@@ -906,20 +885,6 @@ const Chat = {
                 }
             }, 2000);
         }
-    },
-
-    clear() {
-        const container = document.getElementById('chatMessages');
-        container.innerHTML = `
-            <div class="welcome-message">
-                <div class="welcome-icon">🚀</div>
-                <h2>欢迎使用 TOSKill Security Scanner</h2>
-                <p>AI驱动的Web安全扫描系统，输入目标开始扫描</p>
-            </div>
-        `;
-        this.messages = [];
-        this.waitingForChoice = false;
-        this.currentInteraction = null;
     }
 };
 

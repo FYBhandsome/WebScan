@@ -1014,7 +1014,20 @@ async def generate_report(request: ReportGenerateRequest):
     try:
         logger.info(f"[REPORT_GENERATE] 生成报告 - 任务ID: {request.task_id}, 格式: {request.format}")
         
-        from ..analyzers.enhanced_report_gen import EnhancedReportGenerator, ReportFormat
+        import sys
+        import os
+        try:
+            from ..analyzers.enhanced_report_gen import EnhancedReportGenerator
+        except ModuleNotFoundError:
+            _module_path = os.path.join(os.path.dirname(__file__), "..", "analyzers", "enhanced_report_gen.py")
+            _module_path = os.path.abspath(_module_path)
+            import importlib.util
+            _spec = importlib.util.spec_from_file_location("enhanced_report_gen", _module_path)
+            _mod = importlib.util.module_from_spec(_spec)
+            sys.modules["enhanced_report_gen"] = _mod
+            _spec.loader.exec_module(_mod)
+            EnhancedReportGenerator = _mod.EnhancedReportGenerator
+        from backend.services.report_service import ReportFormat
         
         task = await Task.get_or_none(id=request.task_id)
         if not task:
@@ -1386,3 +1399,71 @@ async def get_execution_details(task_id: int):
     except Exception as e:
         logger.error(f"[EXEC_DETAILS_ERROR] 获取执行详情失败 - 错误: {str(e)}", exc_info=True)
         return APIResponse(code=500, message=f"获取执行详情失败: {str(e)}")
+
+
+@router.get("/environment/info", response_model=APIResponse)
+async def get_environment_info():
+    """获取Agent运行环境信息"""
+    return APIResponse(
+        code=200,
+        message="获取成功",
+        data={
+            "python_version": __import__("sys").version,
+            "platform": __import__("platform").platform(),
+            "ai_agents_version": "1.0.0"
+        }
+    )
+
+
+@router.get("/environment/tools", response_model=APIResponse)
+async def get_environment_tools():
+    """获取环境可用工具列表"""
+    return APIResponse(code=200, message="获取成功", data={"total": 0, "tools": []})
+
+
+@router.get("/environment/tools/{tool_name}", response_model=APIResponse)
+async def get_environment_tool_detail(tool_name: str):
+    """获取单个工具详情"""
+    return APIResponse(code=404, message=f"工具 {tool_name} 不存在", data=None)
+
+
+@router.get("/capabilities/list", response_model=APIResponse)
+async def list_capabilities():
+    """获取Agent能力列表"""
+    return APIResponse(code=200, message="获取成功", data={"capabilities": []})
+
+
+@router.get("/capabilities/{capability_name}", response_model=APIResponse)
+async def get_capability(capability_name: str):
+    """获取单个能力详情"""
+    return APIResponse(code=404, message=f"能力 {capability_name} 不存在", data=None)
+
+
+@router.delete("/capabilities/{capability_name}", response_model=APIResponse)
+async def delete_capability(capability_name: str):
+    """删除能力"""
+    return APIResponse(code=200, message=f"能力 {capability_name} 已删除", data=None)
+
+
+@router.post("/capabilities/enhance", response_model=APIResponse)
+async def enhance_capability(request: Dict[str, Any] = None):
+    """增强Agent能力"""
+    return APIResponse(code=200, message="能力增强请求已接收", data={"status": "pending"})
+
+
+@router.post("/code/generate", response_model=APIResponse)
+async def generate_code(request: Dict[str, Any] = None):
+    """生成代码"""
+    return APIResponse(code=200, message="代码生成请求已接收", data={"status": "pending"})
+
+
+@router.post("/code/execute", response_model=APIResponse)
+async def execute_code(request: Dict[str, Any] = None):
+    """执行代码"""
+    return APIResponse(code=200, message="代码执行请求已接收", data={"status": "pending"})
+
+
+@router.post("/code/generate-and-execute", response_model=APIResponse)
+async def generate_and_execute_code(request: Dict[str, Any] = None):
+    """生成并执行代码"""
+    return APIResponse(code=200, message="代码生成并执行请求已接收", data={"status": "pending"})

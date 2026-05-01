@@ -1080,16 +1080,6 @@ body {
     background: #f0f5ff;
 }
 
-.interaction-btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-}
-
-.interaction-btn.selected {
-    border-color: var(--success-color);
-    background: #f6ffed;
-}
-
 .choice-key {
     font-weight: 600;
     color: var(--primary-color);
@@ -1335,32 +1325,4 @@ body {
 .input-dialog-message,
 .workflow-progress-message {
     animation: slideInUp 0.3s ease;
-}
-
-.skeleton {
-    background: linear-gradient(90deg, var(--bg-color) 25%, #e8ebf0 50%, var(--bg-color) 75%);
-    background-size: 200% 100%;
-    animation: skeleton-loading 1.5s infinite;
-}
-
-@keyframes skeleton-loading {
-    0% {
-        background-position: 200% 0;
-    }
-    100% {
-        background-position: -200% 0;
-    }
-}
-
-.skeleton-text {
-    height: 16px;
-    border-radius: 4px;
-    margin-bottom: 8px;
-}
-
-.skeleton-title {
-    height: 24px;
-    width: 60%;
-    border-radius: 4px;
-    margin-bottom: 12px;
 }

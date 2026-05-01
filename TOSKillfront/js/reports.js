@@ -30,7 +30,7 @@ const Reports = {
 
         try {
             const result = await API.getReports();
-            this.reports = result.reports || [];
+            this.reports = result.data?.reports || [];
             this.renderReports();
         } catch (error) {
             listEl.innerHTML = `<div class="error">加载失败: ${error.message}</div>`;
@@ -73,7 +73,7 @@ const Reports = {
 
         try {
             const result = await API.getReportContent(filename);
-            contentEl.innerHTML = `<pre style="white-space: pre-wrap; word-break: break-word;">${this.escapeHtml(result.content)}</pre>`;
+            contentEl.innerHTML = `<pre style="white-space: pre-wrap; word-break: break-word;">${this.escapeHtml(result.data.content)}</pre>`;
         } catch (error) {
             contentEl.innerHTML = `<div class="error">加载失败: ${error.message}</div>`;
         }
@@ -134,10 +134,6 @@ const Reports = {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
-    },
-
-    getReports() {
-        return this.reports;
     }
 };
 

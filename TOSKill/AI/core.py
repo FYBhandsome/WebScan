@@ -4,14 +4,14 @@ TOSKill 核心业务逻辑层
 提供统一的 API 供 WebSocket 和 REST API 调用，消除重复代码。
 """
 import logging
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from uuid import uuid4
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
-from .state import ScanState, create_initial_state, append_chat, update_state, get_state_summary
+from .state import ScanState, create_initial_state, update_state
 from .graph import get_agent_orchestrator, memory_store
 from .tools import get_tool_by_name, get_all_tool_names, clean_target, TOOL_MAP
 from ..config import settings
@@ -26,7 +26,7 @@ CHAT_SYSTEM_PROMPT = """你是WebScan AI，一个专业的Web安全顾问。
 def _get_llm():
     return ChatOpenAI(
         model=settings.MODEL_ID,
-        temperature=0.7,
+        temperature=settings.LLM_TEMPERATURE,
         api_key=settings.OPENAI_API_KEY,
         base_url=settings.OPENAI_BASE_URL
     )
@@ -118,7 +118,10 @@ async def run_scan(mode: str, target: str, session_id: str = None) -> Dict[str, 
         "full_scan": run_full_scan,
     }
     
-    handler = mode_map.get(mode, run_full_scan)
+    handler = mode_map.get(mode)
+    if handler is None:
+        logger.warning(f"Unknown scan mode '{mode}', falling back to full_scan")
+        handler = run_full_scan
     return await handler(target, session_id)
 
 
@@ -233,8 +236,6 @@ def append_chat_message(session_id: str, role: str, content: str) -> bool:
     if not state:
         return False
     
-    new_state = append_chat(state, role, content)
-    memory_store.save_session(session_id, new_state)
     memory_store.append_chat(session_id, role, content)
     
     return True

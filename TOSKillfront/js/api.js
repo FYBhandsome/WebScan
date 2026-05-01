@@ -56,14 +56,6 @@ const API = {
         return this.post('/toskill/sessions', body);
     },
 
-    async getSession(sessionId) {
-        return this.get(`/toskill/sessions/${sessionId}`);
-    },
-
-    async deleteSession(sessionId) {
-        return this.delete(`/toskill/sessions/${sessionId}`);
-    },
-
     async startInfoScan(target, tools = null, generateReport = true) {
         const body = { target, generate_report: generateReport };
         if (tools) body.tools = tools;
@@ -88,10 +80,6 @@ const API = {
 
     async getToolsByCategory() {
         return this.get('/toskill/tools/categories');
-    },
-
-    async getToolInfo(toolName) {
-        return this.get(`/toskill/tools/${toolName}`);
     },
 
     async executeTool(toolName, target, params = null) {
@@ -164,20 +152,23 @@ const API = {
         return response;
     },
 
-    async deleteReportBySession(sessionId) {
-        const response = await this.delete(`/reports/session/${sessionId}`);
-        if (response.success !== undefined) {
-            return { code: 200, message: response.message || '删除成功', data: null };
-        }
-        return response;
-    },
-
     async healthCheck() {
         return this.get('/toskill/health');
     },
 
     getWebSocketUrl() {
         return `${this.wsUrl}/api/ai-chat/ws`;
+    },
+
+    async sendChatMessage(sessionId, message) {
+        return this.post('/chat/send', {
+            session_id: sessionId,
+            message: message,
+        });
+    },
+
+    async getChatHistory(sessionId) {
+        return this.get(`/chat/history/${sessionId}`);
     },
 };
 

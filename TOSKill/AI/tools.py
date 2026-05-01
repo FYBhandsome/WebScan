@@ -23,15 +23,12 @@ TOSKill AI 工具注册模块
     - headers: Dict[str, str] - HTTP头认证
     - auth_token: str - Token认证
 """
-from typing import Dict, Any, List, Optional, TypedDict, Callable, Awaitable
+from typing import Dict, Any, List, Optional, TypedDict, Callable
 from langchain.tools import tool
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
 import logging
-import base64
-import json
 import re
-import asyncio
 
 # 预先导入所有工具模块，避免并发执行时的模块导入死锁
 from TOSKill.tools.info_collection.baseinfo import baseinfo
@@ -166,316 +163,6 @@ def get_auth_remaining_time(state: Dict[str, Any], default_expiry_minutes: int =
     return 0
 
 
-class MultiStepAuthManager:
-    """多步骤认证管理器
-    
-    支持:
-    - CSRF Token 获取
-    - 登录表单提交
-    - 验证码处理（预留接口）
-    """
-    
-    def __init__(self):
-        self._captcha_handlers: Dict[str, Callable] = {}
-        self._auth_sessions: Dict[str, Dict] = {}
-    
-    def register_captcha_handler(self, captcha_type: str, handler: Callable):
-        """
-        注册验证码处理器
-        
-        Args:
-            captcha_type: 验证码类型（如 'image', 'recaptcha', 'geetest' 等）
-            handler: 处理函数，接收验证码数据，返回验证码答案
-        """
-        self._captcha_handlers[captcha_type] = handler
-        logger.info(f"已注册验证码处理器: {captcha_type}")
-    
-    async def fetch_csrf_token(
-        self, 
-        login_url: str, 
-        session: Any = None,
-        token_name: str = "csrf_token",
-        token_input_name: str = "_token"
-    ) -> Dict[str, Any]:
-        """
-        获取 CSRF Token
-        
-        Args:
-            login_url: 登录页面URL
-            session: requests Session 对象（可选）
-            token_name: Token 在响应中的名称
-            token_input_name: Token 在表单中的 input name
-            
-        Returns:
-            Dict: 包含 csrf_token, cookies, headers 等信息
-        """
-        import requests
-        
-        result = {
-            "success": False,
-            "csrf_token": None,
-            "cookies": {},
-            "headers": {},
-            "form_data": {},
-            "error": None
-        }
-        
-        try:
-            if session is None:
-                session = requests.Session()
-            
-            response = session.get(login_url, timeout=10, allow_redirects=True)
-            response.raise_for_status()
-            
-            result["cookies"] = dict(session.cookies)
-            result["headers"] = {"Referer": login_url}
-            
-            csrf_patterns = [
-                rf'<input[^>]*name=["\']?{token_input_name}["\']?[^>]*value=["\']?([^"\'>\s]+)["\']?',
-                rf'<meta[^>]*name=["\']?csrf-token["\']?[^>]*content=["\']?([^"\'>\s]+)["\']',
-                rf'var\s+{token_name}\s*=\s*["\']([^"\']+)["\']',
-                rf'"csrf[_-]?token"\s*:\s*"([^"]+)"',
-            ]
-            
-            for pattern in csrf_patterns:
-                match = re.search(pattern, response.text, re.IGNORECASE)
-                if match:
-                    result["csrf_token"] = match.group(1)
-                    break
-            
-            form_data_pattern = r'<form[^>]*action=["\']?([^"\'>\s]*)["\']?[^>]*>(.*?)</form>'
-            form_match = re.search(form_data_pattern, response.text, re.DOTALL | re.IGNORECASE)
-            
-            if form_match:
-                form_action = form_match.group(1)
-                form_content = form_match.group(2)
-                
-                if form_action:
-                    if form_action.startswith('/'):
-                        from urllib.parse import urljoin
-                        result["form_data"]["action"] = urljoin(login_url, form_action)
-                    else:
-                        result["form_data"]["action"] = form_action
-                
-                hidden_inputs = re.findall(
-                    r'<input[^>]*type=["\']?hidden["\']?[^>]*name=["\']?([^"\'>\s]+)["\']?[^>]*value=["\']?([^"\'>\s]*)["\']?',
-                    form_content,
-                    re.IGNORECASE
-                )
-                
-                for name, value in hidden_inputs:
-                    result["form_data"][name] = value
-            
-            result["success"] = True
-            logger.info(f"CSRF Token 获取成功: {result['csrf_token']}")
-            
-        except Exception as e:
-            result["error"] = str(e)
-            logger.error(f"CSRF Token 获取失败: {e}")
-        
-        return result
-    
-    async def submit_login_form(
-        self,
-        login_url: str,
-        username: str,
-        password: str,
-        csrf_token: str = None,
-        form_data: Dict[str, str] = None,
-        cookies: Dict[str, str] = None,
-        headers: Dict[str, str] = None,
-        session: Any = None,
-        username_field: str = "username",
-        password_field: str = "password",
-        csrf_field: str = "_token"
-    ) -> Dict[str, Any]:
-        """
-        提交登录表单
-        
-        Args:
-            login_url: 登录提交URL
-            username: 用户名
-            password: 密码
-            csrf_token: CSRF Token（可选）
-            form_data: 额外的表单数据
-            cookies: Cookie
-            headers: 请求头
-            session: requests Session 对象
-            username_field: 用户名字段名
-            password_field: 密码字段名
-            csrf_field: CSRF Token 字段名
-            
-        Returns:
-            Dict: 包含登录结果、cookies、token等信息
-        """
-        import requests
-        
-        result = {
-            "success": False,
-            "logged_in": False,
-            "cookies": {},
-            "token": None,
-            "headers": {},
-            "redirect_url": None,
-            "error": None
-        }
-        
-        try:
-            if session is None:
-                session = requests.Session()
-            
-            data = form_data.copy() if form_data else {}
-            data[username_field] = username
-            data[password_field] = password
-            
-            if csrf_token:
-                data[csrf_field] = csrf_token
-            
-            req_headers = {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            }
-            if headers:
-                req_headers.update(headers)
-            
-            response = session.post(
-                login_url,
-                data=data,
-                headers=req_headers,
-                cookies=cookies,
-                timeout=15,
-                allow_redirects=True
-            )
-            
-            result["cookies"] = dict(session.cookies)
-            result["redirect_url"] = response.url
-            
-            if response.status_code in [200, 302, 303, 307]:
-                login_indicators = [
-                    "dashboard", "welcome", "logout", "profile", "account",
-                    "success", "logged in", "登录成功"
-                ]
-                
-                logout_indicators = [
-                    "login", "signin", "error", "invalid", "incorrect",
-                    "wrong", "failed", "登录失败", "用户名或密码错误"
-                ]
-                
-                content_lower = response.text.lower()
-                
-                if any(ind in content_lower for ind in login_indicators):
-                    if not any(ind in content_lower for ind in logout_indicators):
-                        result["logged_in"] = True
-                        result["success"] = True
-                
-                token_patterns = [
-                    r'"token"\s*:\s*"([^"]+)"',
-                    r'"access_token"\s*:\s*"([^"]+)"',
-                    r'"auth_token"\s*:\s*"([^"]+)"',
-                    r'Authorization:\s*Bearer\s+([^\s<]+)',
-                ]
-                
-                for pattern in token_patterns:
-                    match = re.search(pattern, response.text, re.IGNORECASE)
-                    if match:
-                        result["token"] = match.group(1)
-                        break
-                
-                if result["logged_in"]:
-                    logger.info(f"登录成功: {username}")
-                else:
-                    result["error"] = "登录失败，请检查用户名和密码"
-                    logger.warning(f"登录失败: {username}")
-            else:
-                result["error"] = f"HTTP错误: {response.status_code}"
-                
-        except Exception as e:
-            result["error"] = str(e)
-            logger.error(f"登录表单提交失败: {e}")
-        
-        return result
-    
-    async def handle_captcha(
-        self,
-        captcha_type: str,
-        captcha_data: Any,
-        session_id: str = None
-    ) -> Dict[str, Any]:
-        """
-        处理验证码（预留接口）
-        
-        Args:
-            captcha_type: 验证码类型
-            captcha_data: 验证码数据（图片base64、验证码ID等）
-            session_id: 会话ID
-            
-        Returns:
-            Dict: 包含验证码答案
-        """
-        result = {
-            "success": False,
-            "answer": None,
-            "error": None
-        }
-        
-        handler = self._captcha_handlers.get(captcha_type)
-        if handler:
-            try:
-                if asyncio.iscoroutinefunction(handler):
-                    answer = await handler(captcha_data, session_id)
-                else:
-                    answer = handler(captcha_data, session_id)
-                
-                result["success"] = True
-                result["answer"] = answer
-                logger.info(f"验证码处理成功: {captcha_type}")
-            except Exception as e:
-                result["error"] = str(e)
-                logger.error(f"验证码处理失败: {e}")
-        else:
-            result["error"] = f"未注册验证码处理器: {captcha_type}"
-            logger.warning(result["error"])
-        
-        return result
-    
-    def create_auth_session(self, session_id: str, config: Dict[str, Any]) -> str:
-        """
-        创建认证会话
-        
-        Args:
-            session_id: 会话ID
-            config: 认证配置
-            
-        Returns:
-            str: 认证会话ID
-        """
-        auth_session_id = f"auth_{session_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        self._auth_sessions[auth_session_id] = {
-            "session_id": session_id,
-            "config": config,
-            "step": 0,
-            "created_at": datetime.now().isoformat(),
-            "status": "pending"
-        }
-        return auth_session_id
-    
-    def get_auth_session(self, auth_session_id: str) -> Optional[Dict]:
-        """获取认证会话"""
-        return self._auth_sessions.get(auth_session_id)
-    
-    def update_auth_session(self, auth_session_id: str, **kwargs):
-        """更新认证会话"""
-        if auth_session_id in self._auth_sessions:
-            self._auth_sessions[auth_session_id].update(kwargs)
-    
-    def delete_auth_session(self, auth_session_id: str):
-        """删除认证会话"""
-        self._auth_sessions.pop(auth_session_id, None)
-
-
-multi_step_auth_manager = MultiStepAuthManager()
-
-
 class ToolResult(TypedDict, total=False):
     """
     工具返回格式标准定义
@@ -592,20 +279,23 @@ def clean_target(target: str) -> str:
     return parsed.netloc.strip() if parsed.netloc else target.strip()
 
 
-def invoke_tool_with_auth(tool, target: str, state: Dict[str, Any] = None) -> Any:
+def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None) -> Any:
     """带认证信息的工具调用辅助函数
     
     优先使用 state.get("auth_info", {})，支持向后兼容旧字段
     
     Args:
         tool: LangChain工具实例
-        target: 扫描目标
+        params_or_target: 扫描目标URL(str)或tool_call参数字典(dict)
         state: 包含认证信息的状态字典
         
     Returns:
         工具执行结果
     """
-    params = {"target": target}
+    if isinstance(params_or_target, str):
+        params = {"target": params_or_target}
+    else:
+        params = dict(params_or_target)
     
     if state:
         unified_auth = state.get("auth_info", {})
@@ -1663,15 +1353,6 @@ def get_all_tool_names() -> List[str]:
     return list(TOOL_MAP.keys())
 
 
-def get_tools_description() -> str:
-    """获取所有工具的描述信息，用于AI提示词"""
-    descriptions = []
-    for name, tool in TOOL_MAP.items():
-        desc = tool.description if hasattr(tool, 'description') else "无描述"
-        descriptions.append(f"- {name}: {desc}")
-    return "\n".join(descriptions)
-
-
 def is_tool_exists(tool_name: str) -> bool:
     """检查工具是否存在"""
     return tool_name in TOOL_MAP
@@ -1717,6 +1398,17 @@ def get_custom_tool_names() -> List[str]:
     return [name for name in TOOL_MAP.keys() if name.startswith('custom_') or name.startswith('ai_gen_')]
 
 
+@tool
+def _script_analysis_result(tool_name: str, description: str, category: str, input_type: str, output_type: str) -> str:
+    """上报脚本分析结果。请根据提供的脚本内容填充各字段：
+    tool_name: 英文下划线分隔的工具名称，如custom_port_check
+    description: 工具功能描述（一句话）
+    category: 工具类别，可选 info_collection、vuln_scan、poc 或 custom
+    input_type: 输入类型，可选 url、ip、domain
+    output_type: 输出类型，如 漏洞信息、端口列表、其他
+    """
+    return ""
+
 class ScriptManager:
     """脚本管理器 - 处理上传/生成脚本的注册"""
     
@@ -1739,42 +1431,36 @@ class ScriptManager:
         from TOSKill.config import settings
         return ChatOpenAI(
             model=settings.MODEL_ID,
-            temperature=0.3,
+            temperature=settings.LLM_TEMPERATURE,
             api_key=settings.OPENAI_API_KEY,
             base_url=settings.OPENAI_BASE_URL
         )
     
     async def analyze_script_with_ai(self, script_content: str) -> Dict:
         """使用AI分析脚本，生成工具描述"""
-        import json
-        import re
+        from langchain_core.messages import SystemMessage, HumanMessage
         
-        llm = self._get_llm()
-        prompt = f"""分析以下安全扫描脚本，生成工具描述：
-
-```python
-{script_content[:2000]}
-```
-
-请严格按以下JSON格式回复，不要添加其他内容：
-{{
-    "tool_name": "工具名称（英文，下划线分隔，如custom_port_check）",
-    "description": "工具功能描述（一句话）",
-    "category": "info_collection或vuln_scan或poc",
-    "input_type": "url或ip或domain",
-    "output_type": "漏洞信息或端口列表或其他"
-}}
-"""
+        llm = self._get_llm().bind_tools([_script_analysis_result])
+        messages = [
+            SystemMessage(content="请分析以下安全扫描脚本，调用script_analysis_result工具上报分析结果。"),
+            HumanMessage(content=f"```python\n{script_content[:2000]}\n```")
+        ]
         try:
-            response = llm.invoke(prompt).content
-            json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-                tool_name = result.get("tool_name", f"custom_{hash(script_content) % 10000}")
+            response = llm.invoke(messages)
+            tool_calls = getattr(response, 'tool_calls', [])
+            
+            if tool_calls:
+                args = tool_calls[0].get('args', {})
+                tool_name = args.get("tool_name", f"custom_{hash(script_content) % 10000}")
                 if not tool_name.startswith("custom_") and not tool_name.startswith("ai_gen_"):
                     tool_name = f"custom_{tool_name}"
-                result["tool_name"] = tool_name
-                return result
+                return {
+                    "tool_name": tool_name,
+                    "description": args.get("description", "自定义扫描脚本"),
+                    "category": args.get("category", "custom"),
+                    "input_type": args.get("input_type", "url"),
+                    "output_type": args.get("output_type", "其他"),
+                }
         except Exception as e:
             logger.error(f"AI分析脚本失败: {e}")
         
@@ -1856,14 +1542,11 @@ class ScriptManager:
 4. 使用 requests 库进行HTTP请求
 5. 代码简洁高效
 
-只输出Python代码，不要其他内容。使用```python包裹代码。
+只输出Python代码，使用```python包裹代码。
 """
         try:
             response = llm.invoke(prompt).content
-            code_match = re.search(r'```python\s*([\s\S]*?)\s*```', response)
-            if code_match:
-                return code_match.group(1).strip()
-            code_match = re.search(r'```\s*([\s\S]*?)\s*```', response)
+            code_match = re.search(r'```(?:python)?\s*([\s\S]*?)\s*```', response)
             if code_match:
                 return code_match.group(1).strip()
             return response.strip()
@@ -1875,5 +1558,45 @@ class ScriptManager:
         """获取已注册的脚本列表"""
         return self._registered_scripts.copy()
 
+
+# ==================== 意图工具集（仅用于 LLM Function Calling 结构化输出） ====================
+
+@tool
+def intent_scan(target: str) -> str:
+    """当用户请求进行完整安全扫描/漏洞检测/信息收集时调用此工具。target参数为扫描目标URL或域名。"""
+    return ""
+
+@tool
+def intent_execute_tool(tool_name: str, target: str) -> str:
+    """当用户明确指定要调用某个具体扫描工具时调用此工具。tool_name为工具名称，target为扫描目标。"""
+    return ""
+
+@tool
+def intent_chat(message: str) -> str:
+    """当用户进行安全咨询、技术问答、概念询问等对话类请求时调用此工具。"""
+    return ""
+
+@tool
+def intent_upload_script() -> str:
+    """当用户请求上传自定义脚本、导入脚本或添加自定义工具时调用此工具。"""
+    return ""
+
+@tool
+def intent_generate_script(description: str) -> str:
+    """当用户请求让AI生成安全扫描脚本或工具时调用此工具。description为用户的需求描述。"""
+    return ""
+
+INTENT_TOOLS = [intent_scan, intent_execute_tool, intent_chat, intent_upload_script, intent_generate_script]
+
+def map_tool_call_to_intent(tool_name: str) -> str:
+    """将tool_call名称映射为intent_type"""
+    mapping = {
+        "intent_scan": "scan",
+        "intent_execute_tool": "tool",
+        "intent_chat": "chat",
+        "intent_upload_script": "upload_script",
+        "intent_generate_script": "generate_script",
+    }
+    return mapping.get(tool_name, "chat")
 
 script_manager = ScriptManager.get_instance()

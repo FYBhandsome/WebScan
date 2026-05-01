@@ -164,13 +164,9 @@ async def lifespan(app: FastAPI):
         from backend.task_executor import task_executor
         
 
-        # TODO：是否需要重置扫描数据
-        # await task_executor.reset_scan_data()
-        
         task_executor.start_worker()
         logger.info("任务执行器 Worker 已启动")
         
-        # TODO: 从配置中读取是否启用任务恢复
         await task_executor.recover_pending_tasks()
         
     except Exception as e:

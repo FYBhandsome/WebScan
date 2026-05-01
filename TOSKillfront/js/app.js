@@ -168,6 +168,18 @@ const App = {
             console.error('WebSocket error:', error);
         });
 
+        this.ws.onReconnect((previousSessionId) => {
+            console.log('WebSocket reconnected, restoring session state...');
+            this.updateConnectionStatus(true);
+            if (previousSessionId) {
+                this.sessionId = previousSessionId;
+                this.ws.send('subscribe', { session_id: previousSessionId });
+            }
+            if (typeof Chat !== 'undefined') {
+                Chat.addMessage('🔄 已重新连接到服务器，会话已恢复', 'ai');
+            }
+        });
+
         this.ws.on('*', (data) => {
             this.handleWebSocketMessage(data);
         });
@@ -178,14 +190,6 @@ const App = {
         }).catch(error => {
             console.error('Failed to connect WebSocket:', error);
         });
-    },
-
-    disconnectWebSocket() {
-        if (this.ws) {
-            this.ws.disconnect();
-            this.ws = null;
-        }
-        this.updateConnectionStatus(false);
     },
 
     updateConnectionStatus(connected) {
@@ -240,21 +244,6 @@ const App = {
             toast.style.animation = 'slideIn 0.3s ease reverse';
             setTimeout(() => toast.remove(), 300);
         }, 3000);
-    },
-
-    streamPrint(element, text, delay = 20) {
-        return new Promise(resolve => {
-            let i = 0;
-            const timer = setInterval(() => {
-                if (i < text.length) {
-                    element.textContent += text[i];
-                    i++;
-                } else {
-                    clearInterval(timer);
-                    resolve();
-                }
-            }, delay);
-        });
     }
 };
 

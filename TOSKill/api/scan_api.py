@@ -10,10 +10,11 @@ from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator
 
-from TOSKill.AI.graph import memory_store, get_agent_orchestrator
+from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm
 from TOSKill.AI.state import create_initial_state, append_chat, update_state, get_state_summary
 from TOSKill.AI.tools import (
     TOOL_MAP, get_tool_by_name, get_all_tool_names,
@@ -31,10 +32,38 @@ class ScanRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="会话ID")
     tools: Optional[List[str]] = Field(None, description="指定工具列表")
 
+    @field_validator("target")
+    @classmethod
+    def validate_target(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("target 不能为空")
+        v = v.strip()
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("target 必须以 http:// 或 https:// 开头")
+        return clean_target(v)
+
 
 class ToolExecuteRequest(BaseModel):
     tool_name: str = Field(..., description="工具名称")
     target: str = Field(..., description="扫描目标")
+
+    @field_validator("tool_name")
+    @classmethod
+    def validate_tool_name(cls, v: str) -> str:
+        if v not in TOOL_MAP:
+            valid_tools = ", ".join(list(TOOL_MAP.keys())[:10]) + "..."
+            raise ValueError(f"工具 '{v}' 不存在。可用工具: {valid_tools}")
+        return v
+
+    @field_validator("target")
+    @classmethod
+    def validate_target(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("target 不能为空")
+        v = v.strip()
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("target 必须以 http:// 或 https:// 开头")
+        return clean_target(v)
 
 
 class BatchToolExecuteRequest(BaseModel):
@@ -57,6 +86,7 @@ class APIResponse(BaseModel):
     code: int = 200
     message: str = "success"
     data: Optional[dict] = None
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
 # ==================== 辅助函数 ====================
@@ -390,7 +420,83 @@ async def api_get_chat_history(session_id: str, limit: int = 20):
 
 @router.get("/health", response_model=APIResponse)
 async def api_health_check():
+    ai_model_status = "disconnected"
+    try:
+        llm = get_llm()
+        response = llm.invoke("ping", timeout=5)
+        ai_model_status = "connected"
+    except Exception as e:
+        logger.warning(f"AI模型连通性检测失败: {e}")
+
     return APIResponse(
         message="TOSKill API 服务正常",
-        data={"status": "healthy", "timestamp": datetime.now().isoformat(), "tools_count": len(TOOL_MAP)}
+        data={
+            "status": "healthy",
+            "ai_model_status": ai_model_status,
+            "tools_count": len(TOOL_MAP),
+            "timestamp": datetime.now().isoformat()
+        }
     )
+
+
+# ==================== 决策测试接口 ====================
+
+class DecisionTestRequest(BaseModel):
+    target: str = Field(..., description="测试目标URL")
+    mode: str = Field(default="deep", description="扫描模式")
+    completed_tools: List[str] = Field(default_factory=list, description="已完成工具")
+    last_result: dict = Field(default_factory=dict, description="上一步结果")
+
+    @field_validator("target")
+    @classmethod
+    def validate_target(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("target 不能为空")
+        v = v.strip()
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("target 必须以 http:// 或 https:// 开头")
+        return clean_target(v)
+
+
+@router.post("/decision/test", response_model=APIResponse)
+async def api_test_decision(request: DecisionTestRequest):
+    """测试 ReACT 决策效果"""
+    try:
+        from TOSKill.AI.graph import build_react_prompt, parse_react_response
+        state = create_initial_state(target=request.target, mode=request.mode)
+        state = update_state(state, completed_tasks=request.completed_tools, task_result=request.last_result)
+
+        llm = get_llm()
+        prompt = build_react_prompt(state, "")
+        response = llm.invoke(prompt, timeout=30)
+        response_text = response.content if hasattr(response, 'content') else str(response)
+        decision = parse_react_response(response_text)
+
+        return APIResponse(message="决策测试完成", data={
+            "prompt": prompt,
+            "raw_response": response_text,
+            "decision": decision
+        })
+    except Exception as e:
+        return APIResponse(code=500, message=f"决策测试失败: {str(e)}", data=None)
+
+
+# ==================== 全局异常处理 ====================
+
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"未处理的异常: {type(exc).__name__}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "code": 500,
+            "message": "Internal Server Error",
+            "data": None,
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+
+
+def register_exception_handlers(app):
+    """注册全局异常处理器"""
+    app.add_exception_handler(Exception, global_exception_handler)
+    logger.info("全局异常处理器已注册")

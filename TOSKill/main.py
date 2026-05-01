@@ -128,6 +128,17 @@ if FRONTEND_DIR.exists():
     logger.info(f"静态文件服务已挂载: /static -> {FRONTEND_DIR}")
 
 
+@app.on_event("startup")
+async def startup_event():
+    """服务启动时检测 AI 模型连通性"""
+    from TOSKill.AI.model_check import verify_model_connectivity
+    result = verify_model_connectivity()
+    if result["success"]:
+        logger.info(f"AI模型已连接: {result['message']} ({result['latency_ms']}ms)")
+    else:
+        logger.warning(f"AI模型未连接: {result['message']}，扫描功能仍可用但AI决策将使用回退策略")
+
+
 if __name__ == "__main__":
     uvicorn.run(
         "TOSKill.main:app",

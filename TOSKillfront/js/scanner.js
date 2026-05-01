@@ -217,18 +217,6 @@ const Scanner = {
         return String(result);
     },
 
-    async startScanViaWebSocket(target, mode = 'info') {
-        if (!App.ws || !App.ws.isConnected()) {
-            App.showToast('WebSocket 未连接', 'error');
-            return;
-        }
-
-        this.showProgress();
-        this.updateProgress(0, '正在启动扫描...');
-
-        App.ws.startScan(target, mode);
-    },
-
     handleWebSocketMessage(data) {
         switch (data.type) {
             case 'scan_started':
@@ -258,19 +246,6 @@ const Scanner = {
                 App.showToast('扫描错误: ' + data.payload.error, 'error');
                 break;
         }
-    },
-
-    getCurrentScan() {
-        return this.currentScan;
-    },
-
-    reset() {
-        this.currentScan = null;
-        this.tasks = [];
-        this.completedTasks = 0;
-        this.totalTasks = 0;
-        this.hideProgress();
-        document.getElementById('scanResults').style.display = 'none';
     }
 };
 

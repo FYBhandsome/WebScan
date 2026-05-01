@@ -19,18 +19,101 @@ from dataclasses import dataclass, field
 import threading
 
 from langgraph.graph import StateGraph, END
-from langgraph.types import interrupt, Command
+from langgraph.types import interrupt
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_openai import ChatOpenAI
 
 from .state import ScanState, create_initial_state, append_chat, update_state
 from .tools import get_tool_by_name, get_tool_sequence, is_auth_expired, get_auth_remaining_time
 from ..config import settings
+from ..RAG.retriever import get_scan_strategy
 
 logger = logging.getLogger(__name__)
 
 AUTH_MAX_RETRY_COUNT = 3
-AUTH_ENCRYPTION_KEY = "toskill_auth_encryption_key_v1"
+
+TOOL_MAPPING_MATRIX = {
+    "fast": ["xss", "sqli"],
+    "deep": ["xss", "sqli", "cmdi", "fileupload", "weakpass", "ssrf", "csrf", "lfi"],
+    "full": ["portscan", "dirscan", "subdomain", "waf", "baseinfo", "cdnexist", "whatcms", "infoleak",
+             "xss", "sqli", "cmdi", "fileupload", "weakpass", "ssrf", "csrf", "lfi"],
+}
+
+CONTEXT_TOOL_RULES = {
+    "3306": ["sqli", "weakpass"],
+    "1433": ["sqli", "weakpass"],
+    "6379": ["weakpass"],
+    "27017": ["weakpass"],
+    "22": ["weakpass"],
+    "21": ["weakpass"],
+    "3389": ["weakpass"],
+    "80": ["xss", "sqli", "dirscan"],
+    "443": ["xss", "sqli", "dirscan"],
+    "8080": ["xss", "sqli", "dirscan"],
+    "8443": ["xss", "sqli", "dirscan"],
+}
+
+FALLBACK_TOOL_MAP = {
+    "sqli": ["xss", "cmdi"],
+    "xss": ["csrf"],
+    "cmdi": ["lfi"],
+    "fileupload": ["dirscan"],
+    "weakpass": ["baseinfo"],
+    "ssrf": ["csrf"],
+    "csrf": ["xss"],
+    "lfi": ["cmdi"],
+}
+
+DEFAULT_FALLBACK_TOOLS = ["xss", "sqli"]
+
+
+def get_tools_by_context(port_results: dict) -> list:
+    """
+    根据端口扫描结果匹配推荐工具。
+
+    Args:
+        port_results: 端口扫描结果字典，如 {"open_ports": [80, 3306]} 或 {"ports": [80, 22]}
+
+    Returns:
+        list: 去重后的推荐工具名列表
+    """
+    try:
+        if not port_results or not isinstance(port_results, dict):
+            return []
+
+        open_ports = port_results.get("open_ports") or port_results.get("ports") or []
+        if not open_ports:
+            return []
+
+        tools = set()
+        for port in open_ports:
+            port_str = str(port)
+            if port_str in CONTEXT_TOOL_RULES:
+                tools.update(CONTEXT_TOOL_RULES[port_str])
+
+        return sorted(tools)
+    except Exception:
+        return []
+
+
+def get_fallback_tools(failed_tool: str) -> list:
+    """
+    根据失败的工具名返回备选工具列表。
+
+    Args:
+        failed_tool: 失败的工具名
+
+    Returns:
+        list: 备选工具名列表，若无匹配则返回默认兜底工具
+    """
+    if not failed_tool:
+        return list(DEFAULT_FALLBACK_TOOLS)
+
+    fallback = FALLBACK_TOOL_MAP.get(failed_tool)
+    if fallback:
+        return list(fallback)
+
+    return list(DEFAULT_FALLBACK_TOOLS)
 
 
 def encrypt_auth_info(auth_data: Dict[str, Any]) -> str:
@@ -176,7 +259,7 @@ def get_llm():
     """获取LLM实例"""
     return ChatOpenAI(
         model=settings.MODEL_ID,
-        temperature=0.1,
+        temperature=settings.LLM_TEMPERATURE,
         api_key=settings.OPENAI_API_KEY,
         base_url=settings.OPENAI_BASE_URL
     )
@@ -204,20 +287,21 @@ class MemoryStore:
     """
     
     _instance = None
-    _sessions: Dict[str, ScanState] = {}
-    _chat_histories: Dict[str, List[Dict]] = {}
-    _pending_interactions: Dict[str, Dict] = {}
-    _websocket_callbacks: Dict[str, Callable] = {}
-    _session_timestamps: Dict[str, datetime] = {}
-    _session_metadata: Dict[str, SessionMetadata] = {}
     
-    _session_ttl: int = 3600
-    _cleanup_interval: int = 600
-    _max_chat_history: int = 100
-    _cleanup_task: Optional[asyncio.Task] = None
-    _cleanup_thread: Optional[threading.Thread] = None
-    _stop_cleanup: bool = False
-    _lock: threading.Lock = field(default_factory=threading.Lock)
+    def __init__(self):
+        self._sessions: Dict[str, ScanState] = {}
+        self._chat_histories: Dict[str, List[Dict]] = {}
+        self._pending_interactions: Dict[str, Dict] = {}
+        self._websocket_callbacks: Dict[str, Callable] = {}
+        self._session_timestamps: Dict[str, datetime] = {}
+        self._session_metadata: Dict[str, SessionMetadata] = {}
+        self._session_ttl: int = 3600
+        self._cleanup_interval: int = 600
+        self._max_chat_history: int = 100
+        self._cleanup_task: Optional[asyncio.Task] = None
+        self._cleanup_thread: Optional[threading.Thread] = None
+        self._stop_cleanup: bool = False
+        self._lock: threading.Lock = threading.Lock()
     
     @classmethod
     def get_instance(cls):
@@ -686,10 +770,10 @@ def format_tool_result(tool_name: str, target: str, result: Any) -> str:
 
 
 async def intent_recognition(state: ScanState) -> ScanState:
-    """意图识别节点 - 使用LLM分析用户输入意图"""
-    import json
+    """意图识别节点 - 使用LLM Function Calling分析用户输入意图"""
     import re
-    from .tools import get_all_tool_names, get_tools_description
+    from .tools import INTENT_TOOLS, map_tool_call_to_intent
+    from langchain_core.messages import SystemMessage, HumanMessage
     
     user_input = state.get("user_input", "")
     session_id = state.get("websocket_session_id") or state.get("task_id")
@@ -697,79 +781,30 @@ async def intent_recognition(state: ScanState) -> ScanState:
     
     logger.info(f"[{session_id}] 意图识别: {user_input[:50]}...")
     
-    available_tools = get_all_tool_names()
-    tools_desc = get_tools_description()[:1500]
+    llm = get_llm().bind_tools(INTENT_TOOLS)
+    messages = [
+        SystemMessage(content="你是一个安全助手意图分析器。根据用户输入，选择合适的工具函数来标识用户意图。"),
+        HumanMessage(content=user_input)
+    ]
+    response = llm.invoke(messages)
     
-    prompt = f"""分析用户输入，识别意图类型并提取关键信息。
-
-用户输入: {user_input}
-
-当前可用工具列表:
-{tools_desc}
-
-请严格按以下JSON格式回复，不要添加其他内容:
-{{"intent_type": "scan", "tool_name": "", "target": "目标地址", "confidence": 0.9}}
-或
-{{"intent_type": "tool", "tool_name": "工具名", "target": "目标地址", "confidence": 0.9}}
-或
-{{"intent_type": "chat", "tool_name": "", "target": "", "confidence": 0.9}}
-或
-{{"intent_type": "upload_script", "tool_name": "", "target": "", "confidence": 0.9}}
-或
-{{"intent_type": "generate_script", "tool_name": "", "target": "", "confidence": 0.9}}
-
-意图分类规则:
-1. scan: 包含"扫描""漏洞""渗透""检测""安全检查"等关键词，需要完整扫描流程
-2. tool: 明确提及"调用""执行""使用"某工具，或直接指定工具名（参考上述工具列表）
-3. chat: 咨询、问答、闲聊、询问概念或用法
-4. upload_script: 上传脚本、自定义脚本、导入脚本、添加脚本
-5. generate_script: 生成脚本、AI写脚本、创建脚本、帮我写个脚本
-
-注意:
-- 如果用户提到具体工具名，intent_type必须是"tool"
-- 如果用户想上传或添加自己的脚本，intent_type是"upload_script"
-- 如果用户想让AI生成脚本，intent_type是"generate_script"
-- 提取目标地址时，优先提取URL、IP地址或域名
-"""
-    
-    llm = get_llm()
-    response = llm.invoke(prompt).content
+    tool_calls = getattr(response, 'tool_calls', [])
     
     intent_type = "chat"
     direct_tool = ""
     target = state.get("target", "")
-    confidence = 0.5
+    confidence = 0.9
     
-    try:
-        json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group())
-            intent_type = result.get("intent_type", "chat")
-            direct_tool = result.get("tool_name", "")
-            extracted_target = result.get("target", "")
-            confidence = float(result.get("confidence", 0.5))
-            
-            if extracted_target:
-                target = extracted_target
-    except Exception as e:
-        logger.warning(f"解析意图识别结果失败: {e}, 原始响应: {response[:100]}")
-        scan_keywords = ["扫描", "漏洞", "渗透", "检测", "安全检查", "scan"]
-        tool_keywords = ["调用", "执行", "使用", "nmap", "sqlmap", "dirsearch", "工具"]
-        upload_keywords = ["上传脚本", "自定义脚本", "导入脚本", "添加脚本", "upload script"]
-        generate_keywords = ["生成脚本", "AI写脚本", "创建脚本", "帮我写个脚本", "generate script", "写个脚本"]
+    if tool_calls:
+        tc = tool_calls[0]
+        intent_type = map_tool_call_to_intent(tc['name'])
+        args = tc.get('args', {})
         
-        if any(kw in user_input.lower() for kw in upload_keywords):
-            intent_type = "upload_script"
-        elif any(kw in user_input.lower() for kw in generate_keywords):
-            intent_type = "generate_script"
-        elif any(kw in user_input.lower() for kw in tool_keywords):
-            intent_type = "tool"
-            for tool_hint in ["nmap", "sqlmap", "dirsearch", "port_scan", "sqli_scan", "xss_scan"]:
-                if tool_hint in user_input.lower():
-                    direct_tool = tool_hint
-                    break
-        elif any(kw in user_input.lower() for kw in scan_keywords):
-            intent_type = "scan"
+        if intent_type == "scan":
+            target = args.get("target", target)
+        elif intent_type == "tool":
+            direct_tool = args.get("tool_name", "")
+            target = args.get("target", target)
     
     url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+|[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}|[\w\-]+\.[\w\-]+\.[\w\-]+'
     if not target:
@@ -861,70 +896,6 @@ async def intent_validation(state: ScanState) -> ScanState:
     )
 
 
-async def input_validation(state: ScanState) -> ScanState:
-    """用户输入数据审核节点 - AI智能审核用户输入"""
-    from .validators import get_ai_validator, ValidationStatus
-    
-    user_input = state.get("user_input", "")
-    intent_type = state.get("intent_type", "chat")
-    session_id = state.get("websocket_session_id") or state.get("task_id")
-    ws_callback = memory_store.get_websocket_callback(session_id)
-    
-    logger.info(f"[{session_id}] 输入数据审核: {user_input[:50]}...")
-    
-    if ws_callback:
-        try:
-            await ws_callback({
-                "type": "validation_started",
-                "payload": {"message": "正在分析您的请求..."}
-            })
-        except Exception as e:
-            logger.error(f"WebSocket推送失败: {e}")
-    
-    ai_validator = get_ai_validator()
-    result = await ai_validator.validate_and_extract(user_input, intent_type)
-    
-    if not result.is_complete:
-        logger.warning(f"输入数据不完整: {result.missing_fields}")
-        if ws_callback:
-            missing_field = result.missing_fields[0] if result.missing_fields else "target"
-            from .validators import DataInputRequest
-            input_request = DataInputRequest.build_request(missing_field, result.message)
-            try:
-                await ws_callback(input_request)
-            except Exception as e:
-                logger.error(f"WebSocket推送失败: {e}")
-        
-        return update_state(state,
-            validation_status="incomplete",
-            missing_fields=result.missing_fields,
-            validation_message=result.message
-        )
-    
-    extracted_target = result.params.get("target", "")
-    
-    if ws_callback:
-        try:
-            await ws_callback({
-                "type": "validation_completed",
-                "payload": {
-                    "status": "valid",
-                    "extracted_params": result.params,
-                    "confidence": result.confidence
-                }
-            })
-        except Exception as e:
-            logger.error(f"WebSocket推送失败: {e}")
-    
-    return update_state(state,
-        validation_status="complete",
-        target=extracted_target or state.get("target", ""),
-        direct_tool=result.params.get("tool_name", state.get("direct_tool", "")),
-        extracted_params=result.params,
-        validation_message=result.message
-    )
-
-
 def intent_router(state: ScanState) -> str:
     """意图路由 - 根据意图类型分流"""
     intent_valid = state.get("intent_valid", True)
@@ -946,8 +917,9 @@ def intent_router(state: ScanState) -> str:
 
 
 async def tool_existence_check(state: ScanState) -> ScanState:
-    """工具存在性校验节点 - 使用AI判断工具是否存在"""
-    from .tools import get_all_tool_names, get_tools_description, is_tool_exists
+    """工具存在性校验节点 - 使用LLM Function Calling进行模糊匹配"""
+    from .tools import get_all_tool_names, is_tool_exists, ALL_TOOLS
+    from langchain_core.messages import SystemMessage, HumanMessage
     
     direct_tool = state.get("direct_tool", "")
     user_input = state.get("user_input", "")
@@ -957,39 +929,25 @@ async def tool_existence_check(state: ScanState) -> ScanState:
     logger.info(f"[{session_id}] 工具存在性校验: {direct_tool}")
     
     available_tools = get_all_tool_names()
-    tools_desc = get_tools_description()
     
     if is_tool_exists(direct_tool):
         logger.info(f"工具 '{direct_tool}' 存在，准备执行")
         return update_state(state, tool_exists=True)
     
-    llm = get_llm()
-    prompt = f"""用户想执行工具: "{direct_tool}"
-
-当前可用的工具列表:
-{tools_desc[:2000]}
-
-请判断用户提到的工具名是否匹配列表中的某个工具（支持模糊匹配）。
-如果匹配，返回正确的工具名；如果不匹配，返回空。
-
-请严格按以下JSON格式回复:
-{{"exists": true, "matched_tool": "正确的工具名"}}
-或
-{{"exists": false, "matched_tool": ""}}
-"""
+    llm = get_llm().bind_tools(ALL_TOOLS)
+    messages = [
+        SystemMessage(content=f"用户想执行工具: \"{direct_tool}\"。请从可用工具中选择最匹配的工具。"),
+        HumanMessage(content=f"用户原始输入: {user_input}\n用户指定的工具名: {direct_tool}")
+    ]
+    response = llm.invoke(messages)
     
-    try:
-        response = llm.invoke(prompt).content
-        json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group())
-            if result.get("exists") and result.get("matched_tool"):
-                matched_tool = result["matched_tool"]
-                if is_tool_exists(matched_tool):
-                    logger.info(f"AI模糊匹配: '{direct_tool}' -> '{matched_tool}'")
-                    return update_state(state, tool_exists=True, direct_tool=matched_tool)
-    except Exception as e:
-        logger.warning(f"AI工具匹配失败: {e}")
+    tool_calls = getattr(response, 'tool_calls', [])
+    
+    if tool_calls:
+        matched_tool = tool_calls[0]['name']
+        if is_tool_exists(matched_tool):
+            logger.info(f"AI模糊匹配: '{direct_tool}' -> '{matched_tool}'")
+            return update_state(state, tool_exists=True, direct_tool=matched_tool)
     
     error_msg = f"工具 '{direct_tool}' 不存在。您可以选择上传自定义脚本或让AI生成脚本。"
     
@@ -1048,6 +1006,9 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
                 })
             except Exception as e:
                 logger.error(f"WebSocket推送失败: {e}")
+        return update_state(state,
+            errors=state.get("errors", []) + ["认证信息已过期，请重新认证后再执行工具"],
+            is_complete=True)
     
     if ws_callback:
         try:
@@ -1058,7 +1019,27 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
     
-    tool = get_tool_by_name(tool_name)
+    from .tools import ALL_TOOLS
+    from langchain_core.messages import SystemMessage, HumanMessage
+    
+    llm_with_tools = get_llm().bind_tools(ALL_TOOLS)
+    messages = [
+        SystemMessage(content=f"用户想执行工具: {tool_name}。请从可用工具中选择最匹配的工具。"),
+        HumanMessage(content=f"目标: {target}\n工具名: {tool_name}")
+    ]
+    response_with_tc = llm_with_tools.invoke(messages)
+    llm_tool_calls = getattr(response_with_tc, 'tool_calls', [])
+    
+    tool = None
+    if llm_tool_calls:
+        matched_name = llm_tool_calls[0]['name']
+        tool = get_tool_by_name(matched_name)
+        if tool:
+            logger.info(f"LLM工具匹配: '{tool_name}' -> '{matched_name}'")
+    
+    if not tool:
+        tool = get_tool_by_name(tool_name)
+    
     if not tool:
         error_msg = f"工具 {tool_name} 不存在"
         if ws_callback:
@@ -1400,15 +1381,91 @@ async def script_generate_process(state: ScanState) -> ScanState:
     )
 
 
+def build_react_prompt(state: dict, rag_strategy: str) -> str:
+    """构建 ReACT 格式的提示词"""
+    target = state.get("target", "")
+    mode = state.get("mode", "full_scan")
+    done = list(state.get("tool_results", {}).keys())
+    last_result = state.get("task_result", {})
+    tool_sequence = get_tool_sequence(mode)
+    remaining = [t for t in tool_sequence if t not in done]
+
+    prompt = f"""你是一名Web安全扫描专家，使用ReACT框架进行决策。
+
+## 当前状态
+- 目标: {target}
+- 扫描模式: {mode}
+- 已完成任务: {done if done else '无'}
+- 剩余任务: {remaining[:10]}
+- 上一步结果: {str(last_result)[:500]}
+
+## 专业知识参考 (RAG)
+{rag_strategy[:800] if rag_strategy else '暂无专业知识参考'}
+
+## 指令
+请按以下格式输出，不要输出其他内容：
+
+Thought: [分析当前状态，判断下一步应执行什么工具]
+Action: [工具名称，必须是剩余任务列表中的一个]
+Reason: [选择该工具的简短理由]
+"""
+    return prompt
+
+
+def parse_react_response(response_text: str) -> dict:
+    """解析 ReACT 格式的 LLM 回复，提取 Thought/Action/Reason"""
+    result = {"thought": "", "action": "", "reason": ""}
+    for line in response_text.split("\n"):
+        line = line.strip()
+        if line.lower().startswith("thought:"):
+            result["thought"] = line.split(":", 1)[1].strip()
+        elif line.lower().startswith("action:"):
+            result["action"] = line.split(":", 1)[1].strip()
+        elif line.lower().startswith("reason:"):
+            result["reason"] = line.split(":", 1)[1].strip()
+    return result
+
+
 async def ai_decision(state: ScanState) -> ScanState:
-    """原子1: AI智能决策"""
-    logger.info(f"[{state.get('task_id')}] AI决策节点开始执行")
+    """原子1: AI智能决策（RAG增强版）"""
+    logger.info(f"[{state.get('task_id')}] AI决策节点开始执行（RAG增强版）")
     
     session_id = state.get("websocket_session_id") or state.get("task_id")
     done = list(state.get("tool_results", {}).keys())
     mode = state.get("mode", "full_scan")
     tool_sequence = get_tool_sequence(mode)
     ws_callback = memory_store.get_websocket_callback(session_id)
+    
+    # =================== RAG 知识库检索 ===================
+    target = state.get("target", "")
+    last_result = state.get("task_result", {})
+    rag_strategy = ""
+    try:
+        rag_strategy = get_scan_strategy(
+            target=target,
+            current_task="",
+            completed_tasks=done,
+            last_result=last_result
+        )
+        if rag_strategy:
+            logger.info(f"RAG 策略检索成功: {rag_strategy[:100]}...")
+    except Exception as e:
+        logger.warning(f"RAG 检索异常（不影响主流程）: {e}")
+    # =====================================================
+    
+    # =================== ReACT 推理决策 ===================
+    react_decision = None
+    try:
+        llm = get_llm()
+        react_prompt = build_react_prompt(state, rag_strategy)
+        react_response = llm.invoke(react_prompt, timeout=30)
+        react_text = react_response.content if hasattr(react_response, 'content') else str(react_response)
+        react_decision = parse_react_response(react_text)
+        logger.info(f"ReACT 决策: Action={react_decision.get('action')} Reason={react_decision.get('reason', '')[:50]}")
+    except Exception as e:
+        logger.warning(f"ReACT 决策失败（回退到默认序列）: {e}")
+        react_decision = None
+    # ========================================================
     
     progress_percent = round((len(done) / len(tool_sequence)) * 100, 1) if tool_sequence else 0
     
@@ -1421,45 +1478,76 @@ async def ai_decision(state: ScanState) -> ScanState:
                     "status": "running",
                     "completed": len(done),
                     "total": len(tool_sequence),
-                    "progress_percent": progress_percent
+                    "progress_percent": progress_percent,
+                    "rag_enabled": True,
+                    "rag_strategy": rag_strategy
                 }
             })
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
     
-    for t in tool_sequence:
-        if t not in done:
-            logger.info(f"✅ 分配任务：{t}")
-            
-            decision_history = state.get("decision_history", []).copy()
-            decision_history.append({
-                "timestamp": datetime.now().isoformat(),
-                "next_task": t,
-                "completed_count": len(done),
-                "total_count": len(tool_sequence)
-            })
-            
-            if ws_callback:
-                try:
-                    await ws_callback({
-                        "type": "ai_decision",
-                        "payload": {
-                            "next_task": t,
-                            "completed_tasks": done,
-                            "total_tasks": len(tool_sequence),
-                            "progress": f"{len(done)}/{len(tool_sequence)}",
-                            "progress_percent": progress_percent
-                        }
-                    })
-                except Exception as e:
-                    logger.error(f"WebSocket推送失败: {e}")
-            
-            return update_state(state, 
-                next_task=t, 
-                need_generate_script=False,
-                decision_history=decision_history,
-                last_activity_time=datetime.now().isoformat()
-            )
+    # =================== 任务分配（ReACT 优先） ===================
+    next_task_assigned = None
+    is_react_selected = False
+    if react_decision and react_decision.get("action"):
+        react_action = react_decision["action"]
+        if react_action in tool_sequence and react_action not in done:
+            next_task_assigned = react_action
+            is_react_selected = True
+            logger.info(f"✅ ReACT 决策分配任务：{react_action}")
+
+    if next_task_assigned is None:
+        for t in tool_sequence:
+            if t not in done:
+                next_task_assigned = t
+                logger.info(f"✅ 顺序分配任务：{t}")
+                break
+
+    if next_task_assigned:
+        t = next_task_assigned
+
+        decision_history = state.get("decision_history", []).copy()
+        decision_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "next_task": t,
+            "completed_count": len(done),
+            "total_count": len(tool_sequence),
+            "rag_reference": rag_strategy,
+            "react_chain": {
+                "thought": react_decision.get("thought", "") if react_decision else "",
+                "action": react_decision.get("action", "") if react_decision else "",
+                "reason": react_decision.get("reason", "") if react_decision else ""
+            } if is_react_selected else None
+        }
+        decision_history.append(decision_entry)
+
+        if ws_callback:
+            try:
+                await ws_callback({
+                    "type": "ai_decision",
+                    "payload": {
+                        "next_task": t,
+                        "completed_tasks": done,
+                        "total_tasks": len(tool_sequence),
+                        "progress": f"{len(done)}/{len(tool_sequence)}",
+                        "progress_percent": progress_percent,
+                        "rag_enabled": True,
+                        "rag_reference": rag_strategy,
+                        "react_selected": is_react_selected,
+                        "react_thought": react_decision.get("thought", "")[:100] if react_decision else ""
+                    }
+                })
+            except Exception as e:
+                logger.error(f"WebSocket推送失败: {e}")
+
+        return update_state(state,
+            next_task=t,
+            need_generate_script=False,
+            decision_history=decision_history,
+            rag_last_strategy=rag_strategy,
+            last_activity_time=datetime.now().isoformat()
+        )
+    # ================================================================
     
     logger.info("✅ 所有扫描任务已完成！")
     
@@ -1472,20 +1560,24 @@ async def ai_decision(state: ScanState) -> ScanState:
                     "status": "completed",
                     "completed": len(done),
                     "total": len(tool_sequence),
-                    "progress_percent": 100
+                    "progress_percent": 100,
+                    "rag_enabled": True,
+                    "rag_strategy": rag_strategy
                 }
             })
             await ws_callback({
                 "type": "ai_decision_complete",
                 "payload": {
                     "completed_tasks": done,
-                    "total_tasks": len(tool_sequence)
+                    "total_tasks": len(tool_sequence),
+                    "rag_reference": rag_strategy
                 }
             })
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
     
-    return update_state(state, next_task="end", need_generate_script=False)
+    return update_state(state, next_task="end", need_generate_script=False,
+        rag_last_strategy=rag_strategy)
 
 
 async def user_interact(state: ScanState) -> ScanState:
@@ -1564,17 +1656,9 @@ async def execute_task(state: ScanState) -> ScanState:
                 })
             except Exception as e:
                 logger.error(f"WebSocket推送失败: {e}")
-    
-    tool = get_tool_by_name(task)
-    
-    if not tool:
-        logger.warning(f"工具 {task} 不存在")
-        if ws_callback:
-            await ws_callback({
-                "type": "task_error",
-                "payload": {"tool": task, "error": f"工具 {task} 不存在"}
-            })
-        return update_state(state, errors=state.get("errors", []) + [f"工具 {task} 不存在"])
+        return update_state(state,
+            errors=state.get("errors", []) + ["认证信息已过期，请重新认证后再执行任务"],
+            is_complete=True)
     
     if ws_callback:
         try:
@@ -1584,6 +1668,39 @@ async def execute_task(state: ScanState) -> ScanState:
             })
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
+    
+    from .tools import get_tools_by_mode
+    from langchain_core.messages import SystemMessage, HumanMessage
+    
+    scan_mode = state.get("scan_mode", "info_collection")
+    tools_list = get_tools_by_mode(scan_mode)
+    
+    llm_with_tools = get_llm().bind_tools(tools_list)
+    messages = [
+        SystemMessage(content=f"当前需要执行的安全任务: {task}。请从可用工具中选择最匹配的工具来执行此任务。"),
+        HumanMessage(content=f"任务名称: {task}\n目标: {target}")
+    ]
+    response_with_tc = llm_with_tools.invoke(messages)
+    llm_tool_calls = getattr(response_with_tc, 'tool_calls', [])
+    
+    tool = None
+    if llm_tool_calls:
+        matched_name = llm_tool_calls[0]['name']
+        tool = get_tool_by_name(matched_name)
+        if tool:
+            logger.info(f"LLM工具匹配: '{task}' -> '{matched_name}'")
+    
+    if not tool:
+        tool = get_tool_by_name(task)
+    
+    if not tool:
+        logger.warning(f"工具 {task} 不存在")
+        if ws_callback:
+            await ws_callback({
+                "type": "task_error",
+                "payload": {"tool": task, "error": f"工具 {task} 不存在"}
+            })
+        return update_state(state, errors=state.get("errors", []) + [f"工具 {task} 不存在"])
     
     try:
         from .tools import invoke_tool_with_auth, extract_auth_from_result
@@ -1963,6 +2080,8 @@ class InfoCollectionGraph:
         workflow.add_node("execute_task", execute_task)
         workflow.add_node("chat", chat)
         workflow.add_node("script_manager", script_manager)
+        workflow.add_node("script_upload_process", script_upload_process)
+        workflow.add_node("script_generate_process", script_generate_process)
         workflow.add_node("report_generation", report_generation)
         
         workflow.set_entry_point("ai_decision")
@@ -1971,6 +2090,8 @@ class InfoCollectionGraph:
         workflow.add_edge("execute_task", "ai_decision")
         workflow.add_edge("chat", "ai_decision")
         workflow.add_edge("script_manager", "ai_decision")
+        workflow.add_edge("script_upload_process", "ai_decision")
+        workflow.add_edge("script_generate_process", "ai_decision")
         workflow.add_edge("report_generation", END)
         
         return workflow.compile(checkpointer=MemorySaver())
@@ -1987,6 +2108,9 @@ class VulnScanGraph:
         workflow.add_node("user_interact", user_interact)
         workflow.add_node("execute_task", execute_task)
         workflow.add_node("chat", chat)
+        workflow.add_node("script_manager", script_manager)
+        workflow.add_node("script_upload_process", script_upload_process)
+        workflow.add_node("script_generate_process", script_generate_process)
         workflow.add_node("report_generation", report_generation)
         
         workflow.set_entry_point("ai_decision")
@@ -1994,6 +2118,9 @@ class VulnScanGraph:
         workflow.add_conditional_edges("user_interact", router)
         workflow.add_edge("execute_task", "ai_decision")
         workflow.add_edge("chat", "ai_decision")
+        workflow.add_edge("script_manager", "ai_decision")
+        workflow.add_edge("script_upload_process", "ai_decision")
+        workflow.add_edge("script_generate_process", "ai_decision")
         workflow.add_edge("report_generation", END)
         
         return workflow.compile(checkpointer=MemorySaver())
@@ -2011,8 +2138,7 @@ class ReportGraph:
         workflow.set_entry_point("report_generation")
         workflow.add_edge("report_generation", END)
         
-        return workflow.compile()
-
+        return workflow.compile(checkpointer=MemorySaver())
 
 class AgentOrchestrator:
     """Agent编排器 - 管理多个子图的执行，支持暂停/恢复"""
@@ -2029,18 +2155,30 @@ class AgentOrchestrator:
         """设置 WebSocket 回调"""
         memory_store.set_websocket_callback(session_id, callback)
     
-    def resume_workflow(self, session_id: str, user_choice: str) -> bool:
+    async def resume_workflow(self, session_id: str, user_choice: str) -> Optional[ScanState]:
         """恢复暂停的工作流"""
         state = memory_store.get_session(session_id)
         if not state:
             logger.warning(f"会话 {session_id} 不存在")
-            return False
+            return None
         
         state = update_state(state, user_choice=user_choice)
         memory_store.save_session(session_id, state)
         
-        logger.info(f"工作流 {session_id} 已恢复，用户选择: {user_choice}")
-        return True
+        mode = state.get("mode", "")
+        config = {"configurable": {"thread_id": session_id}}
+        
+        if mode == "info_collection":
+            result = await self.info_graph.ainvoke(state, config=config)
+        elif mode == "vuln_scan":
+            result = await self.vuln_graph.ainvoke(state, config=config)
+        else:
+            result = await self.intent_graph.ainvoke(state, config=config)
+        
+        memory_store.save_session(session_id, result)
+        
+        logger.info(f"工作流 {session_id} 已恢复，用户选择: {user_choice}, 模式: {mode}")
+        return result
     
     def get_pending_interaction(self, session_id: str) -> Optional[Dict]:
         """获取待处理的交互请求"""

@@ -252,6 +252,15 @@ const inputHeight = ref(80)
 const isResizingInput = ref(false)
 const resizeStartY = ref(0)
 const resizeStartHeight = ref(0)
+const API_BASE_ORIGIN = (() => {
+  const url = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8888'
+  try {
+    const u = new URL(url)
+    return u.origin
+  } catch {
+    return url.replace(/\/api\/?$/, '').replace(/\/+$/, '')
+  }
+})()
 const STORAGE_KEY = 'ai_chat_history'
 const POSITION_KEY = 'ai_chat_floater_position'
 const PANEL_POSITION_KEY = 'ai_chat_panel_position'
@@ -464,7 +473,7 @@ const toggleChat = () => {
 const fetchAIConnectionStatus = async () => {
   try {
     const token = localStorage.getItem('token')
-    const response = await fetch('http://127.0.0.1:8888/api/ai/connection-status', {
+    const response = await fetch(`${API_BASE_ORIGIN}/api/ai/connection-status`, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -496,7 +505,7 @@ const testAIConnection = async () => {
   isTestingConnection.value = true
   try {
     const token = localStorage.getItem('token')
-    const response = await fetch('http://127.0.0.1:8888/api/ai/test-analysis', {
+    const response = await fetch(`${API_BASE_ORIGIN}/api/ai/test-analysis`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -558,7 +567,7 @@ const connectWebSocket = () => {
   isLoading.value = true
 
   const token = localStorage.getItem('token')
-  const wsUrl = `ws://localhost:8888/api/ws?token=${token}`
+  const wsUrl = `${API_BASE_ORIGIN.replace(/^http/, 'ws')}/api/ws?token=${token}`
 
   try {
     ws.value = new WebSocket(wsUrl)
@@ -682,7 +691,7 @@ const sendQuickAction = (text) => {
 
 const sendViaAPI = async (message, token) => {
   try {
-    const response = await fetch('http://127.0.0.1:8888/api/ai/chat', {
+    const response = await fetch(`${API_BASE_ORIGIN}/api/ai/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

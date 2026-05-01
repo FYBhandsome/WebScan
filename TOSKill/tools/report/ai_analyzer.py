@@ -11,7 +11,6 @@ from dataclasses import dataclass, field, asdict
 import logging
 import json
 import re
-import asyncio
 
 logger = logging.getLogger(__name__)
 

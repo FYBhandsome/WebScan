@@ -10,7 +10,6 @@ declare module 'vue' {
     AgentScanForm: typeof import('./components/business/AgentScanForm.vue')['default']
     AIChatFloater: typeof import('./components/common/AIChatFloater.vue')['default']
     AIChatPanel: typeof import('./components/business/AIChatPanel.vue')['default']
-    AIChatSidebar: typeof import('./components/common/AIChatSidebar.vue')['default']
     Alert: typeof import('./components/common/Alert.vue')['default']
     AppIcon: typeof import('./components/common/AppIcon.vue')['default']
     AppLayout: typeof import('./components/layout/AppLayout.vue')['default']

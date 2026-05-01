@@ -181,7 +181,7 @@ async def scan_poc(request: POCScanRequest):
         logger.info(f"[POC扫描] 开始处理请求 | 目标: {request.target} | POC类型: {request.poc_types}")
         
         from backend.models import Task
-        from task_executor import task_executor
+        from backend.task_executor import task_executor
         
         poc_types = request.poc_types if request.poc_types else list(POC_FUNCTIONS.keys())
         task_name = f"POC Scan: {request.target}"

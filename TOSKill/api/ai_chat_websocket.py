@@ -11,29 +11,15 @@ from datetime import datetime
 from uuid import uuid4
 
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from TOSKill.AI.state import create_initial_state, append_chat, update_state
-from TOSKill.AI.graph import memory_store, get_agent_orchestrator
-from TOSKill.AI.tools import get_tool_by_name, get_all_tool_names, TOOL_MAP
-from TOSKill.config import settings
+from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm as _get_llm
+from TOSKill.AI.core import CHAT_SYSTEM_PROMPT
+from TOSKill.AI.tools import get_tool_by_name, get_all_tool_names
 
 router = APIRouter(prefix="/ai-chat", tags=["AI对话WebSocket"])
 logger = logging.getLogger(__name__)
-
-CHAT_SYSTEM_PROMPT = """你是WebScan AI，一个专业的Web安全顾问。
-专业领域：OWASP Top 10漏洞、Web框架漏洞、渗透测试、安全加固。
-回复要求：专业准确、清晰易懂、可执行。"""
-
-
-def _get_llm():
-    return ChatOpenAI(
-        model=settings.MODEL_ID,
-        temperature=0.7,
-        api_key=settings.OPENAI_API_KEY,
-        base_url=settings.OPENAI_BASE_URL
-    )
 
 
 SCAN_MODE_MAP = {"info": "info_collection", "vuln": "vuln_scan", "full": "full_scan"}

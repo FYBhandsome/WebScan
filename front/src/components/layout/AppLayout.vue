@@ -82,7 +82,7 @@
                 </template>
               </el-menu-item>
             </el-menu>
-            <AIChatSidebar v-if="!sidebarCollapsed && !isMobile" />
+            
           </div>
         </el-aside>
 
@@ -170,7 +170,7 @@
       </div>
     </el-popover>
 
-    <AIChatFloater v-if="isMobile" />
+    <AIChatFloater />
   </div>
 </template>
 
@@ -180,7 +180,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { Bell, User, Setting, SwitchButton } from '@element-plus/icons-vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import AIChatFloater from '@/components/common/AIChatFloater.vue'
-import AIChatSidebar from '@/components/common/AIChatSidebar.vue'
 import { userApi, notificationsApi } from '@/utils/api'
 import { formatDate } from '@/utils/date'
 
@@ -189,7 +188,6 @@ export default {
   components: {
     AppIcon,
     AIChatFloater,
-    AIChatSidebar,
     Bell,
     User,
     Setting,

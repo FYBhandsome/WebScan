@@ -70,10 +70,6 @@ class InputValidator:
         re.IGNORECASE
     )
     
-    EMAIL_PATTERN = re.compile(
-        r'^[\w\.-]+@[\w\.-]+\.\w+$'
-    )
-    
     @classmethod
     def validate_url(cls, value: str) -> Tuple[bool, str]:
         """验证URL格式"""
@@ -136,20 +132,6 @@ class InputValidator:
             return True, f"http://{normalized}", "domain"
         
         return False, value, "unknown"
-    
-    @classmethod
-    def validate_tool_name(cls, value: str, available_tools: List[str] = None) -> Tuple[bool, str]:
-        """验证工具名称"""
-        if not value:
-            return False, "工具名称不能为空"
-        
-        value = value.strip().lower()
-        value = re.sub(r'[^a-z0-9_]', '_', value)
-        
-        if available_tools and value not in available_tools:
-            return False, f"工具 '{value}' 不在可用工具列表中"
-        
-        return True, value
     
     @classmethod
     def extract_urls(cls, text: str) -> List[str]:
@@ -298,29 +280,6 @@ class AIInputValidator:
             confidence=0.7
         )
     
-    async def clarify_intent(self, user_input: str, possible_intents: List[str]) -> str:
-        """澄清模糊意图"""
-        if not self.llm:
-            return possible_intents[0] if possible_intents else "chat"
-        
-        prompt = f"""用户输入可能有多种意图，请判断最可能的意图。
-
-用户输入: {user_input}
-可能的意图: {', '.join(possible_intents)}
-
-只回复最可能的意图类型，不要其他内容。
-"""
-        
-        try:
-            response = self.llm.invoke(prompt).content.strip().lower()
-            for intent in possible_intents:
-                if intent in response:
-                    return intent
-        except Exception as e:
-            logger.error(f"意图澄清失败: {e}")
-        
-        return possible_intents[0] if possible_intents else "chat"
-
 
 class DataInputRequest:
     """数据输入请求构建器"""

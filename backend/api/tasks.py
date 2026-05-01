@@ -158,7 +158,7 @@ async def create_task(request: CreateTaskRequest):
         ... }
     """
     try:
-        from task_executor import task_executor
+        from backend.task_executor import task_executor
 
         # 1. 验证参数
         if not request.target:
@@ -835,7 +835,7 @@ async def cancel_task(task_id: int):
         >>> POST /tasks/1/cancel
     """
     try:
-        from task_executor import task_executor
+        from backend.task_executor import task_executor
 
         task = await Task.get_or_none(id=task_id)
         if not task:

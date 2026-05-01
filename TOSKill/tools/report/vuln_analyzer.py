@@ -9,7 +9,6 @@ from langchain.tools import tool
 from typing import Dict, Any, List, Optional
 import logging
 import json
-import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -150,20 +149,6 @@ async def enrich_with_kb(vulnerabilities: List[Dict[str, Any]]) -> List[Dict[str
         enriched.append(vuln)
     
     return enriched
-
-
-def _get_vuln_key(vuln: Dict[str, Any]) -> str:
-    """获取漏洞唯一键
-    
-    Args:
-        vuln: 漏洞信息
-        
-    Returns:
-        str: 唯一键
-    """
-    target = vuln.get("target", "")
-    cve = vuln.get("cve", "")
-    return f"{cve}_{target}"
 
 
 @tool

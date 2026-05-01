@@ -22,9 +22,10 @@ class TOSKillSettings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/toskill.log"
     
-    OPENAI_API_KEY: str = "001aa457c2c63574b2799bf1e3342e72:YTRkOGU4NWU3NjRiZjk5Y2E5OTMzZTBl"
+    OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = "https://maas-api.cn-huabei-1.xf-yun.com/v2"
     MODEL_ID: str = "xop3qwen1b7"
+    LLM_TEMPERATURE: float = 0.1
     
     SCAN_TIMEOUT: int = 300
     MAX_CONCURRENT_SCANS: int = 5

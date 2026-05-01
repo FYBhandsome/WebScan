@@ -76,6 +76,8 @@ class ScanState(TypedDict, total=False):
     auth_info: NotRequired[Dict[str, Any]]
     auth_timestamp: NotRequired[str]
     auth_expires_at: NotRequired[str]
+    rag_last_strategy: str
+    rag_enabled: bool
 
 
 def create_initial_state(target: str, task_id: str = None, mode: str = "info_collection") -> ScanState:
@@ -153,7 +155,9 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         credentials_obtained=False,
         auth_info={},
         auth_timestamp="",
-        auth_expires_at=""
+        auth_expires_at="",
+        rag_last_strategy="",
+        rag_enabled=True
     )
 
 
@@ -166,7 +170,9 @@ def append_chat(state: ScanState, role: str, content: str) -> ScanState:
 
 def update_state(state: ScanState, **kwargs) -> ScanState:
     """更新状态"""
-    return {**state, **kwargs}
+    new_state = dict(state)
+    new_state.update(kwargs)
+    return new_state
 
 
 def get_state_summary(state: ScanState) -> Dict[str, Any]:

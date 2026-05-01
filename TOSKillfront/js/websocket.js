@@ -4,12 +4,17 @@ class WSManager {
         this.ws = null;
         this.connected = false;
         this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 5;
-        this.reconnectDelay = 2000;
+        this.maxReconnectAttempts = 10;
+        this.reconnectDelay = 1000;
+        this.maxReconnectDelay = 30000;
+        this.reconnectTimer = null;
+        this.connectResolve = null;
+        this.connectReject = null;
         this.messageHandlers = new Map();
         this.onConnectCallback = null;
         this.onDisconnectCallback = null;
         this.onErrorCallback = null;
+        this.onReconnectCallback = null;
         this.sessionId = null;
     }
 
@@ -18,7 +23,26 @@ class WSManager {
             return Promise.resolve(this.sessionId);
         }
 
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+
+        if (this.connectResolve) {
+            return new Promise((resolve) => {
+                const check = setInterval(() => {
+                    if (this.connected) {
+                        clearInterval(check);
+                        resolve(this.sessionId);
+                    }
+                }, 100);
+            });
+        }
+
         return new Promise((resolve, reject) => {
+            this.connectResolve = resolve;
+            this.connectReject = reject;
+
             try {
                 this.ws = new WebSocket(this.url);
 
@@ -26,8 +50,13 @@ class WSManager {
                     console.log('WebSocket connected');
                     this.connected = true;
                     this.reconnectAttempts = 0;
+
                     if (this.onConnectCallback) {
                         this.onConnectCallback();
+                    }
+
+                    if (this.onReconnectCallback && this.ws && this.ws.readyState === WebSocket.OPEN) {
+                        this.onReconnectCallback(this.sessionId);
                     }
                 };
 
@@ -35,10 +64,14 @@ class WSManager {
                     try {
                         const data = JSON.parse(event.data);
                         this.handleMessage(data);
-                        
+
                         if (data.type === 'connected' && data.payload?.session_id) {
                             this.sessionId = data.payload.session_id;
-                            resolve(this.sessionId);
+                            if (this.connectResolve) {
+                                this.connectResolve(this.sessionId);
+                                this.connectResolve = null;
+                                this.connectReject = null;
+                            }
                         }
                     } catch (error) {
                         console.error('Failed to parse WebSocket message:', error);
@@ -48,16 +81,25 @@ class WSManager {
                 this.ws.onclose = (event) => {
                     console.log('WebSocket closed:', event.code, event.reason);
                     this.connected = false;
-                    this.sessionId = null;
-                    
+
                     if (this.onDisconnectCallback) {
                         this.onDisconnectCallback(event);
                     }
 
                     if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                        const delay = Math.min(
+                            this.reconnectDelay * Math.pow(2, this.reconnectAttempts),
+                            this.maxReconnectDelay
+                        );
                         this.reconnectAttempts++;
-                        console.log(`Reconnecting... Attempt ${this.reconnectAttempts}`);
-                        setTimeout(() => this.connect(), this.reconnectDelay);
+                        console.log(`Reconnecting... Attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
+                        this.reconnectTimer = setTimeout(() => {
+                            this.reconnectTimer = null;
+                            this.connect();
+                        }, delay);
+                    } else {
+                        console.log('Max reconnect attempts reached');
+                        this.cleanupConnectPromise(new Error('Max reconnect attempts reached'));
                     }
                 };
 
@@ -66,16 +108,30 @@ class WSManager {
                     if (this.onErrorCallback) {
                         this.onErrorCallback(error);
                     }
-                    reject(error);
+                    this.cleanupConnectPromise(error);
                 };
 
             } catch (error) {
-                reject(error);
+                this.cleanupConnectPromise(error);
             }
         });
     }
 
+    cleanupConnectPromise(error) {
+        if (this.connectReject) {
+            this.connectReject(error);
+            this.connectResolve = null;
+            this.connectReject = null;
+        }
+    }
+
     disconnect() {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        this.reconnectAttempts = this.maxReconnectAttempts;
+        this.cleanupConnectPromise(new Error('Disconnected'));
         if (this.ws) {
             this.ws.close();
             this.ws = null;
@@ -110,16 +166,6 @@ class WSManager {
         this.messageHandlers.get(messageType).push(callback);
     }
 
-    off(messageType, callback) {
-        if (!this.messageHandlers.has(messageType)) return;
-        
-        const handlers = this.messageHandlers.get(messageType);
-        const index = handlers.indexOf(callback);
-        if (index > -1) {
-            handlers.splice(index, 1);
-        }
-    }
-
     onConnect(callback) {
         this.onConnectCallback = callback;
     }
@@ -132,16 +178,16 @@ class WSManager {
         this.onErrorCallback = callback;
     }
 
+    onReconnect(callback) {
+        this.onReconnectCallback = callback;
+    }
+
     isConnected() {
         return this.connected && this.ws && this.ws.readyState === WebSocket.OPEN;
     }
 
     getSessionId() {
         return this.sessionId;
-    }
-
-    sendUserInput(content) {
-        return this.send('user_input', { content });
     }
 
     startScan(target, scanMode = 'info') {
@@ -156,17 +202,6 @@ class WSManager {
         return this.send('chat', { content });
     }
 
-    executeTool(toolName, target) {
-        return this.send('execute_tool', { tool_name: toolName, target });
-    }
-
-    getHistory() {
-        return this.send('get_history');
-    }
-
-    getStatus() {
-        return this.send('get_status');
-    }
 }
 
 window.WSManager = WSManager;

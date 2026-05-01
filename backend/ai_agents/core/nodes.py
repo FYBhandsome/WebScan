@@ -1419,7 +1419,19 @@ class ReportGenerationNode:
     """
     
     def __init__(self):
-        from ..analyzers.enhanced_report_gen import EnhancedReportGenerator
+        import sys
+        import os
+        try:
+            from ..analyzers.enhanced_report_gen import EnhancedReportGenerator
+        except ModuleNotFoundError:
+            _module_path = os.path.join(os.path.dirname(__file__), "..", "analyzers", "enhanced_report_gen.py")
+            _module_path = os.path.abspath(_module_path)
+            import importlib.util
+            _spec = importlib.util.spec_from_file_location("enhanced_report_gen", _module_path)
+            _mod = importlib.util.module_from_spec(_spec)
+            sys.modules["enhanced_report_gen"] = _mod
+            _spec.loader.exec_module(_mod)
+            EnhancedReportGenerator = _mod.EnhancedReportGenerator
         self.report_gen = EnhancedReportGenerator(auto_ai_analysis=True)
         logger.info("📄 报告生成节点初始化（增强版 + AI分析）")
     

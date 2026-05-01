@@ -102,12 +102,6 @@ const Tools = {
         return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     },
 
-    getToolCategory(toolName) {
-        if (this.categories.info.includes(toolName)) return '信息收集';
-        if (this.categories.vuln.includes(toolName)) return '漏洞扫描';
-        return '其他';
-    },
-
     showExecution(toolName) {
         this.currentTool = toolName;
         
@@ -150,27 +144,6 @@ const Tools = {
             resultEl.textContent = '执行失败: ' + error.message;
             App.showToast('执行失败', 'error');
         }
-    },
-
-    async executeBatch(toolNames, target) {
-        try {
-            const result = await API.executeToolsBatch(toolNames, target);
-            return result.data || result;
-        } catch (error) {
-            throw error;
-        }
-    },
-
-    getInfoCollectionTools() {
-        return this.categories.info;
-    },
-
-    getVulnScanTools() {
-        return this.categories.vuln;
-    },
-
-    getAllTools() {
-        return this.tools.map(t => t.name);
     }
 };
 

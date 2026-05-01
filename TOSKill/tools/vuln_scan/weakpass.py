@@ -94,10 +94,7 @@ def weakpass_scan(
                 "plugin_name": result.plugin_name,
                 "vulnerability_count": len(vulnerabilities),
                 "auth_type": auth_type
-            },
-            "authentication_used": result.authentication_used,
-            "cookies_obtained": result.cookies_obtained,
-            "tokens_obtained": result.tokens_obtained
+            }
         }
     except ImportError as e:
         return {
