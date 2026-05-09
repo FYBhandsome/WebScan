@@ -27,7 +27,7 @@ from langchain_openai import ChatOpenAI
 from .state import ScanState, create_initial_state, append_chat, update_state
 from .tools import get_tool_by_name, get_tool_sequence, is_auth_expired, get_auth_remaining_time
 from ..config import settings
-from ..RAGdemo.retriever import get_scan_strategy
+from ..RAG.retriever import get_scan_strategy
 
 logger = logging.getLogger(__name__)
 
