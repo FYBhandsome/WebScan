@@ -164,4 +164,5 @@ playwright/.cache/
 .trae/
 backup/
 
-RAG
+RAGdemo
+codeguarddemo
