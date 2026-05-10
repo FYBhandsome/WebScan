@@ -265,7 +265,7 @@ def check_url(url: Optional[str]) -> Union[str, bool]:
         1. 清洗URL(移除危险字符)
         2. 校验URL长度(10 < 长度 < 40)
         3. 过滤禁止域名(内网域名、gov.cn等)
-        4. 校验协议(必须以http://或https://开头，如无则自动添加)
+        4. 校验协议(必须以http://或https://开头)
         5. 校验域名格式(必须包含点号)
 
 
@@ -282,9 +282,9 @@ def check_url(url: Optional[str]) -> Union[str, bool]:
     # 禁止域名校验
     if FORBIDDEN_DOMAIN_PATTERN.search(url_clean):
         return False
-    # 协议校验(http/https开头)，如无则自动添加
+    # 协议校验(http/https开头)
     if not (url_clean.startswith('http://') or url_clean.startswith('https://')):
-        url_clean = 'http://' + url_clean
+        return False
     # 域名格式校验(含.)
     try:
         url_parts = url_clean.split('/')

@@ -1,258 +1,536 @@
 # -*- coding:utf-8 -*-
 
 """
-信息泄露扫描模块
+信息泄露扫描模块（增强版）
+
 功能:
 1. 扫描目标URL的敏感文件和目录
-2. 检测潜在的信息泄露风险(如备份文件、配置文件等)
-3. 支持多线程并发扫描,提升效率
-4. 基于风险路径字典进行检测
+2. 检测潜在的信息泄露风险
+3. 智能判断有效响应（排除误报）
+4. 内容验证（检查备份文件是否有效）
+5. 支持多线程并发扫描
 
 特性:
+- 内置扩展字典，无需外部文件
+- 智能404页面检测
+- 内容类型验证
+- 文件大小验证
 - 线程安全的结果存储
-- 支持自定义风险路径字典
-- 自动去重,避免重复扫描
-- 支持多种HTTP状态码判断(200、206、401、305、407)
-- 使用ThreadPoolExecutor进行并发扫描
+- 详细的泄露信息分类
 
 依赖:
 - requests: 用于HTTP请求
 - concurrent.futures: 用于多线程
 
 使用示例:
-    >>> from backend.plugins.infoleak.infoleak import get_infoleak
-    >>> result = get_infoleak('https://www.www.baidu.com/')
+    >>> from backend.plugins.infoleak.infoleak import scan_infoleak
+    >>> result = scan_infoleak('https://example.com/')
     >>> print(result)
-    [('backup', 'https://www.www.baidu.com/backup.sql'),
-     ('config', 'https://www.www.baidu.com/config.php'),
-     ...]
 """
 
-
-import json
+import re
 import logging
-from pathlib import Path
-from typing import List, Tuple, Optional, Dict
-from urllib.parse import urljoin
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+import hashlib
+from typing import List, Dict, Optional, Any, Set, Tuple
+from dataclasses import dataclass, field
+from urllib.parse import urljoin, urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 
 import requests
-from requests.exceptions import (
-    ConnectTimeout,
-    ReadTimeout,
-    ConnectionError,
-    RequestException
-)
+from requests.exceptions import RequestException, Timeout, ConnectionError
 
-# === 配置项(集中管理,便于修改) ===
-# 判定风险链接的HTTP状态码
-RISK_STATUS_CODES = {200, 206, 401, 305, 407}
-# 最大并发线程数
-MAX_THREADS = 32
-# 请求超时时间(秒)
-REQUEST_TIMEOUT = 3
-# 是否禁用SSL证书校验(生产环境建议设为True)
-VERIFY_SSL = False
-# 风险路径字典文件路径
-INFOLEAK_JSON_PATH = Path(__file__).parent.parent.parent / "geoip" / "infoleak.json"
-
-# === 日志配置(统一管理扫描日志) ===
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()]
-)
 logger = logging.getLogger(__name__)
 
-# === 线程安全的结果存储 ===
-class ThreadSafeResult:
-    """线程安全的结果存储类,替代全局列表"""
-    def __init__(self):
-        self._result: List[Tuple[str, str]] = []
+
+@dataclass
+class LeakResult:
+    path: str
+    url: str
+    category: str
+    status_code: int
+    content_length: int
+    content_type: str
+    title: str
+    is_valid: bool
+    confidence: float
+    evidence: str
+    severity: str
+
+
+INFOLEAK_PATHS = {
+    "backup_files": {
+        "paths": [
+            "/backup", "/backup.zip", "/backup.tar.gz", "/backup.tar", "/backup.rar",
+            "/backup.sql", "/backup.7z", "/backup/", "/backups/", "/bak/",
+            "/db.sql", "/database.sql", "/dump.sql", "/db_backup.sql",
+            "/www.zip", "/web.zip", "/site.zip", "/www.tar.gz", "/www.rar",
+            "/1.zip", "/2.zip", "/www.7z", "/web.tar.gz", "/site.tar.gz",
+            "/old.zip", "/temp.zip", "/tmp.zip", "/test.zip",
+            "/backup_db.sql", "/db_backup.zip", "/database_backup.sql",
+            "/backup_2020.zip", "/backup_2021.zip", "/backup_2022.zip",
+            "/backup_2023.zip", "/backup_2024.zip", "/backup_2025.zip",
+            "/data.zip", "/data.tar.gz", "/data.sql", "/sql.zip",
+            "/archive.zip", "/archive.tar.gz", "/archives/",
+        ],
+        "severity": "critical",
+        "description": "备份文件泄露",
+    },
+    "config_files": {
+        "paths": [
+            "/config.php", "/configuration.php", "/config.inc.php", "/settings.php",
+            "/database.yml", "/database.yaml", "/config.yml", "/config.yaml",
+            "/config.json", "/settings.json", "/app.config", "/web.config",
+            "/.env", "/.env.local", "/.env.production", "/.env.development",
+            "/.env.backup", "/.env.old", "/.env.save", "/.env.bak",
+            "/config.ini", "/config.xml", "/configuration.xml",
+            "/application.properties", "/application.yml", "/application.yaml",
+            "/wp-config.php", "/wp-config.php.bak", "/wp-config.php~",
+            "/config.php.bak", "/config.php~", "/config.php.old",
+            "/settings.php.bak", "/settings.php~", "/database.yml.bak",
+            "/.htaccess", "/.htpasswd", "/.htaccess.bak",
+            "/server.xml", "/context.xml", "/web.xml",
+            "/php.ini", "/my.cnf", "/my.ini",
+        ],
+        "severity": "critical",
+        "description": "配置文件泄露",
+    },
+    "git_svn": {
+        "paths": [
+            "/.git", "/.git/", "/.git/config", "/.git/HEAD", "/.git/index",
+            "/.git/objects", "/.git/refs", "/.git/logs", "/.git/hooks",
+            "/.gitignore", "/.gitattributes", "/.gitmodules",
+            "/.svn", "/.svn/", "/.svn/entries", "/.svn/wc.db", "/.svn/pristine",
+            "/.hg", "/.hg/", "/.hg/hgrc", "/.hg/store",
+            "/.bzr", "/.bzr/", "/.bzr/branch", "/.bzr/repository",
+            "/.cvs", "/.cvs/", "/CVS/", "/CVS/Root",
+            "/.DS_Store", "/.svn/text-base", "/.svn/prop-base",
+        ],
+        "severity": "high",
+        "description": "版本控制信息泄露",
+    },
+    "sensitive_files": {
+        "paths": [
+            "/robots.txt", "/sitemap.xml", "/crossdomain.xml",
+            "/server-status", "/server-status/", "/server-info", "/server-info/",
+            "/phpinfo.php", "/info.php", "/test.php", "/debug.php",
+            "/phpmyadmin/", "/pma/", "/mysql/", "/adminer.php",
+            "/.well-known/", "/.well-known/security.txt",
+            "/security.txt", "/humans.txt", "/README.md", "/readme.md",
+            "/CHANGELOG.md", "/changelog.md", "/LICENSE", "/license.txt",
+            "/composer.json", "/package.json", "/Gemfile", "/requirements.txt",
+            "/Dockerfile", "/docker-compose.yml", "/docker-compose.yaml",
+            "/.dockerignore", "/.editorconfig", "/.eslintrc", "/.prettierrc",
+            "/Makefile", "/Vagrantfile", "/.travis.yml", "/.gitlab-ci.yml",
+            "/Jenkinsfile", "/.github/", "/.gitlab/",
+        ],
+        "severity": "medium",
+        "description": "敏感文件泄露",
+    },
+    "admin_panels": {
+        "paths": [
+            "/admin", "/admin/", "/administrator", "/administrator/",
+            "/admin.php", "/admin.html", "/admin/login.php",
+            "/wp-admin", "/wp-admin/", "/wp-login.php",
+            "/manage", "/manage/", "/manager", "/manager/",
+            "/backend", "/backend/", "/console", "/console/",
+            "/control", "/control/", "/cpanel", "/cpanel/",
+            "/admincp", "/admincp/", "/moderator", "/moderator/",
+            "/adm", "/adm/", "/admin_area", "/admin_area/",
+            "/admin-login", "/admin_login", "/adminpanel",
+            "/user/login", "/user/login.php", "/account/login",
+            "/system/login", "/sysadmin", "/webadmin",
+        ],
+        "severity": "medium",
+        "description": "管理后台暴露",
+    },
+    "log_files": {
+        "paths": [
+            "/error.log", "/error_log", "/errors.log",
+            "/access.log", "/access_log", "/accesslog",
+            "/debug.log", "/debug_log", "/debuglog",
+            "/system.log", "/systemlog", "/syslog",
+            "/application.log", "/app.log", "/app_log",
+            "/logs/", "/log/", "/logging/",
+            "/var/log/", "/var/log/apache2/", "/var/log/nginx/",
+            "/apache/logs/", "/nginx/logs/",
+            "/error_log.txt", "/error.txt", "/log.txt",
+            "/php_errors.log", "/slow.log", "/mysql.log",
+        ],
+        "severity": "medium",
+        "description": "日志文件泄露",
+    },
+    "api_docs": {
+        "paths": [
+            "/api-docs", "/api-docs/", "/swagger", "/swagger/",
+            "/swagger-ui", "/swagger-ui/", "/swagger-ui.html",
+            "/swagger-resources", "/swagger-resources/",
+            "/v1/api-docs", "/v2/api-docs", "/v3/api-docs",
+            "/openapi.json", "/swagger.json", "/api.json",
+            "/docs", "/docs/", "/redoc", "/redoc/",
+            "/api/reference", "/api/explorer", "/api/console",
+            "/graphiql", "/graphql", "/playground",
+            "/api/test", "/api/debug", "/api/sandbox",
+        ],
+        "severity": "medium",
+        "description": "API文档暴露",
+    },
+    "upload_dirs": {
+        "paths": [
+            "/upload", "/upload/", "/uploads", "/uploads/",
+            "/files", "/files/", "/attachments", "/attachments/",
+            "/media", "/media/", "/static", "/static/",
+            "/assets", "/assets/", "/public", "/public/",
+            "/tmp", "/tmp/", "/temp", "/temp/",
+            "/cache", "/cache/", "/storage", "/storage/",
+            "/userfiles", "/userfiles/", "/user_files",
+            "/download", "/download/", "/downloads", "/downloads/",
+        ],
+        "severity": "low",
+        "description": "上传目录暴露",
+    },
+    "sensitive_pages": {
+        "paths": [
+            "/install", "/install/", "/install.php", "/install/index.php",
+            "/setup", "/setup/", "/setup.php",
+            "/upgrade", "/upgrade/", "/upgrade.php",
+            "/update", "/update/", "/update.php",
+            "/reset", "/reset/", "/reset.php",
+            "/forgot", "/forgot/", "/forgot.php",
+            "/password", "/password/", "/change_password.php",
+            "/register", "/register/", "/signup", "/signup/",
+            "/profile", "/profile/", "/account", "/account/",
+            "/user", "/user/", "/member", "/member/",
+            "/api", "/api/", "/rest", "/rest/",
+            "/service", "/service/", "/services", "/services/",
+        ],
+        "severity": "low",
+        "description": "敏感页面暴露",
+    },
+}
+
+SENSITIVE_CONTENT_PATTERNS = {
+    "database_credentials": {
+        "patterns": [
+            r"(?i)(mysql|postgres|mongodb|redis|oracle|sqlite)://[^\s]+",
+            r"(?i)(password|passwd|pwd)\s*[=:]\s*['\"][^'\"]+['\"]",
+            r"(?i)(api[_-]?key|apikey)\s*[=:]\s*['\"][^'\"]+['\"]",
+            r"(?i)(secret[_-]?key|secretkey)\s*[=:]\s*['\"][^'\"]+['\"]",
+            r"(?i)(access[_-]?token|accesstoken)\s*[=:]\s*['\"][^'\"]+['\"]",
+        ],
+        "severity": "critical",
+    },
+    "private_keys": {
+        "patterns": [
+            r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----",
+            r"-----BEGIN\s+OPENSSH\s+PRIVATE\s+KEY-----",
+            r"-----BEGIN\s+PGP\s+PRIVATE\s+KEY\s+BLOCK-----",
+        ],
+        "severity": "critical",
+    },
+    "aws_credentials": {
+        "patterns": [
+            r"(?i)AKIA[0-9A-Z]{16}",
+            r"(?i)aws_access_key_id\s*=\s*[A-Z0-9]{20}",
+            r"(?i)aws_secret_access_key\s*=\s*[A-Za-z0-9/+=]{40}",
+        ],
+        "severity": "critical",
+    },
+    "php_info": {
+        "patterns": [
+            r"PHP\s+Version",
+            r"phpinfo\(\)",
+            r"Configuration\s+File\s+\(php\.ini\)\s+Path",
+        ],
+        "severity": "high",
+    },
+    "git_content": {
+        "patterns": [
+            r"\[core\]",
+            r"\[remote\s+\"origin\"\]",
+            r"repositoryformatversion",
+        ],
+        "severity": "high",
+    },
+}
+
+VALID_STATUS_CODES = {200, 201, 202, 203, 204, 206, 301, 302, 303, 307, 308, 401, 403}
+
+
+class InfoLeakScanner:
+    """
+    信息泄露扫描器（增强版）
+    
+    功能:
+    - 多类别敏感路径检测
+    - 智能响应分析
+    - 内容验证
+    - 404页面检测
+    """
+    
+    def __init__(self, target: str, config: Optional[Dict[str, Any]] = None):
+        self.target = self._normalize_url(target)
+        self.config = config or {}
+        
+        self.timeout = self.config.get("timeout", 10)
+        self.max_workers = self.config.get("max_workers", 20)
+        self.verify_ssl = self.config.get("verify_ssl", False)
+        self.max_results = self.config.get("max_results", 200)
+        
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+            "Connection": "keep-alive"
+        })
+        
+        self._results: List[LeakResult] = []
+        self._scanned_paths: Set[str] = set()
+        self._baseline_404_content = ""
+        self._baseline_404_length = 0
+        self._baseline_404_hash = ""
         self._lock = Lock()
-
-    def append(self, item: Tuple[str, str]) -> None:
-        """线程安全的添加元素"""
-        with self._lock:
-            self._result.append(item)
-
-    def get_result(self) -> List[Tuple[str, str]]:
-        """获取最终结果"""
-        with self._lock:
-            return self._result.copy()
-
-    def clear(self) -> None:
-        """清空结果"""
-        with self._lock:
-            self._result.clear()
-
-# === 模拟外部依赖(实际使用时替换为真实导入) ===
-def get_ua() -> Dict[str, str]:
-    """生成随机请求头(模拟原代码的randheader.get_ua)"""
-    from fake_useragent import UserAgent
-    try:
-        return {"User-Agent": UserAgent().random}
-    except Exception:
+    
+    def _normalize_url(self, url: str) -> str:
+        url = url.strip()
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        return url.rstrip("/")
+    
+    def _get_baseline_404(self) -> None:
+        random_path = f"/{hashlib.md5(self.target.encode()).hexdigest()[:16]}.html"
+        try:
+            response = self.session.get(
+                self.target + random_path,
+                timeout=self.timeout,
+                verify=self.verify_ssl,
+                allow_redirects=False
+            )
+            if response.status_code == 404:
+                self._baseline_404_content = response.text[:500]
+                self._baseline_404_length = len(response.content)
+                self._baseline_404_hash = hashlib.md5(response.content).hexdigest()[:8]
+        except Exception:
+            pass
+    
+    def _is_custom_404(self, response: requests.Response) -> bool:
+        if response.status_code == 404:
+            return True
+        
+        content_hash = hashlib.md5(response.content).hexdigest()[:8]
+        if content_hash == self._baseline_404_hash:
+            return True
+        
+        content_length = len(response.content)
+        if self._baseline_404_length > 0:
+            if abs(content_length - self._baseline_404_length) < 100:
+                if self._baseline_404_content and self._baseline_404_content[:100] in response.text:
+                    return True
+        
+        content_type = response.headers.get("Content-Type", "").lower()
+        if "text/html" in content_type:
+            text = response.text.lower()
+            if any(x in text for x in ["404", "not found", "页面不存在", "找不到页面"]):
+                title_match = re.search(r"<title>([^<]+)</title>", text, re.IGNORECASE)
+                if title_match and any(x in title_match.group(1).lower() for x in ["404", "not found", "错误", "error"]):
+                    return True
+        
+        return False
+    
+    def _extract_title(self, text: str) -> str:
+        match = re.search(r"<title>([^<]+)</title>", text, re.IGNORECASE)
+        return match.group(1).strip()[:100] if match else ""
+    
+    def _check_sensitive_content(self, content: str) -> Tuple[bool, str, str]:
+        for category, config in SENSITIVE_CONTENT_PATTERNS.items():
+            for pattern in config["patterns"]:
+                if re.search(pattern, content):
+                    return True, category, config["severity"]
+        return False, "", ""
+    
+    def _scan_path(self, path: str, category: str, severity: str) -> Optional[LeakResult]:
+        if path in self._scanned_paths:
+            return None
+        self._scanned_paths.add(path)
+        
+        url = self.target + path
+        
+        try:
+            response = self.session.get(
+                url,
+                timeout=self.timeout,
+                verify=self.verify_ssl,
+                allow_redirects=False
+            )
+            
+            if response.status_code not in VALID_STATUS_CODES:
+                return None
+            
+            if self._is_custom_404(response):
+                return None
+            
+            content_length = len(response.content)
+            content_type = response.headers.get("Content-Type", "")
+            
+            if content_length < 10:
+                return None
+            
+            title = self._extract_title(response.text) if "text/html" in content_type else ""
+            
+            has_sensitive, sensitive_type, sensitive_severity = self._check_sensitive_content(response.text[:5000])
+            
+            if has_sensitive:
+                severity = sensitive_severity
+                evidence = f"检测到敏感内容: {sensitive_type}"
+            else:
+                evidence = f"HTTP {response.status_code}, 大小: {content_length} bytes"
+            
+            confidence = 0.5
+            if response.status_code == 200:
+                confidence = 0.8
+            if has_sensitive:
+                confidence = 0.95
+            if any(x in path for x in [".git", ".svn", ".env", "backup", "config"]):
+                confidence = min(confidence + 0.1, 1.0)
+            
+            return LeakResult(
+                path=path,
+                url=url,
+                category=category,
+                status_code=response.status_code,
+                content_length=content_length,
+                content_type=content_type,
+                title=title,
+                is_valid=True,
+                confidence=confidence,
+                evidence=evidence,
+                severity=severity,
+            )
+        
+        except Timeout:
+            logger.debug(f"[InfoLeak] 超时: {url}")
+        except ConnectionError:
+            logger.debug(f"[InfoLeak] 连接失败: {url}")
+        except RequestException as e:
+            logger.debug(f"[InfoLeak] 请求异常: {url} - {e}")
+        except Exception as e:
+            logger.debug(f"[InfoLeak] 未知异常: {url} - {e}")
+        
+        return None
+    
+    def scan(self) -> Dict[str, Any]:
+        logger.info(f"[InfoLeak] 开始扫描: {self.target}")
+        
+        self._get_baseline_404()
+        
+        all_paths = []
+        for category, config in INFOLEAK_PATHS.items():
+            for path in config["paths"]:
+                all_paths.append((path, category, config["severity"]))
+        
+        logger.info(f"[InfoLeak] 待扫描路径数: {len(all_paths)}")
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {
+                executor.submit(self._scan_path, path, category, severity): path
+                for path, category, severity in all_paths
+            }
+            
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    if result:
+                        with self._lock:
+                            if len(self._results) < self.max_results:
+                                self._results.append(result)
+                except Exception as e:
+                    logger.debug(f"[InfoLeak] 任务异常: {e}")
+        
+        self._results.sort(key=lambda x: (
+            {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(x.severity, 4),
+            -x.confidence
+        ))
+        
         return {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"
+            "success": True,
+            "target": self.target,
+            "total_found": len(self._results),
+            "results": [self._result_to_dict(r) for r in self._results[:self.max_results]],
+            "statistics": self._generate_statistics(),
         }
+    
+    def _result_to_dict(self, result: LeakResult) -> Dict[str, Any]:
+        return {
+            "path": result.path,
+            "url": result.url,
+            "category": result.category,
+            "status_code": result.status_code,
+            "content_length": result.content_length,
+            "content_type": result.content_type,
+            "title": result.title,
+            "is_valid": result.is_valid,
+            "confidence": result.confidence,
+            "evidence": result.evidence,
+            "severity": result.severity,
+        }
+    
+    def _generate_statistics(self) -> Dict[str, Any]:
+        stats = {
+            "total": len(self._results),
+            "by_severity": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+            "by_category": {},
+        }
+        
+        for result in self._results:
+            stats["by_severity"][result.severity] = stats["by_severity"].get(result.severity, 0) + 1
+            stats["by_category"][result.category] = stats["by_category"].get(result.category, 0) + 1
+        
+        return stats
 
-# === 核心工具函数 ===
-def load_infoleak_payloads() -> Dict[str, List[str]]:
-    """
-    加载风险路径字典(健壮版)
-    :return: 风险路径字典 {风险类型key: [payload1, payload2,...]}
-    """
-    # 检查文件是否存在
-    if not INFOLEAK_JSON_PATH.exists():
-        logger.error(f"风险路径字典文件不存在:{INFOLEAK_JSON_PATH}")
-        return {}
 
-    # 读取并解析JSON
-    try:
-        with open(INFOLEAK_JSON_PATH, 'r', encoding='utf-8') as fp:
-            json_data = json.load(fp)
-        # 校验JSON结构(兼容原代码格式)
-        if not isinstance(json_data, dict) or 'data' not in json_data:
-            logger.error("infoleak.json格式错误,缺少'data'字段")
-            return {}
-        # 取第一个data元素(兼容原代码json_data['data'][0])
-        payload_dict = json_data['data'][0] if isinstance(json_data['data'], list) else json_data['data']
-        # 去重并过滤空payload
-        for key in payload_dict:
-            payload_dict[key] = list({p.strip() for p in payload_dict[key] if p.strip()})
-        return payload_dict
-    except json.JSONDecodeError as e:
-        logger.error(f"infoleak.json解析失败:{e}")
-        return {}
-    except Exception as e:
-        logger.error(f"加载风险路径字典异常:{e}")
-        return {}
+def scan_infoleak(target: str, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    扫描目标URL的信息泄露风险
+    
+    :param target: 目标URL
+    :param config: 配置选项
+    :return: 扫描结果
+    """
+    scanner = InfoLeakScanner(target, config)
+    return scanner.scan()
 
-def safe_url_join(base_url: str, payload: str) -> str:
-    """
-    安全拼接URL(解决//问题)
-    :param base_url: 基础URL(如https://test.com/)
-    :param payload: 风险路径(如/backup.sql)
-    :return: 拼接后的URL(如https://test.com/backup.sql)
-    """
-    # 确保base_url以/结尾(urljoin的要求)
-    if not base_url.endswith('/'):
-        base_url += '/'
-    # 使用urljoin拼接,自动处理//问题
-    return urljoin(base_url, payload.lstrip('/'))
 
-def scan_single_url(url: str, key: str, result_store: ThreadSafeResult, session: requests.Session) -> None:
-    """
-    扫描单个URL(线程安全版)
-    :param url: 待扫描的完整URL
-    :param key: 风险类型key
-    :param result_store: 线程安全的结果存储对象
-    :param session: requests会话(复用连接)
-    """
-    try:
-        # 发起请求(复用会话,减少连接开销)
-        response = session.get(
-            url,
-            headers=get_ua(),
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=False,
-            verify=VERIFY_SSL
-        )
-        # 判断是否命中风险状态码
-        if response.status_code in RISK_STATUS_CODES:
-            logger.info(f"发现风险链接 | 类型:{key} | URL:{url} | 状态码:{response.status_code}")
-            result_store.append((key, url))
-        else:
-            logger.debug(f"无风险 | URL:{url} | 状态码:{response.status_code}")
-    except ConnectTimeout:
-        logger.warning(f"连接超时 | URL:{url}")
-    except ReadTimeout:
-        logger.warning(f"读取超时 | URL:{url}")
-    except ConnectionError:
-        logger.warning(f"连接失败 | URL:{url}")
-    except RequestException as e:
-        logger.error(f"请求异常 | URL:{url} | 原因:{str(e)[:50]}")
-    except Exception as e:
-        logger.error(f"未知异常 | URL:{url} | 原因:{str(e)[:50]}")
-
-# === 核心扫描函数 ===
 def get_infoleak(target_url: Optional[str]) -> List[Tuple[str, str]]:
     """
-    扫描目标URL的信息泄露风险链接(优化版)
-    :param target_url: 目标URL(如https://jwt1399.top/)
+    兼容函数: 扫描目标URL的信息泄露风险链接
+    
+    :param target_url: 目标URL
     :return: 风险链接列表 [(风险类型key, 风险URL), ...]
     """
-    # 1. 输入校验
     if not target_url or not isinstance(target_url, str):
-        logger.error("输入URL为空或非字符串类型")
         return []
-    target_url = target_url.strip()
-    if not target_url:
-        logger.error("输入URL为空字符串")
-        return []
+    
+    result = scan_infoleak(target_url)
+    
+    return [
+        (r["category"], r["url"])
+        for r in result.get("results", [])
+    ]
 
-    # 2. 初始化结果存储
-    result_store = ThreadSafeResult()
-    result_store.clear()
 
-    # 3. 加载风险路径字典
-    payload_dict = load_infoleak_payloads()
-    if not payload_dict:
-        logger.error("未加载到任何风险路径,扫描终止")
-        return []
-
-    # 4. 生成待扫描的URL列表(去重+安全拼接)
-    scan_list = []
-    for key, payloads in payload_dict.items():
-        for payload in payloads:
-            full_url = safe_url_join(target_url, payload)
-            scan_list.append((full_url, key))
-    # 去重(避免重复扫描相同URL)
-    scan_list = list({(url, key) for url, key in scan_list})
-    logger.info(f"待扫描URL总数:{len(scan_list)}")
-
-    if not scan_list:
-        logger.info("无待扫描URL,扫描终止")
-        return []
-
-    # 5. 初始化requests会话(复用连接)
-    session = requests.Session()
-    session.headers.update({"Connection": "keep-alive"})
-
-    # 6. 多线程扫描(使用ThreadPoolExecutor,更优雅)
-    try:
-        with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-            # 提交所有扫描任务
-            futures = [
-                executor.submit(scan_single_url, url, key, result_store, session)
-                for url, key in scan_list
-            ]
-            # 等待所有任务完成(设置总超时,避免无限等待)
-            total_timeout = len(scan_list) * REQUEST_TIMEOUT + 10  # 总超时=单任务超时*数量+缓冲
-            for future in futures:
-                try:
-                    future.result(timeout=total_timeout)
-                except TimeoutError:
-                    logger.error("扫描任务超时")
-                except Exception as e:
-                    logger.error(f"任务执行异常:{e}")
-    except Exception as e:
-        logger.error(f"线程池执行异常:{e}")
-    finally:
-        # 关闭会话,释放连接
-        session.close()
-
-    # 7. 返回扫描结果
-    final_result = result_store.get_result()
-    logger.info(f"扫描完成 | 发现风险链接数:{len(final_result)}")
-    return final_result
-
-# === 测试入口 ===
 if __name__ == '__main__':
-    test_url = "https://jwt1399.top/"
-    risk_links = get_infoleak(test_url)
-    print("\n=== 扫描结果 ===")
-    for key, url in risk_links:
-        print(f"风险类型:{key} | 风险URL:{url}")
+    test_url = "https://example.com"
+    result = scan_infoleak(test_url)
+    
+    print(f"\n目标: {result['target']}")
+    print(f"发现数量: {result['total_found']}")
+    print(f"\n统计信息:")
+    for severity, count in result['statistics']['by_severity'].items():
+        if count > 0:
+            print(f"  {severity}: {count}")
+    
+    print(f"\n详细结果:")
+    for r in result['results'][:10]:
+        print(f"  [{r['severity']}] {r['category']}: {r['url']}")
+        print(f"    状态码: {r['status_code']}, 大小: {r['content_length']}, 置信度: {r['confidence']:.2f}")

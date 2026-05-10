@@ -14,10 +14,7 @@ import urllib.parse
 from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
 
-try:
-    from .config import LOGIN_PATHS, UPLOAD_PATHS
-except ImportError:
-    from config import LOGIN_PATHS, UPLOAD_PATHS
+from .config import LOGIN_PATHS, UPLOAD_PATHS
 
 
 class FormExtractor:

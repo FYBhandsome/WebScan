@@ -28,6 +28,9 @@
 
 import re
 import socket
+from typing import Union, Optional, Dict, Any
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
 
 # 禁止扫描的域名/IP特征(正则,忽略大小写)
@@ -427,5 +430,4 @@ def test_all_functions():
 
 
 if __name__ == "__main__":
-
-
+    test_all_functions()

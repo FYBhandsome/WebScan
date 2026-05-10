@@ -14,10 +14,7 @@ import urllib.parse
 from typing import Set, Dict, Optional, List
 from urllib.parse import urlparse, urlunparse
 
-try:
-    from .config import CRAWLER_CONFIG
-except ImportError:
-    from config import CRAWLER_CONFIG
+from .config import CRAWLER_CONFIG
 
 
 class URLFilter:

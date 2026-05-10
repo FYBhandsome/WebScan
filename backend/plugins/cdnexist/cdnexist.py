@@ -1,43 +1,83 @@
 # -*- coding:utf-8 -*-
 
 """
-CDN检测模块
+CDN检测模块（增强版）
+
 功能:
-1. 检测目标主机是否使用CDN(通过IP段匹配和ASN匹配)
-2. 支持URL、域名、IP地址作为输入
-3. 使用GeoIP2数据库进行ASN查询
-4. 预编译CDN网段,提升检测性能
+1. IP段匹配检测
+2. ASN匹配检测
+3. CNAME记录检测
+4. HTTP响应头特征检测
+5. 多DNS服务器解析对比检测
+6. 支持URL、域名、IP地址作为输入
+
+特性:
+- 多维度检测，提高准确率
+- 预编译CDN网段，提升性能
+- 支持多种CDN厂商识别
+- 返回详细的CDN信息
 
 依赖:
-- geoip2: 用于查询IP的ASN信息
+- geoip2: 用于查询IP的ASN信息（可选）
 - ipaddress: 用于IP地址和网段处理
+- dnspython: 用于DNS查询（可选）
 
 使用示例:
-    >>> from backend.plugins.cdnexist.cdnexist import is_cdn
-    >>> result = is_cdn("https://www.baidu.com")
-    >>> print(result)  # True or False
+    >>> from backend.plugins.cdnexist.cdnexist import detect_cdn
+    >>> result = detect_cdn("https://www.baidu.com")
+    >>> print(result)
+    {
+        "has_cdn": True,
+        "cdn_name": "CloudFlare",
+        "detection_methods": ["ip_range", "cname", "header"],
+        "confidence": 0.95
+    }
 """
-
 
 import logging
 import socket
 import ipaddress
-from typing import Union, Optional
+import re
+from typing import Union, Optional, Dict, List, Any, Set
 from pathlib import Path
+from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
-import geoip2.database
-from geoip2.errors import AddressNotFoundError, GeoIP2Error
+import requests
+from requests.exceptions import RequestException, Timeout, ConnectionError
 
-# 配置日志(统一管理日志输出)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()]
-)
 logger = logging.getLogger(__name__)
 
-# === 可配置常量(便于维护) ===
-# 国内外常见CDN IP段(CIDR格式)
+DNS_AVAILABLE = False
+try:
+    import dns.resolver
+    import dns.rdatatype
+    DNS_AVAILABLE = True
+except ImportError:
+    logger.warning("[CDN] dnspython未安装，CNAME检测功能受限")
+
+GEOIP2_AVAILABLE = False
+try:
+    import geoip2.database
+    from geoip2.errors import AddressNotFoundError, GeoIP2Error
+    GEOIP2_AVAILABLE = True
+except ImportError:
+    logger.warning("[CDN] geoip2未安装，ASN检测功能受限")
+
+
+@dataclass
+class CDNResult:
+    has_cdn: bool
+    cdn_name: str
+    detection_methods: List[str] = field(default_factory=list)
+    confidence: float = 0.0
+    ip_addresses: List[str] = field(default_factory=list)
+    cname_records: List[str] = field(default_factory=list)
+    headers_matched: List[str] = field(default_factory=list)
+    asn_info: str = ""
+    details: Dict[str, Any] = field(default_factory=dict)
+
+
 CDN_CIDR_LIST = [
     '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18',
     '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17',
@@ -78,197 +118,587 @@ CDN_CIDR_LIST = [
     '157.255.25.0/24', '157.255.26.0/24', '112.25.90.0/24', '112.25.91.0/24', '58.211.2.0/24',
     '58.211.137.0/24', '122.190.2.0/24', '122.190.3.0/24', '183.61.177.0/24', '183.61.190.0/24',
     '117.148.160.0/24', '117.148.161.0/24', '115.231.186.0/24', '115.231.187.0/24', '113.31.27.0/24',
-    '222.186.19.0/24', '122.226.182.0/24', '36.99.18.0/24', '123.133.84.0/24', '221.204.202.0/24',
-    '42.236.6.0/24', '61.130.28.0/24', '61.174.9.0/24', '223.94.66.0/24', '222.88.94.0/24',
-    '61.163.30.0/24', '223.94.95.0/24', '223.112.227.0/24', '183.250.179.0/24', '120.241.102.0/24',
-    '125.39.5.0/24', '124.193.166.0/24', '122.70.134.0/24', '111.6.191.0/24', '122.228.198.0/24',
-    '121.12.98.0/24', '60.12.166.0/24', '118.180.50.0/24', '183.203.7.0/24', '61.133.127.0/24',
-    '113.7.183.0/24', '210.22.63.0/24', '60.221.236.0/24', '122.227.237.0/24', '123.6.13.0/24',
-    '202.102.85.0/24', '61.160.224.0/24', '182.140.227.0/24', '221.204.14.0/24', '222.73.144.0/24',
-    '61.240.144.0/24', '36.27.212.0/24', '125.88.189.0/24', '120.52.18.0/24', '119.84.15.0/24',
-    '180.163.224.0/24', '46.51.216.0/21','119.84.129.0/24', '221.236.11.0/24', '118.123.241.0/24',
-    '122.225.34.0/24'
 ]
 
-# CDN相关ASN号列表
-CDN_ASN_LIST = [
-    '55770', '49846', '49249', '48163', '45700', '43639', '39836', '393560', '393234', '36183',
-    '35994', '35993', '35204', '34850', '34164', '33905', '32787', '31377', '31110', '31109',
-    '31108', '31107', '30675', '24319', '23903', '23455', '23454', '22207', '21399', '21357',
-    '21342', '20940', '20189', '18717', '18680', '17334', '16702', '16625', '12222', '61107',
-    '60922', '60626', '49689', '209101', '201585', '136764', '135429', '135295', '133496',
-    '395747', '394536', '209242', '203898', '202623', '14789', '133877', '13335', '132892'
+CDN_ASN_LIST = {
+    '13335': 'CloudFlare',
+    '16509': 'Amazon CloudFront',
+    '14618': 'Amazon CloudFront',
+    '54113': 'Fastly',
+    '15133': 'Edgecast',
+    '19551': 'Incapsula',
+    '55770': 'Baidu Cloud CDN',
+    '38365': 'Aliyun CDN',
+    '45062': 'Tencent Cloud CDN',
+    '24139': 'Cloudflare',
+    '20940': 'Akamai',
+    '12222': 'Akamai',
+    '16625': 'Akamai',
+    '34164': 'Akamai',
+    '55805': 'ChinaCache',
+    '23903': 'ChinaCache',
+    '4808': 'ChinaNetCenter',
+    '38365': 'WangSu',
+    '55990': 'Huawei Cloud CDN',
+    '61107': 'Kingsoft Cloud CDN',
+    '49689': 'Qiniu Cloud CDN',
+    '45062': 'Tencent Cloud',
+}
+
+CDN_CNAME_PATTERNS = {
+    'cloudflare': {
+        'patterns': [
+            r'\.cloudflare\.com$', r'\.cdn\.cloudflare\.net$',
+            r'\.cf\.cdn\.cloudflare\.net$', r'-provisioned\.cdn\.cloudflare\.net$',
+        ],
+        'name': 'CloudFlare',
+    },
+    'akamai': {
+        'patterns': [
+            r'\.akamaiedge\.net$', r'\.akamai\.net$',
+            r'\.akamaized\.net$', r'\.edgesuite\.net$',
+            r'\.edgekey\.net$', r'\.cdn\.akamai\.net$',
+        ],
+        'name': 'Akamai',
+    },
+    'cloudfront': {
+        'patterns': [
+            r'\.cloudfront\.net$', r'\.cloudfront\.com$',
+        ],
+        'name': 'Amazon CloudFront',
+    },
+    'fastly': {
+        'patterns': [
+            r'\.fastly\.net$', r'\.fastly\.com$',
+            r'\.fastlylb\.net$',
+        ],
+        'name': 'Fastly',
+    },
+    'aliyun': {
+        'patterns': [
+            r'\.kunlun\w*\.com$', r'\.cdn\.aliyun\.com$',
+            r'\.alicdn\.com$', r'\.aliyuncs\.com$',
+            r'\.w\.cdn\.aliyun\.com$', r'\.kunlun\.com$',
+        ],
+        'name': 'Aliyun CDN',
+    },
+    'tencent': {
+        'patterns': [
+            r'\.cdn\.dnsv1\.com$', r'\.cdn\.qq\.com$',
+            r'\.cdn\.dnsv[0-9]+\.com$', r'\.dnsv[0-9]+\.com$',
+            r'\.cdn\.myqcloud\.com$', r'\.idc\.qq\.com$',
+        ],
+        'name': 'Tencent Cloud CDN',
+    },
+    'baidu': {
+        'patterns': [
+            r'\.bce\.baidu\.com$', r'\.cdn\.baidu\.com$',
+            r'\.bcecdn\.com$', r'\.bdstatic\.com$',
+        ],
+        'name': 'Baidu Cloud CDN',
+    },
+    'wangsu': {
+        'patterns': [
+            r'\.wangsu\.com$', r'\.wscdns\.com$',
+            r'\.wscloudcdn\.com$', r'\.chinanetcenter\.com$',
+        ],
+        'name': 'WangSu CDN',
+    },
+    'chinacache': {
+        'patterns': [
+            r'\.chinacache\.com$', r'\.ccgslb\.com$',
+            r'\.cdn\.chinacache\.com$',
+        ],
+        'name': 'ChinaCache',
+    },
+    'huawei': {
+        'patterns': [
+            r'\.cdn\.huawei\.com$', r'\.cdn\.myhuaweicloud\.com$',
+            r'\.hwcdn\.net$',
+        ],
+        'name': 'Huawei Cloud CDN',
+    },
+    'qiniu': {
+        'patterns': [
+            r'\.qiniudn\.com$', r'\.qiniu\.com$',
+            r'\.clouddn\.com$', r'\.qiniucdn\.com$',
+        ],
+        'name': 'Qiniu Cloud CDN',
+    },
+    'kingsoft': {
+        'patterns': [
+            r'\.ks-cdn\.com$', r'\.ksyun\.com$',
+            r'\.kingsoft\.com$',
+        ],
+        'name': 'Kingsoft Cloud CDN',
+    },
+    'incapsula': {
+        'patterns': [
+            r'\.incapdns\.net$', r'\.incapsula\.com$',
+        ],
+        'name': 'Incapsula',
+    },
+    'stackpath': {
+        'patterns': [
+            r'\.stackpathdns\.com$', r'\.stackpath\.com$',
+        ],
+        'name': 'StackPath',
+    },
+    'sucuri': {
+        'patterns': [
+            r'\.sucuri\.net$', r'\.cdn\.sucuri\.net$',
+        ],
+        'name': 'Sucuri',
+    },
+    'keycdn': {
+        'patterns': [
+            r'\.kxcdn\.com$', r'\.keycdn\.com$',
+        ],
+        'name': 'KeyCDN',
+    },
+    'cdn77': {
+        'patterns': [
+            r'\.cdn77\.org$', r'\.cdn77\.com$',
+        ],
+        'name': 'CDN77',
+    },
+}
+
+CDN_HEADER_SIGNATURES = {
+    'cloudflare': {
+        'headers': {
+            'Server': [r'cloudflare', r'cloudflare-nginx'],
+            'CF-RAY': [r'.*'],
+            'CF-Cache-Status': [r'.*'],
+            'Expect-CT': [r'.*cloudflare.*'],
+        },
+        'name': 'CloudFlare',
+    },
+    'akamai': {
+        'headers': {
+            'Server': [r'AkamaiGHost', r'Akamai'],
+            'X-Akamai-Transformed': [r'.*'],
+            'X-Akamai-Staging': [r'.*'],
+        },
+        'name': 'Akamai',
+    },
+    'cloudfront': {
+        'headers': {
+            'Server': [r'CloudFront'],
+            'X-Cache': [r'.*cloudfront.*', r'Hit from cloudfront', r'Miss from cloudfront'],
+            'X-Amz-Cf-Id': [r'.*'],
+            'Via': [r'.*cloudfront.*'],
+        },
+        'name': 'Amazon CloudFront',
+    },
+    'fastly': {
+        'headers': {
+            'X-Served-By': [r'.*'],
+            'X-Fastly-Request-Id': [r'.*'],
+            'X-Cache': [r'.*fastly.*'],
+        },
+        'name': 'Fastly',
+    },
+    'aliyun': {
+        'headers': {
+            'Server': [r'Tengine', r'AliyunOSS'],
+            'X-Swift-CacheTime': [r'.*'],
+            'X-Swift-SaveTime': [r'.*'],
+            'Via': [r'.*Aliyun.*', r'.*Tengine.*'],
+        },
+        'name': 'Aliyun CDN',
+    },
+    'tencent': {
+        'headers': {
+            'Server': [r'nginx', r'Tencent'],
+            'X-Cache-Lookup': [r'.*'],
+            'X-NWS-LOG-UUID': [r'.*'],
+        },
+        'name': 'Tencent Cloud CDN',
+    },
+    'baidu': {
+        'headers': {
+            'Server': [r'JSP3', r'Apache', r'nginx'],
+            'X-Server': [r'.*baidu.*'],
+        },
+        'name': 'Baidu Cloud CDN',
+    },
+    'wangsu': {
+        'headers': {
+            'Server': [r'WangSu', r'chinanetcenter'],
+            'X-Cache': [r'.*WangSu.*'],
+            'Via': [r'.*WangSu.*'],
+        },
+        'name': 'WangSu CDN',
+    },
+    'incapsula': {
+        'headers': {
+            'X-CDN': [r'Incapsula'],
+            'X-Iinfo': [r'.*'],
+            'Set-Cookie': [r'.*incap_ses.*', r'.*visid_incap.*'],
+        },
+        'name': 'Incapsula',
+    },
+    'sucuri': {
+        'headers': {
+            'Server': [r'Sucuri'],
+            'X-Sucuri-ID': [r'.*'],
+            'X-Sucuri-Cache': [r'.*'],
+        },
+        'name': 'Sucuri',
+    },
+}
+
+DNS_SERVERS = [
+    '8.8.8.8',
+    '8.8.4.4',
+    '1.1.1.1',
+    '1.0.0.1',
+    '114.114.114.114',
+    '223.5.5.5',
 ]
 
-# GeoIP2数据库路径配置(支持相对/绝对路径)
 GEOIP2_ASN_DB_PATH = Path(__file__).parent.parent.parent / "geoip" / "GeoLite2-ASN.mmdb"
 
-# === 缓存初始化(提升性能) ===
-# 预编译CDN网段为ip_network对象,避免每次调用重复解析
 try:
     CDN_NETWORKS = [ipaddress.ip_network(cidr, strict=False) for cidr in CDN_CIDR_LIST]
-
-
 except ValueError as e:
-    logger.error(f"CDN网段解析失败:{e}")
+    logger.error(f"[CDN] CDN网段解析失败: {e}")
     CDN_NETWORKS = []
 
-# === 核心工具函数 ===
-def parse_host_to_ip(host: str) -> Optional[str]:
+for cdn_name, config in CDN_CNAME_PATTERNS.items():
+    config['compiled_patterns'] = [re.compile(p, re.IGNORECASE) for p in config['patterns']]
+
+for cdn_name, config in CDN_HEADER_SIGNATURES.items():
+    for header_name, patterns in config['headers'].items():
+        config['headers'][header_name] = [re.compile(p, re.IGNORECASE) for p in patterns]
+
+
+class CDNDetector:
     """
-    将URL/域名解析为IPv4地址(优化版)
-    :param host: URL/域名/IP
-    :return: 第一个有效IPv4地址 | None
-
-    说明:
-        1. 若输入已是合法IPv4,直接返回
-        2. 否则尝试提取域名并解析为IP
-        3. 支持多种URL格式(http/https)
-        4. 设置1秒超时,避免长时间阻塞
-
+    CDN检测器（增强版）
+    
+    检测方式:
+    1. IP段匹配 - 检查IP是否在已知CDN网段
+    2. ASN匹配 - 检查IP的ASN是否属于CDN厂商
+    3. CNAME检测 - 检查域名的CNAME记录
+    4. HTTP响应头检测 - 检查响应头特征
+    5. 多DNS解析对比 - 检查不同DNS解析结果是否一致
     """
-    # 1. 若已是合法IPv4,直接返回,校验IPv4格式
-    try:
-        ip_obj = ipaddress.IPv4Address(host.strip())
-
-
-        return str(ip_obj)
-    except ipaddress.AddressValueError:
-        pass
-
-    # 2. 提取域名
-    try:
-        # 导入getdomain函数
-        from ..common.common import get_domain
-        domain = get_domain(host)
-        if not domain:
-            logger.warning(f"无法从{host}提取域名")
+    
+    def __init__(self, target: str, config: Optional[Dict[str, Any]] = None):
+        self.target = target.strip() if isinstance(target, str) else ""
+        self.config = config or {}
+        
+        self.timeout = self.config.get("timeout", 10)
+        self.verify_ssl = self.config.get("verify_ssl", False)
+        
+        self._domain = ""
+        self._ip_addresses: Set[str] = set()
+        self._cname_records: List[str] = []
+        self._http_headers: Dict[str, str] = {}
+        
+        self._result = CDNResult(has_cdn=False, cdn_name="")
+        
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        })
+    
+    def _extract_domain(self) -> str:
+        if not self.target:
+            return ""
+        
+        target = self.target.strip()
+        
+        if target.startswith(("http://", "https://")):
+            parsed = urlparse(target)
+            return parsed.netloc.split(":")[0]
+        
+        target = target.split("/")[0].split(":")[0]
+        
+        try:
+            ipaddress.ip_address(target)
+            return ""
+        except ValueError:
+            pass
+        
+        return target
+    
+    def _resolve_domain(self, domain: str) -> Set[str]:
+        ips = set()
+        
+        if DNS_AVAILABLE:
+            try:
+                resolver = dns.resolver.Resolver()
+                resolver.nameservers = DNS_SERVERS[:2]
+                resolver.timeout = 5
+                resolver.lifetime = 5
+                
+                answers = resolver.resolve(domain, 'A')
+                for rdata in answers:
+                    ips.add(str(rdata))
+                
+                answers = resolver.resolve(domain, 'AAAA')
+                for rdata in answers:
+                    ips.add(str(rdata))
+            except Exception as e:
+                logger.debug(f"[CDN] DNS解析失败: {e}")
+        
+        if not ips:
+            try:
+                socket.setdefaulttimeout(5)
+                addrs = socket.getaddrinfo(domain, None)
+                for addr in addrs:
+                    ips.add(addr[4][0])
+            except Exception as e:
+                logger.debug(f"[CDN] socket解析失败: {e}")
+        
+        return ips
+    
+    def _get_cname_records(self, domain: str) -> List[str]:
+        cnames = []
+        
+        if DNS_AVAILABLE:
+            try:
+                resolver = dns.resolver.Resolver()
+                resolver.nameservers = DNS_SERVERS[:2]
+                resolver.timeout = 5
+                resolver.lifetime = 5
+                
+                answers = resolver.resolve(domain, 'CNAME')
+                for rdata in answers:
+                    cnames.append(str(rdata).rstrip('.'))
+            except dns.resolver.NoAnswer:
+                pass
+            except Exception as e:
+                logger.debug(f"[CDN] CNAME查询失败: {e}")
+        
+        return cnames
+    
+    def _check_ip_in_cdn_networks(self, ip: str) -> Optional[str]:
+        try:
+            ip_obj = ipaddress.ip_address(ip)
+            for network in CDN_NETWORKS:
+                if ip_obj in network:
+                    return "ip_range"
+        except ValueError:
+            pass
+        return None
+    
+    def _check_ip_asn(self, ip: str) -> Optional[str]:
+        if not GEOIP2_AVAILABLE or not GEOIP2_ASN_DB_PATH.exists():
             return None
-    except ImportError:
-        logger.error("未找到get_domain函数,使用简单域名提取逻辑")
-        # 简单降级:提取//后的第一个/前的内容
-        if "://" in host:
-            domain = host.split("://")[1].split("/")[0]
+        
+        try:
+            with geoip2.database.Reader(str(GEOIP2_ASN_DB_PATH)) as reader:
+                response = reader.asn(ip)
+                asn = str(response.autonomous_system_number)
+                if asn in CDN_ASN_LIST:
+                    self._result.asn_info = f"AS{asn} ({CDN_ASN_LIST[asn]})"
+                    return "asn"
+        except Exception as e:
+            logger.debug(f"[CDN] ASN查询失败: {e}")
+        
+        return None
+    
+    def _check_cname(self, cname: str) -> Optional[str]:
+        for cdn_name, config in CDN_CNAME_PATTERNS.items():
+            for pattern in config.get('compiled_patterns', []):
+                if pattern.search(cname):
+                    if self._result.cdn_name:
+                        pass
+                    else:
+                        self._result.cdn_name = config['name']
+                    return "cname"
+        return None
+    
+    def _check_headers(self, headers: Dict[str, str]) -> Optional[str]:
+        for cdn_name, config in CDN_HEADER_SIGNATURES.items():
+            for header_name, patterns in config['headers'].items():
+                header_value = headers.get(header_name, "")
+                if header_value:
+                    for pattern in patterns:
+                        if pattern.search(header_value):
+                            if not self._result.cdn_name:
+                                self._result.cdn_name = config['name']
+                            self._result.headers_matched.append(header_name)
+                            return "header"
+        return None
+    
+    def _multi_dns_check(self, domain: str) -> Optional[str]:
+        if not DNS_AVAILABLE:
+            return None
+        
+        all_ips = []
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 5
+        resolver.lifetime = 5
+        
+        for dns_server in DNS_SERVERS[:3]:
+            try:
+                resolver.nameservers = [dns_server]
+                answers = resolver.resolve(domain, 'A')
+                ips = set(str(rdata) for rdata in answers)
+                all_ips.append(ips)
+            except Exception:
+                pass
+        
+        if len(all_ips) >= 2:
+            first_ips = all_ips[0]
+            for ips in all_ips[1:]:
+                if first_ips != ips:
+                    return "multi_dns"
+        
+        return None
+    
+    def detect(self) -> CDNResult:
+        self._domain = self._extract_domain()
+        
+        if not self._domain:
+            ip = self.target
+            try:
+                ipaddress.ip_address(ip)
+                self._ip_addresses.add(ip)
+            except ValueError:
+                self._result.details["error"] = "无效的目标"
+                return self._result
         else:
-            domain = host.split("/")[0]
+            self._ip_addresses = self._resolve_domain(self._domain)
+            self._cname_records = self._get_cname_records(self._domain)
+        
+        self._result.ip_addresses = list(self._ip_addresses)
+        self._result.cname_records = self._cname_records
+        
+        detection_methods = []
+        
+        for ip in self._ip_addresses:
+            method = self._check_ip_in_cdn_networks(ip)
+            if method:
+                detection_methods.append(method)
+                self._result.has_cdn = True
+                if not self._result.cdn_name:
+                    self._result.cdn_name = "Unknown CDN"
+                break
+        
+        for ip in self._ip_addresses:
+            method = self._check_ip_asn(ip)
+            if method:
+                detection_methods.append(method)
+                self._result.has_cdn = True
+                break
+        
+        for cname in self._cname_records:
+            method = self._check_cname(cname)
+            if method:
+                detection_methods.append(method)
+                self._result.has_cdn = True
+                break
+        
+        if self._domain:
+            try:
+                response = self.session.get(
+                    f"https://{self._domain}" if not self.target.startswith("http") else self.target,
+                    timeout=self.timeout,
+                    verify=self.verify_ssl,
+                    allow_redirects=True
+                )
+                self._http_headers = dict(response.headers)
+                
+                method = self._check_headers(self._http_headers)
+                if method:
+                    detection_methods.append(method)
+                    self._result.has_cdn = True
+            except Exception as e:
+                logger.debug(f"[CDN] HTTP请求失败: {e}")
+        
+        if self._domain and not self._result.has_cdn:
+            method = self._multi_dns_check(self._domain)
+            if method:
+                detection_methods.append(method)
+                self._result.has_cdn = True
+                if not self._result.cdn_name:
+                    self._result.cdn_name = "Unknown CDN"
+        
+        self._result.detection_methods = list(set(detection_methods))
+        
+        if self._result.has_cdn:
+            method_count = len(self._result.detection_methods)
+            self._result.confidence = min(0.5 + method_count * 0.15, 1.0)
+        
+        self._result.details = {
+            "domain": self._domain,
+            "ip_count": len(self._ip_addresses),
+            "cname_count": len(self._cname_records),
+            "headers": self._http_headers,
+        }
+        
+        return self._result
 
-    # 3. 解析域名到IP(支持超时+多IP)
-    socket.setdefaulttimeout(1)
-    try:
-        # getaddrinfo支持IPv4/IPv6,优先取IPv4
-        addrs = socket.getaddrinfo(domain, None, socket.AF_INET)
-        if addrs:
-            return addrs[0][4][0]  # 返回第一个IPv4地址
-    except socket.gaierror as e:
-        logger.error(f"域名{domain}解析失败:{e}")
-    except Exception as e:
-        logger.error(f"域名{domain}解析异常:{e}")
-    return None
 
-def check_ip_in_cdn_networks(ip: str) -> bool:
+def detect_cdn(target: str, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
-    检查IP是否在CDN网段中(优化性能)
-    :param ip: IPv4地址
-    :return: True/False
+    检测目标是否使用CDN
+    
+    :param target: URL/域名/IP地址
+    :param config: 配置选项
+    :return: 检测结果字典
     """
-    try:
-        ip_obj = ipaddress.IPv4Address(ip.strip())
+    detector = CDNDetector(target, config)
+    result = detector.detect()
+    
+    return {
+        "has_cdn": result.has_cdn,
+        "cdn_name": result.cdn_name,
+        "detection_methods": result.detection_methods,
+        "confidence": result.confidence,
+        "ip_addresses": result.ip_addresses,
+        "cname_records": result.cname_records,
+        "headers_matched": result.headers_matched,
+        "asn_info": result.asn_info,
+        "details": result.details,
+    }
 
 
-        # 遍历预编译的网段,匹配到立即返回
-        for network in CDN_NETWORKS:
-            if ip_obj in network:
-                return True
-        return False
-    except ipaddress.AddressValueError:
-        logger.error(f"IP {ip} 格式非法")
-        return False
-
-def check_ip_asn_in_cdn_list(ip: str) -> bool:
-    """
-    检查IP的ASN是否在CDN ASN列表中
-    :param ip: IPv4地址
-    :return: True/False
-    """
-    # 检查数据库文件是否存在
-    if not GEOIP2_ASN_DB_PATH.exists():
-        logger.warning(f"GeoIP2数据库文件不存在:{GEOIP2_ASN_DB_PATH}，将跳过ASN检测")
-        return False
-
-    try:
-        with geoip2.database.Reader(str(GEOIP2_ASN_DB_PATH)) as reader:
-            response = reader.asn(ip)
-            asn = str(response.autonomous_system_number)
-            if asn in CDN_ASN_LIST:
-                logger.info(f"IP {ip} ASN {asn} 匹配CDN ASN列表")
-                return True
-    except AddressNotFoundError:
-        logger.warning(f"IP {ip} 未在GeoIP2数据库中找到ASN信息")
-    except GeoIP2Error as e:
-        logger.error(f"GeoIP2数据库读取失败:{e}")
-    except Exception as e:
-        logger.error(f"查询IP {ip} ASN异常:{e}")
-    return False
-
-# === 核心校验函数 ===
 def is_cdn(host: Union[str, None]) -> Union[bool, str]:
     """
-    判断目标主机是否使用CDN(统一返回值+优化逻辑)
+    兼容函数: 判断目标主机是否使用CDN
+    
     :param host: URL/域名/IPv4地址
     :return: True(有CDN)| False(无CDN)| 错误信息字符串
     """
-    # 输入校验
     if not host or not isinstance(host, str):
-        error_msg = "输入为空或非字符串类型"
-        logger.error(error_msg)
-        return error_msg
-
+        return "输入为空或非字符串类型"
+    
     host = host.strip()
     if not host:
-        error_msg = "输入为空字符串"
-        logger.error(error_msg)
-        return error_msg
+        return "输入为空字符串"
+    
+    try:
+        result = detect_cdn(host)
+        return result["has_cdn"]
+    except Exception as e:
+        return f"检测异常: {str(e)}"
 
-    # 解析主机到IP
-    ip = parse_host_to_ip(host)
-    if not ip:
-        error_msg = "目标站点不可访问(解析IP失败)"
-        logger.error(error_msg)
-        return error_msg
 
-    # 维度1:IP段匹配(匹配到直接返回True,无需查ASN)
-    if check_ip_in_cdn_networks(ip):
-        logger.info(f"IP {ip} 匹配CDN网段,判定为使用CDN")
-        return True
-
-    # 维度2:ASN匹配
-    if check_ip_asn_in_cdn_list(ip):
-        logger.info(f"IP {ip} ASN匹配CDN列表,判定为使用CDN")
-        return True
-
-    # 无匹配
-    logger.info(f"IP {ip} 未匹配CDN网段/ASN,判定为无CDN")
-    return False
-
-# === 兼容函数 ===
 def iscdn(host: Union[str, None]) -> Union[bool, str]:
-    """
-    兼容函数:判断目标主机是否使用CDN
-    :param host: URL/域名/IPv4地址
-    :return: True(有CDN)| False(无CDN)| 错误信息字符串
-    """
+    """兼容函数"""
     return is_cdn(host)
 
-# === 测试入口 ===
+
 if __name__ == '__main__':
-    # 测试用例1:无CDN的域名/IP
-    test_host1 = "https://jwt1399.top/"
-    print(f"测试1 {test_host1} 是否使用CDN:{is_cdn(test_host1)}")
-
-    # 测试用例2:使用CDN的域名(如百度)
-    test_host2 = "https://www.baidu.com/"
-    print(f"测试2 {test_host2} 是否使用CDN:{is_cdn(test_host2)}")
-
-    # 测试用例3:直接输入CDN IP
-    test_host3 = "180.101.50.188"  # 百度CDN IP
-    print(f"测试3 {test_host3} 是否使用CDN:{is_cdn(test_host3)}")
+    test_hosts = [
+        "https://www.baidu.com",
+        "https://www.cloudflare.com",
+        "https://www.taobao.com",
+        "https://jwt1399.top",
+    ]
+    
+    for host in test_hosts:
+        result = detect_cdn(host)
+        print(f"\n目标: {host}")
+        print(f"  CDN: {result['has_cdn']}")
+        print(f"  厂商: {result['cdn_name']}")
+        print(f"  方法: {result['detection_methods']}")
+        print(f"  置信度: {result['confidence']:.2f}")

@@ -1,159 +1,205 @@
-# Plugins 包说明文档
+# WebScan 信息收集插件模块
 
-## 简介
+## 目录结构
 
-`plugins` 是 AI_WebSecurity 项目的插件模块集合，提供了多种网站安全检测和信息收集功能。这些插件可以独立使用，也可以被主程序调用，为网络安全分析提供丰富的工具支持。
-
-## 功能模块列表
-
-| 模块名称 | 功能描述 | 文件位置 |
-|---------|---------|---------|
-| **baseinfo** | 网站基础信息收集 | `baseinfo/baseinfo.py` |
-| **cdnexist** | CDN存在检测 | `cdnexist/cdnexist.py` |
-| **common** | 通用工具函数 | `common/common.py` |
-| **infoleak** | 信息泄露检测 | `infoleak/infoleak.py` |
-| **iplocating** | IP地址定位 | `iplocating/iplocating.py` |
-| **loginfo** | 日志信息分析 | `loginfo/loginfo.py` |
-| **portscan** | 端口扫描 | `portscan/portscan.py` |
-| **randheader** | 随机HTTP请求头生成 | `randheader/randheader.py` |
-| **subdomain** | 子域名枚举 | `subdomain/subdomain.py` |
-| **waf** | WAF检测 | `waf/waf.py` |
-| **webside** | 网站信息检测 | `webside/webside.py` |
-| **webweight** | 网站权重查询 | `webweight/webweight.py` |
-| **whatcms** | CMS识别 | `whatcms/whatcms.py` |
-
-## 核心功能说明
-
-### 1. 网站基础信息收集 (baseinfo)
-- 收集网站的服务器类型、编程语言、框架等信息
-- 识别网站使用的技术栈
-
-### 2. CDN存在检测 (cdnexist)
-- 检测目标网站是否使用了CDN服务
-- 帮助分析网站的真实服务器位置
-
-### 3. 信息泄露检测 (infoleak)
-- 扫描常见的信息泄露点
-- 检测敏感文件和目录
-
-### 4. IP地址定位 (iplocating)
-- 根据IP地址获取地理位置信息
-- 提供IP所属国家、地区等详细信息
-
-### 5. 端口扫描 (portscan)
-- 扫描目标服务器开放的端口
-- 识别可能的服务和漏洞入口
-
-### 6. 子域名枚举 (subdomain)
-- 枚举目标域名的子域名
-- 发现更多潜在的攻击面
-
-### 7. WAF检测 (waf)
-- 检测网站是否部署了WAF(Web应用防火墙)
-- 识别WAF的类型和厂商
-
-### 8. 网站权重查询 (webweight)
-- 查询域名的百度权重(PC端和移动端)
-- 使用爱站网API进行查询
-- 支持域名格式校验和提取
-
-### 9. CMS识别 (whatcms)
-- 识别网站使用的内容管理系统
-- 帮助分析可能的漏洞和安全问题
-
-## 依赖项
-
-- Python 3.7+
-- requests: 用于HTTP请求
-- 各模块可能有额外的依赖，具体请参考各模块的实现文件
-
-## 使用方法
-
-### 导入单个插件
-
-```python
-# 示例：导入网站权重查询插件
-from backend.plugins.webweight.webweight import get_web_weight
-
-# 使用示例
-domain = "https://www.baidu.com"
-result = get_web_weight(domain)
-print(result)
+```
+plugins/
+├── api_discovery/          # API接口发现
+├── baseinfo/               # 基础信息收集
+├── brute_force/            # 弱口令爆破
+├── cdnexist/               # CDN检测
+├── cloud_detect/           # 云服务识别
+├── common/                 # 公共模块
+├── crawler/                # 爬虫模块
+├── ct_logs/                # 证书透明度查询
+├── dirscan/                # 目录扫描
+├── dns_history/            # 被动DNS历史
+├── dns_query/              # DNS记录查询
+├── fingerprint/            # 指纹识别增强
+├── github_sensitive/       # GitHub敏感信息
+├── infoleak/               # 信息泄露检测
+├── iplocating/             # IP定位
+├── loginfo/                # 日志分析
+├── mail_server/            # 邮件服务器检测
+├── portscan/               # 端口扫描
+├── randheader/             # 随机Header
+├── screenshot/             # 网站截图
+├── search_engine/          # 搜索引擎发现
+├── sensitive_dir/          # 敏感目录扫描增强
+├── sensitive_param/        # 敏感参数发现
+├── ssl_analyzer/           # SSL证书分析
+├── subdomain/              # 子域名枚举
+├── tech_stack/             # 技术栈识别
+├── tests/                  # 测试模块
+├── waf/                    # WAF检测
+├── webside/                # 旁站查询
+├── webweight/              # 权重查询
+├── whatcms/                # CMS识别
+└── whois/                  # Whois查询
 ```
 
-### 模块调用示例
+## 插件列表
 
-#### 1. 网站权重查询
+### 基础信息收集
 
-```python
-from backend.plugins.webweight.webweight import get_web_weight
+| 插件名称 | 路径 | 功能描述 |
+|----------|------|----------|
+| 基础信息收集 | `baseinfo/baseinfo.py` | 收集网站基础信息，包括标题、描述、关键词、响应头、服务器类型等 |
+| IP定位 | `iplocating/iplocating.py` | 查询IP地址的地理位置信息，支持多API备份和IPv6 |
+| Whois查询 | `whois/scanner.py` | 查询域名和IP的Whois注册信息，支持多数据源聚合 |
+| 权重查询 | `webweight/webweight.py` | 查询网站在搜索引擎中的权重 |
+| 旁站查询 | `webside/webside.py` | 查询同IP服务器上的其他网站 |
+| 日志分析 | `loginfo/loginfo.py` | 分析网站日志信息 |
 
-# 标准化返回格式
-result = get_web_weight("https://jwt1399.top/")
-print(f"查询结果: {result['result']}")
-print(f"是否成功: {result['success']}")
-print(f"详细信息: {result['message']}")
+### 域名与DNS
 
-# 兼容原代码格式
-from backend.plugins.webweight.webweight import get_web_weight_compat
-result_compat = get_web_weight_compat("https://jwt1399.top/")
-print(f"兼容格式结果: {result_compat}")
-```
+| 插件名称 | 路径 | 功能描述 |
+|----------|------|----------|
+| 子域名枚举 | `subdomain/subdomain.py` | 枚举目标域名的子域名，支持多数据源 |
+| DNS记录查询 | `dns_query/scanner.py` | 查询域名的各种DNS记录类型 |
+| 被动DNS历史 | `dns_history/scanner.py` | 查询域名的历史DNS记录 |
+| 证书透明度查询 | `ct_logs/scanner.py` | 查询证书透明度日志，发现子域名 |
 
-#### 2. IP地址定位
+### 网络与服务
 
-```python
-from backend.plugins.iplocating.iplocating import get_ip_location
+| 插件名称 | 路径 | 功能描述 |
+|----------|------|----------|
+| 端口扫描 | `portscan/portscan.py` | 扫描目标主机开放端口和服务识别 |
+| CDN检测 | `cdnexist/cdnexist.py` | 检测目标网站是否使用CDN服务 |
+| WAF检测 | `waf/waf.py` | 检测目标网站是否使用Web应用防火墙 |
+| 云服务识别 | `cloud_detect/scanner.py` | 识别网站使用的云服务商和CDN |
+| 邮件服务器检测 | `mail_server/scanner.py` | 检测邮件服务器配置和安全状态 |
 
-ip = "8.8.8.8"
-location = get_ip_location(ip)
-print(f"IP {ip} 的位置: {location}")
-```
+### Web技术识别
+
+| 插件名称 | 路径 | 功能描述 |
+|----------|------|----------|
+| CMS识别 | `whatcms/whatcms.py` | 识别目标网站使用的CMS系统类型和版本 |
+| 指纹识别增强 | `fingerprint/scanner.py` | 增强版指纹识别，识别更多技术栈 |
+| 技术栈识别 | `tech_stack/scanner.py` | 识别网站使用的技术栈、框架、库等 |
+
+### 安全检测
+
+| 插件名称 | 路径 | 功能描述 |
+|----------|------|----------|
+| 信息泄露 | `infoleak/infoleak.py` | 检测网站敏感信息泄露，支持智能404检测 |
+| 目录扫描 | `dirscan/dirscan.py` | 扫描网站敏感目录和文件 |
+| 敏感目录扫描增强 | `sensitive_dir/scanner.py` | 增强版敏感目录扫描 |
+| 敏感参数发现 | `sensitive_param/scanner.py` | 发现URL和表单中的敏感参数 |
+| SSL证书分析 | `ssl_analyzer/scanner.py` | 分析SSL/TLS证书安全状态，检测漏洞 |
+| 弱口令爆破 | `brute_force/scanner.py` | 多服务弱口令爆破，支持SSH/FTP/MySQL/Redis等 |
+
+### 信息发现
+
+| 插件名称 | 路径 | 功能描述 |
+|----------|------|----------|
+| 爬虫模块 | `crawler/crawler.py` | 爬取网站页面，提取链接和表单 |
+| API接口发现 | `api_discovery/scanner.py` | 发现网站隐藏的API接口和端点 |
+| GitHub敏感信息 | `github_sensitive/scanner.py` | 在GitHub上搜索目标相关的敏感信息 |
+| 搜索引擎发现 | `search_engine/scanner.py` | 通过搜索引擎发现相关信息 |
+| 网站截图 | `screenshot/scanner.py` | 对网站进行多设备截图 |
+
+### 辅助工具
+
+| 插件名称 | 路径 | 功能描述 |
+|----------|------|----------|
+| 随机Header | `randheader/randheader.py` | 生成随机HTTP请求头 |
+| 公共模块 | `common/common.py` | 提供公共工具函数和代理过滤功能 |
 
 ## 插件开发规范
 
-### 新增插件的步骤
+### 目录结构
 
-1. 在 `plugins` 目录下创建新的子目录，命名为插件名称
-2. 在子目录中创建 `__init__.py` 文件（可以为空）
-3. 创建插件的主要实现文件，命名为 `[插件名称].py`
-4. 实现核心功能函数，并提供清晰的文档字符串
-5. 添加必要的依赖项说明
+每个插件应包含以下文件：
 
-### 代码规范
+```
+plugin_name/
+├── __init__.py      # 模块初始化
+├── scanner.py       # 主扫描器实现
+└── README.md        # 插件说明文档（可选）
+```
 
-- 使用 UTF-8 编码
-- 遵循 PEP 8 代码风格
-- 提供详细的文档字符串
-- 实现错误处理和异常捕获
-- 考虑网络波动等情况，添加超时和重试机制
+### 基类继承
+
+```python
+from backend.plugins.base import BasePlugin
+
+class MyScanner(BasePlugin):
+    def __init__(self, target: str, config: dict = None):
+        super().__init__(target, config)
+    
+    def scan(self) -> dict:
+        # 实现扫描逻辑
+        return {"success": True, "data": {}}
+```
+
+### 返回格式
+
+插件应返回统一的字典格式：
+
+```python
+{
+    "success": True,          # 是否成功
+    "data": {},               # 返回数据
+    "error": "",              # 错误信息
+    "duration": 1.5           # 执行时间（秒）
+}
+```
+
+## 使用示例
+
+### 单独使用插件
+
+```python
+from backend.plugins.baseinfo.baseinfo import getbaseinfo
+
+result = getbaseinfo("https://example.com")
+print(result)
+```
+
+### 批量扫描
+
+```python
+from backend.plugins.portscan.portscan import PortScanner
+
+scanner = PortScanner("192.168.1.1", {"ports": "1-1000"})
+result = scanner.scan()
+print(result)
+```
+
+## 依赖安装
+
+```bash
+pip install requests beautifulsoup4 lxml cryptography
+pip install paramiko pymysql psycopg2-binary redis pymongo
+pip install bcrypt argon2-cffi
+```
 
 ## 注意事项
 
-1. **API密钥管理**：部分插件使用了第三方API（如爱站网API），请妥善保管API密钥
-2. **网络请求**：插件会发起网络请求，请确保网络连接正常
-3. **速率限制**：使用第三方API时，请注意API的速率限制，避免频繁请求导致被封禁
-4. **法律合规**：使用插件进行检测时，请确保遵守相关法律法规，仅对授权的目标进行检测
+1. **请求频率**: 请合理控制请求频率，避免对目标服务器造成压力
+2. **授权许可**: 在对目标进行扫描前，请确保已获得授权
+3. **数据安全**: 扫描结果可能包含敏感信息，请妥善保管
+4. **法律合规**: 请遵守当地法律法规，仅用于合法的安全测试
 
-## 版本历史
+## 更新日志
 
-- **v1.0.0**：初始版本，包含基础插件模块
-- **v1.1.0**：优化了部分插件的性能和稳定性
-- **v1.2.0**：新增了部分插件模块，完善了文档
+### v2.0.0 (2026-04-24)
+- 新增16个信息收集插件
+- 优化现有插件代码结构
+- 添加弱口令爆破模块
+- 添加SSL证书分析模块
+- 添加技术栈识别模块
+- 完善文档和测试用例
 
 ## 贡献指南
 
-欢迎提交Issue和Pull Request，共同改进插件功能。提交代码时，请确保：
+1. Fork 本仓库
+2. 创建新的功能分支 (`git checkout -b feature/new-plugin`)
+3. 提交更改 (`git commit -am 'Add new plugin'`)
+4. 推送到分支 (`git push origin feature/new-plugin`)
+5. 创建 Pull Request
 
-1. 代码符合项目的编码规范
-2. 添加了必要的测试用例
-3. 更新了相关文档
+## 许可证
 
-## 联系信息
-
-如有问题或建议，请联系项目维护者。
-
----
-
-*本文档由 AI_WebSecurity 项目组维护*
-*最后更新时间：2026-01-22*
+本项目采用 MIT 许可证，详见 LICENSE 文件。

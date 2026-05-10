@@ -19,24 +19,14 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Set, Optional, Any
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-import os
-import sys
 
 import httpx
 from bs4 import BeautifulSoup
 
-if __name__ == "__main__" and __package__ is None:
-    _crawler_dir = os.path.dirname(os.path.abspath(__file__))
-    sys.path.insert(0, _crawler_dir)
-    from config import CRAWLER_CONFIG, DEFAULT_HEADERS, SENSITIVE_PATTERNS, LOGIN_PATHS
-    from parser import HTMLParser
-    from form_extractor import FormExtractor
-    from url_filter import URLFilter
-else:
-    from .config import CRAWLER_CONFIG, DEFAULT_HEADERS, SENSITIVE_PATTERNS, LOGIN_PATHS
-    from .parser import HTMLParser
-    from .form_extractor import FormExtractor
-    from .url_filter import URLFilter
+from .config import CRAWLER_CONFIG, DEFAULT_HEADERS, SENSITIVE_PATTERNS, LOGIN_PATHS
+from .parser import HTMLParser
+from .form_extractor import FormExtractor
+from .url_filter import URLFilter
 
 logger = logging.getLogger(__name__)
 
@@ -394,12 +384,12 @@ class WebCrawler:
             ],
             "forms": [
                 {
-                    "url": f["url"] if isinstance(f, dict) else f.url,
-                    "action": f["action"] if isinstance(f, dict) else f.action,
-                    "method": f["method"] if isinstance(f, dict) else f.method,
-                    "has_file_upload": f["has_file_upload"] if isinstance(f, dict) else f.has_file_upload,
-                    "has_password": f["has_password"] if isinstance(f, dict) else f.has_password,
-                    "inputs_count": len(f["inputs"]) if isinstance(f, dict) else len(f.inputs)
+                    "url": f.url,
+                    "action": f.action,
+                    "method": f.method,
+                    "has_file_upload": f.has_file_upload,
+                    "has_password": f.has_password,
+                    "inputs_count": len(f.inputs)
                 }
                 for f in result.forms
             ],
@@ -423,88 +413,3 @@ def crawl(target: str, config: Dict = None) -> Dict:
     """
     crawler = WebCrawler(target, config)
     return crawler.crawl()
-
-
-if __name__ == "__main__":
-    import json
-    import sys
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S"
-    )
-    
-    DEFAULT_TARGET = "http://testasp.vulnweb.com"
-    
-    target = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_TARGET
-    
-    print(f"\n{'='*60}")
-    print(f"🕷️  Web Crawler - 独立运行模式")
-    print(f"{'='*60}")
-    print(f"目标: {target}")
-    print(f"{'='*60}\n")
-    
-    custom_config = {
-        "max_depth": 2,
-        "max_pages": 50,
-        "max_concurrent": 5,
-        "timeout": 15,
-        "delay": 0.3,
-        "respect_robots": False,
-    }
-    
-    result = crawl(target, custom_config)
-    
-    print(f"\n{'='*60}")
-    print(f"📊 爬取结果汇总")
-    print(f"{'='*60}")
-    print(f"目标站点:     {result['target']}")
-    print(f"爬取页面数:   {result['total_pages']}")
-    print(f"发现链接数:   {result['total_links']}")
-    print(f"发现表单数:   {result['total_forms']}")
-    print(f"耗时:         {result['duration']:.2f}秒")
-    
-    if result['errors']:
-        print(f"\n⚠️  错误 ({len(result['errors'])} 个):")
-        for err in result['errors'][:5]:
-            print(f"   - {err}")
-    
-    if result['sensitive_info']:
-        print(f"\n🔐 敏感信息 ({len(result['sensitive_info'])} 条):")
-        for info in result['sensitive_info'][:5]:
-            print(f"   - [{info['type']}] {info['match'][:50]}...")
-    
-    print(f"\n{'='*60}")
-    print(f"📄 页面列表 (前10个)")
-    print(f"{'='*60}")
-    for page in result['pages'][:10]:
-        print(f"  [{page['status_code']}] {page['url']}")
-        if page['title']:
-            print(f"       标题: {page['title'][:50]}")
-        if page['forms_count'] > 0:
-            print(f"       表单: {page['forms_count']} 个")
-    
-    if result['forms']:
-        print(f"\n{'='*60}")
-        print(f"📝 表单详情 (前5个)")
-        print(f"{'='*60}")
-        for form in result['forms'][:5]:
-            print(f"  URL: {form['url']}")
-            print(f"  Action: {form['action']}")
-            print(f"  Method: {form['method'].upper()}")
-            print(f"  输入字段: {form['inputs_count']} 个")
-            if form['has_password']:
-                print(f"  ⚠️  包含密码字段")
-            if form['has_file_upload']:
-                print(f"  ⚠️  包含文件上传")
-            print()
-    
-    print(f"{'='*60}")
-    print(f"✅ 爬取完成！")
-    print(f"{'='*60}\n")
-    
-    output_file = "crawler_result.json"
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-    print(f"结果已保存到: {output_file}")
