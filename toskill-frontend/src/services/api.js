@@ -1,11 +1,16 @@
 class ApiService {
   constructor() {
-    this.baseUrl = 'http://localhost:8081/api';
-    this.wsUrl = 'ws://localhost:8081';
+    this.baseUrl = '/api';
+    this.wsUrl = '';
+    this.wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   }
 
   setBaseUrl(url) {
-    this.baseUrl = `${url}/api`;
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      this.baseUrl = `${url}/api`;
+    } else {
+      this.baseUrl = '/api';
+    }
   }
 
   setWsUrl(url) {
@@ -133,7 +138,11 @@ class ApiService {
   }
 
   getWebSocketUrl() {
-    return `${this.wsUrl}/api/ai-chat/ws`;
+    if (this.wsUrl) {
+      return this.wsUrl;
+    }
+    const host = window.location.host;
+    return `${this.wsProtocol}//${host}/api/ai-chat/ws`;
   }
 
   // --- Chat ---

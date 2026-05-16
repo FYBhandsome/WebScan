@@ -42,7 +42,7 @@ defineProps({
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@900&family=Orbitron:wght@900&family=Space+Grotesk:wght@700&display=swap');
+@import url('https://fonts.font.im/css2?family=Montserrat:wght@900&family=Orbitron:wght@900&family=Space+Grotesk:wght@700&display=swap');
 /* 顶栏容器：去除阴影，仅保留 1px 极细底边 */
 .app-header {
   display: flex;
