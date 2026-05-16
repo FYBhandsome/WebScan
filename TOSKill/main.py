@@ -16,8 +16,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, Response
 import uvicorn
 
 from TOSKill.config import settings
@@ -35,16 +34,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-FRONTEND_DIR = project_root / "TOSKillfront"
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info(f"启动 {settings.APP_NAME} v{settings.APP_VERSION}")
     logger.info(f"服务地址: http://{settings.HOST}:{settings.PORT}")
-    if FRONTEND_DIR.exists():
-        logger.info(f"前端静态文件目录: {FRONTEND_DIR}")
     
     from TOSKill.AI.model_check import verify_model_connectivity
     result = verify_model_connectivity()
@@ -108,33 +103,11 @@ async def health_check():
     return {"status": "healthy"}
 
 
-@app.get("/frontend")
-async def serve_frontend():
-    """服务前端页面"""
-    index_file = FRONTEND_DIR / "index.html"
-    if index_file.exists():
-        return FileResponse(index_file)
-    return {"error": "Frontend not found", "hint": "Please ensure TOSKillfront directory exists"}
-
-
-@app.get("/frontend/{file_path:path}")
-async def serve_frontend_files(file_path: str):
-    """服务前端静态文件"""
-    file = FRONTEND_DIR / file_path
-    if file.exists() and file.is_file():
-        return FileResponse(file)
-    return {"error": f"File not found: {file_path}"}
-
-
 from TOSKill.api import ai_chat_router, chat_router, report_router, scan_router
 app.include_router(scan_router, prefix="/api")
 app.include_router(ai_chat_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
-
-if FRONTEND_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
-    logger.info(f"静态文件服务已挂载: /static -> {FRONTEND_DIR}")
 
 
 if __name__ == "__main__":
