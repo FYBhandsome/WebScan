@@ -7,6 +7,8 @@ import os
 import logging
 from typing import List, Dict, Any, Optional
 
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
 from llama_index.core import (
     VectorStoreIndex,
     SimpleDirectoryReader,
@@ -43,6 +45,12 @@ class TOSKillRAGEngine:
         if self._initialized:
             return
         try:
+            from TOSKill.config import settings
+            if not settings.RAG_ENABLED:
+                logger.info("RAG 功能已在配置中禁用，跳过初始化")
+                self._initialized = True
+                return
+
             Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-zh-v1.5")
 
             try:
@@ -64,7 +72,8 @@ class TOSKillRAGEngine:
             logger.info("TOSKillRAGEngine 初始化完成（纯检索模式）")
 
         except Exception as e:
-            logger.error(f"RAG 初始化失败: {e}")
+            logger.warning(f"RAG 初始化失败（系统将以非RAG模式运行）: {e}")
+            self._initialized = True
             self.retriever = None
 
     def retrieve_scan_strategy(

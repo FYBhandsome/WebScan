@@ -20,9 +20,10 @@ from TOSKill.AI.tools import (
     TOOL_MAP, get_tool_by_name, get_all_tool_names,
     INFO_COLLECTION_TOOLS, VULN_SCAN_TOOLS, clean_target
 )
+from TOSKill.analysis.result_analyzer import get_analyzer
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/toskill", tags=["TOSKill API"])
+router = APIRouter(prefix="", tags=["TOSKill API"])
 
 
 # ==================== 请求模型 ====================
@@ -48,6 +49,7 @@ class ToolExecuteRequest(BaseModel):
     tool_name: str = Field(..., description="工具名称")
     target: str = Field(..., description="扫描目标")
     params: Optional[dict] = Field(None, description="工具额外参数")
+    analyze: bool = Field(default=True, description="是否生成AI分析")
 
     @field_validator("tool_name")
     @classmethod
@@ -125,7 +127,7 @@ def _get_tools_for_mode(mode: str, custom_tools: List[str] = None) -> List[str]:
         return [t.name for t in INFO_COLLECTION_TOOLS] + [t.name for t in VULN_SCAN_TOOLS]
 
 
-def _execute_tools_sync(target: str, tools: List[str]) -> Tuple[List[Dict], List[str]]:
+async def _execute_tools_async(target: str, tools: List[str]) -> Tuple[List[Dict], List[str]]:
     results = []
     errors = []
     cleaned_target = clean_target(target)
@@ -137,8 +139,7 @@ def _execute_tools_sync(target: str, tools: List[str]) -> Tuple[List[Dict], List
             continue
         try:
             if hasattr(tool, 'ainvoke') and callable(getattr(tool, 'ainvoke')):
-                import asyncio
-                result = asyncio.run(tool.ainvoke(cleaned_target))
+                result = await tool.ainvoke(cleaned_target)
             else:
                 result = tool.invoke(cleaned_target)
             results.append({
@@ -148,6 +149,7 @@ def _execute_tools_sync(target: str, tools: List[str]) -> Tuple[List[Dict], List
                 "timestamp": datetime.now().isoformat()
             })
         except Exception as e:
+            logger.error(f"工具 {tool_name} 执行失败: {e}")
             errors.append(f"{tool_name}: {str(e)}")
             results.append({
                 "tool": tool_name,
@@ -196,7 +198,7 @@ async def api_info_collection(request: ScanRequest):
     session_id, state = _prepare_session(request, "info_collection")
     tools = _get_tools_for_mode("info_collection", request.tools)
     
-    results, errors = _execute_tools_sync(request.target, tools)
+    results, errors = await _execute_tools_async(request.target, tools)
     
     tool_results = {r["tool"]: r.get("result", r.get("error")) for r in results if r["success"]}
     completed_tasks = [r["tool"] for r in results if r["success"]]
@@ -212,6 +214,8 @@ async def api_info_collection(request: ScanRequest):
             "scan_type": "info_collection",
             "tools_used": tools,
             "results": results,
+            "completed_tasks": completed_tasks,
+            "tool_results": tool_results,
             "errors": errors,
             "timestamp": datetime.now().isoformat()
         }
@@ -223,7 +227,7 @@ async def api_vuln_scan(request: ScanRequest):
     session_id, state = _prepare_session(request, "vuln_scan")
     tools = _get_tools_for_mode("vuln_scan", request.tools)
     
-    results, errors = _execute_tools_sync(request.target, tools)
+    results, errors = await _execute_tools_async(request.target, tools)
     
     tool_results = {r["tool"]: r.get("result", r.get("error")) for r in results if r["success"]}
     completed_tasks = [r["tool"] for r in results if r["success"]]
@@ -249,6 +253,8 @@ async def api_vuln_scan(request: ScanRequest):
             "scan_type": "vuln_scan",
             "tools_used": tools,
             "results": results,
+            "completed_tasks": completed_tasks,
+            "tool_results": tool_results,
             "vulnerabilities": vulnerabilities,
             "errors": errors,
             "timestamp": datetime.now().isoformat()
@@ -261,7 +267,7 @@ async def api_full_scan(request: ScanRequest):
     session_id, state = _prepare_session(request, "full_scan")
     tools = _get_tools_for_mode("full_scan", request.tools)
     
-    results, errors = _execute_tools_sync(request.target, tools)
+    results, errors = await _execute_tools_async(request.target, tools)
     
     tool_results = {r["tool"]: r.get("result", r.get("error")) for r in results if r["success"]}
     completed_tasks = [r["tool"] for r in results if r["success"]]
@@ -303,6 +309,8 @@ async def api_full_scan(request: ScanRequest):
             "scan_type": "full_scan",
             "tools_used": tools,
             "results": results,
+            "completed_tasks": completed_tasks,
+            "tool_results": tool_results,
             "vulnerabilities": vulnerabilities,
             "scan_summary": scan_summary,
             "errors": errors,
@@ -335,30 +343,73 @@ async def api_execute_tool(request: ToolExecuteRequest):
     
     try:
         result = tool.invoke(target)
-        return APIResponse(message="工具执行完成", data={
+        response_data = {
             "tool_name": request.tool_name,
             "target": target,
             "success": True,
             "result": result,
             "timestamp": datetime.now().isoformat()
-        })
+        }
+
+        if request.analyze:
+            try:
+                analyzer = get_analyzer()
+                analysis = analyzer.analyze(
+                    request.tool_name, target, result
+                )
+                response_data["analysis"] = {
+                    "tool_title": analysis.tool_title,
+                    "target": analysis.target,
+                    "success": analysis.success,
+                    "analysis": analysis.analysis,
+                    "summary": analysis.summary,
+                    "formatted": analyzer.format_display(analysis)
+                }
+            except Exception as e:
+                logger.warning(f"AI分析生成失败: {e}")
+                response_data["analysis"] = {
+                    "error": f"分析生成失败: {str(e)}",
+                    "analysis": "AI 分析暂时不可用，请查看原始扫描结果。",
+                    "summary": "分析生成失败"
+                }
+
+        return APIResponse(message="工具执行完成", data=response_data)
     except Exception as e:
+        error_data = {
+            "tool_name": request.tool_name,
+            "target": target,
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+        if request.analyze:
+            try:
+                analyzer = get_analyzer()
+                analysis = analyzer.analyze(
+                    request.tool_name, target, None, error=str(e)
+                )
+                error_data["analysis"] = {
+                    "tool_title": analysis.tool_title,
+                    "target": analysis.target,
+                    "success": False,
+                    "analysis": analysis.analysis,
+                    "summary": analysis.summary,
+                    "formatted": analyzer.format_display(analysis)
+                }
+            except Exception as ae:
+                logger.warning(f"AI失败分析生成失败: {ae}")
+
         return APIResponse(
             code=500,
             message=f"工具执行失败: {str(e)}",
-            data={
-                "tool_name": request.tool_name,
-                "target": target,
-                "success": False,
-                "error": str(e),
-                "timestamp": datetime.now().isoformat()
-            }
+            data=error_data
         )
 
 
 @router.post("/tools/execute/batch", response_model=APIResponse)
 async def api_execute_tools_batch(request: BatchToolExecuteRequest):
-    results, errors = _execute_tools_sync(request.target, request.tool_names)
+    results, errors = await _execute_tools_async(request.target, request.tool_names)
     
     return APIResponse(
         message=f"批量执行完成: {len([r for r in results if r['success']])}/{len(request.tool_names)}",

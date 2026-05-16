@@ -391,7 +391,7 @@ TOSKill/
 |--------|--------|------|
 | `APP_NAME` | TOSKill Security Scanner | 应用名称 |
 | `APP_VERSION` | 1.0.0 | 应用版本 |
-| `HOST` | 0.0.0.0 | 监听地址 |
+| `HOST` | 127.0.0.1 | 监听地址 |
 | `PORT` | 8081 | 监听端口 |
 | `LOG_LEVEL` | INFO | 日志级别 |
 | `LOG_FILE` | logs/toskill.log | 日志文件 |
@@ -409,7 +409,7 @@ TOSKill/
 APP_NAME=TOSKill Security Scanner
 APP_VERSION=1.0.0
 DEBUG=False
-HOST=0.0.0.0
+HOST=127.0.0.1
 PORT=8081
 
 # AI配置

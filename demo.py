@@ -67,77 +67,77 @@ def port_scan(target: str) -> Dict:
     """端口扫描"""
     t = clean_target(target)
     stream_print(f"\n[+] 执行端口扫描：{t}")
-    return portscan(t)
+    return portscan.invoke(t)
 
 @tool
 def dir_brute(target: str) -> Dict:
     """目录扫描"""
     t = clean_target(target)
     stream_print(f"\n[+] 执行目录扫描：{t}")
-    return dirscan(t)
+    return dirscan.invoke(t)
 
 @tool
 def subdomain_scan(target: str) -> Dict:
     """子域名扫描"""
     t = clean_target(target)
     stream_print(f"\n[+] 执行子域名扫描：{t}")
-    return subdomain(t)
+    return subdomain.invoke(t)
 
 @tool
 def waf_detect_scan(target: str) -> Dict:
     """WAF检测"""
     t = clean_target(target)
     stream_print(f"\n[+] 执行WAF检测：{t}")
-    return waf_detect(t)
+    return waf_detect.invoke(t)
 
 @tool
 def baseinfo_scan(target: str) -> Dict:
     """基础信息"""
     t = clean_target(target)
     stream_print(f"\n[+] 执行基础信息收集：{t}")
-    return baseinfo(t)
+    return baseinfo.invoke(t)
 
 @tool
 def cdn_detect_scan(target: str) -> Dict:
     """CDN检测"""
     t = clean_target(target)
     stream_print(f"\n[+] 执行CDN检测：{t}")
-    return cdn_detect(t)
+    return cdn_detect.invoke(t)
 
 @tool
 def infoleak_scan(target: str) -> Dict:
     """信息泄露"""
     t = clean_target(target)
     stream_print(f"\n[+] 执行信息泄露扫描：{t}")
-    return infoleak_scan(t)
+    return infoleak_scan.invoke(t)
 
 @tool
 def ip_locate_scan(target: str) -> Dict:
     """IP定位"""
     t = clean_target(target)
     stream_print(f"\n[+] 执行IP定位：{t}")
-    return ip_locate(t)
+    return ip_locate.invoke(t)
 
 @tool
 def webside_query_scan(target: str) -> Dict:
     """备案查询"""
     t = clean_target(target)
     stream_print(f"\n[+] 执行备案查询：{t}")
-    return webside_query(t)
+    return webside_query.invoke(t)
 
 @tool
 def web_weight_scan(target: str) -> Dict:
     """权重查询"""
     t = clean_target(target)
     stream_print(f"\n[+] 执行权重查询：{t}")
-    return web_weight(t)
+    return web_weight.invoke(t)
 
 @tool
 def cms_detect_scan(target: str) -> Dict:
     """CMS识别"""
     t = clean_target(target)
     stream_print(f"\n[+] 执行CMS识别：{t}")
-    return cms_detect(t)
+    return cms_detect.invoke(t)
 
 tool_map = {t.name: t for t in [
     port_scan, dir_brute, subdomain_scan,
@@ -317,7 +317,7 @@ app = wf.compile()
 
 # ==================== 启动 ====================
 if __name__ == "__main__":
-    stream_print("🚀 原子化智能扫描系统【完美修复版】", 0.02)
+    stream_print("🚀 原子化智能扫描系统", 0.02)
     target = clean_target(input("请输入扫描目标："))
     stream_print(f"✅ 标准化目标：{target}")
 

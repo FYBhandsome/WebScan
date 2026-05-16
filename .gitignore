@@ -1,4 +1,10 @@
+# ============================================
+# WebScan 项目 .gitignore
+# ============================================
+
+# -------------------------------------------
 # Python
+# -------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
@@ -10,7 +16,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-backup/
 lib/
 lib64/
 parts/
@@ -22,7 +27,9 @@ wheels/
 *.egg
 MANIFEST
 
+# -------------------------------------------
 # Virtual Environment
+# -------------------------------------------
 venv/
 ENV/
 env/
@@ -31,21 +38,42 @@ env/
 .env/
 .conda/
 
-# PyCharm
+# -------------------------------------------
+# PyCharm / IntelliJ
+# -------------------------------------------
 .idea/
 *.iml
 *.iws
 .idea_modules/
 
-# VSCode
+# -------------------------------------------
+# VS Code
+# -------------------------------------------
 .vscode/
 *.code-workspace
 
+# -------------------------------------------
+# Trae IDE
+# -------------------------------------------
+.trae/
+
+# -------------------------------------------
+# Sublime / Eclipse / Other IDEs
+# -------------------------------------------
+*.sublime-project
+*.sublime-workspace
+.project
+.settings/
+
+# -------------------------------------------
 # Jupyter Notebook
+# -------------------------------------------
 .ipynb_checkpoints
 *.ipynb
 
-# pytest
+# -------------------------------------------
+# pytest / Coverage
+# -------------------------------------------
 .pytest_cache/
 .coverage
 htmlcov/
@@ -55,31 +83,44 @@ coverage.xml
 *.cover
 .hypothesis/
 
+# -------------------------------------------
 # mypy
+# -------------------------------------------
 .mypy_cache/
 .dmypy.json
 dmypy.json
 
-# Database
+# -------------------------------------------
+# Ruff
+# -------------------------------------------
+.ruff_cache/
+
+# -------------------------------------------
+# Database (SQLite)
+# -------------------------------------------
 *.db
 *.db-shm
 *.db-wal
 *.sqlite
 *.sqlite3
 
+# -------------------------------------------
 # Logs
+# -------------------------------------------
 logs/
 *.log
 *.log.*
 
-# Environment Variables
-
-.env.local
+# -------------------------------------------
+# Environment / Configuration
+# -------------------------------------------
 .env
-*.env.*
+.env.*
+.env.local
 
-
-# OS
+# -------------------------------------------
+# OS Generated Files
+# -------------------------------------------
 .DS_Store
 .DS_Store?
 ._*
@@ -89,64 +130,79 @@ ehthumbs.db
 Thumbs.db
 desktop.ini
 
-# Temporary files
+# -------------------------------------------
+# Temporary / Editor Files
+# -------------------------------------------
 *.tmp
 *.temp
 *.swp
 *.swo
 *~
 
-# Node.js (if any frontend)
+# -------------------------------------------
+# Backup Files
+# -------------------------------------------
+backup/
+*.bak
+*.backup
+*.old
+
+# -------------------------------------------
+# Node.js (Frontend Projects)
+# -------------------------------------------
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 package-lock.json
 yarn.lock
 
-# Build artifacts
+# -------------------------------------------
+# Frontend Build Outputs
+# -------------------------------------------
+dist-ssr
+*.local
+
+# -------------------------------------------
+# Build Artifacts / Binaries
+# -------------------------------------------
 *.exe
 *.dll
 *.dylib
 *.bin
 
-# Test results
+# -------------------------------------------
+# Test Results
+# -------------------------------------------
 test_results/
 *_results.json
 *.test
 
-# Documentation builds
+# -------------------------------------------
+# Documentation Builds
+# -------------------------------------------
 docs/_build/
 site/
 
-# Backup files
-*.bak
-*.backup
-*.old
-
-# Project specific
-backend/data/
-backend/logs/
-backend/poc/generated_pocs/
-Seebug_Agent/generated_pocs/
-
-# IDE specific files
-*.sublime-project
-*.sublime-workspace
-.project
-.settings/
-
-# Large binary files
+# -------------------------------------------
+# Large Binary / Data Files
+# -------------------------------------------
 *.mmdb
 *.mmdb.gz
 
-# Cache directories
+# -------------------------------------------
+# Cache Directories
+# -------------------------------------------
 .cache/
 cache/
 tmp/
 temp/
 
+# -------------------------------------------
 # Security / Secrets
+# -------------------------------------------
 *.pem
 *.key
 *.crt
@@ -154,14 +210,32 @@ temp/
 secrets/
 credentials/
 
+# -------------------------------------------
 # Playwright
+# -------------------------------------------
 .playwright/
 test-results/
 playwright-report/
 playwright/.cache/
 
-# Trae IDE
-.trae/
-backup/
+# -------------------------------------------
+# Project Specific: Runtime Data
+# -------------------------------------------
+data/
+reports/
+TOSKill/data/
+TOSKill/reports/
+backend/data/
+backend/logs/
 
-RAG
+# -------------------------------------------
+# Project Specific: Generated POCs
+# -------------------------------------------
+backend/poc/generated_pocs/
+Seebug_Agent/generated_pocs/
+
+# -------------------------------------------
+# Project Specific: Custom Scripts (keep .gitkeep)
+# -------------------------------------------
+TOSKill/scripts/custom/*
+!TOSKill/scripts/custom/.gitkeep

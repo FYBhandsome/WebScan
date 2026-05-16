@@ -335,7 +335,7 @@ class TOSKillSettings(BaseSettings):
     DEBUG: bool = False
     
     # 服务器配置
-    HOST: str = "0.0.0.0"
+    HOST: str = "127.0.0.1"
     PORT: int = 8081
     
     # CORS配置
@@ -369,7 +369,7 @@ class TOSKillSettings(BaseSettings):
 APP_NAME=TOSKill Security Scanner
 APP_VERSION=1.0.0
 DEBUG=False
-HOST=0.0.0.0
+HOST=127.0.0.1
 PORT=8081
 
 # AI配置
@@ -530,7 +530,7 @@ pytest test_toskill_workflow.py -v
 ```bash
 pip install gunicorn
 
-gunicorn TOSKill.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8081
+gunicorn TOSKill.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 127.0.0.1:8081
 ```
 
 #### 使用Nginx反向代理

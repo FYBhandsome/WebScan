@@ -27,7 +27,7 @@ from langchain_openai import ChatOpenAI
 from .state import ScanState, create_initial_state, append_chat, update_state
 from .tools import get_tool_by_name, get_tool_sequence, is_auth_expired, get_auth_remaining_time
 from ..config import settings
-from ..RAGdemo.retriever import get_scan_strategy
+from ..RAG.retriever import get_scan_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -899,6 +899,14 @@ async def safe_ws_send(session_id: str, message: Dict) -> bool:
         logger.error(f"[{session_id}] WebSocket发送失败: {e}")
         memory_store.clear_websocket_callback(session_id)
         return False
+
+
+async def send_thinking_token(session_id: str, token: str):
+    """推送单个思考 token 到前端"""
+    await safe_ws_send(session_id, {
+        "type": "ai_thinking",
+        "payload": {"token": token}
+    })
 
 
 def format_tool_result(tool_name: str, target: str, result: Any) -> str:
@@ -2199,8 +2207,25 @@ async def execute_task(state: ScanState) -> ScanState:
         return update_state(state, errors=state.get("errors", []) + [f"{task}: {str(e)}"])
 
 
+def _parse_response(full_response: str):
+    """从LLM完整响应中分离思考过程和最终回复"""
+    import re
+    thought = ""
+    content = full_response
+    match = re.match(
+        r'(?:思考[：:]\s*|分析[：:]\s*|Thought:\s*)(.*?)(?=回复[：:]|回答[：:]|Response:|$)',
+        full_response, re.DOTALL
+    )
+    if match:
+        thought = match.group(1).strip()
+        remaining = full_response[match.end():].strip()
+        remaining = re.sub(r'^(?:回复[：:]|回答[：:]|Response:)\s*', '', remaining)
+        content = remaining if remaining else content
+    return thought, content
+
+
 async def chat(state: ScanState) -> ScanState:
-    """原子4: 聊天"""
+    """原子4: 聊天（流式思考）"""
     logger.info(f"[{state.get('task_id')}] 聊天节点")
     
     session_id = state.get("websocket_session_id") or state.get("task_id")
@@ -2220,25 +2245,36 @@ async def chat(state: ScanState) -> ScanState:
 目标：{target}
 自然简洁回复。"""
     
-    ai_msg = llm.invoke(prompt).content
-    logger.info(f"🤖 AI：{ai_msg}")
+    await safe_ws_send(session_id, {
+        "type": "ai_thinking_start",
+        "payload": {}
+    })
+    
+    full_response = ""
+    async for chunk in llm.astream(prompt):
+        token = chunk.content if hasattr(chunk, 'content') else str(chunk)
+        if token:
+            full_response += token
+            await send_thinking_token(session_id, token)
+    
+    thought, content = _parse_response(full_response)
     
     if ws_callback:
         try:
             await ws_callback({
                 "type": "ai_chat",
-                "payload": {"content": ai_msg, "context": "scan_assistant"}
+                "payload": {"thought": thought, "content": content}
             })
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
     
-    new_state = append_chat(state, "assistant", ai_msg)
+    new_state = append_chat(state, "assistant", content)
     
     memory_store.append_chat(session_id, "user", user_input)
-    memory_store.append_chat(session_id, "assistant", ai_msg)
+    memory_store.append_chat(session_id, "assistant", content)
     
     return update_state(new_state, 
-        chat_summary=ai_msg[:200],
+        chat_summary=content[:200],
         conversation_turn=conversation_turn,
         last_activity_time=datetime.now().isoformat()
     )

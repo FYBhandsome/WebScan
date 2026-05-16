@@ -1,0 +1,819 @@
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ws } from '../services/websocket.js'
+import { showToast, globalState } from '../store.js'
+
+export function useAgentChat() {
+  const inputText = ref('')
+  const workspaceBlocks = ref([])
+  const isTyping = ref(false)
+  const waitingForChoice = ref(false)
+  const currentThinking = ref('')
+  const isThinking = ref(false)
+  const thinkingExpanded = ref(true)
+  const scanProgress = ref({ current: 0, total: 0, activeTool: '' })
+  const pendingInputRequest = ref(null)
+  const scanStatus = ref('idle')
+
+  const scanActive = ref(false)
+  const pendingModeSelect = ref(null)
+  const showModeSelect = ref(false)
+  const scriptQueue = ref([])
+  const currentScriptIndex = ref(0)
+  const scriptLoopActive = ref(false)
+  const overallPlan = ref(null)
+  const pendingUploadScript = ref(false)
+  const pendingGenerateScript = ref(false)
+
+  // === UI 辅助方法 ===
+  const addBlock = (type, data = {}) => {
+    workspaceBlocks.value.push({
+      id: Date.now() + Math.random(),
+      timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
+      type,
+      ...data
+    })
+  }
+
+  const addStreamText = (content) => {
+    const lastBlock = workspaceBlocks.value[workspaceBlocks.value.length - 1]
+    if (lastBlock && lastBlock.streaming && lastBlock.type === 'agent_text') {
+      lastBlock.content += content
+    } else {
+      addBlock('agent_text', { content, streaming: true })
+    }
+  }
+
+  const stopStreaming = () => {
+    const lastBlock = workspaceBlocks.value[workspaceBlocks.value.length - 1]
+    if (lastBlock && lastBlock.streaming) {
+      lastBlock.streaming = false
+    }
+  }
+
+  const addInfoBlock = (message) => {
+    addBlock('agent_info', { content: message })
+  }
+
+  const addErrorBlock = (message) => {
+    addBlock('agent_error', { content: message })
+  }
+
+  const streamingTypes = ['script_analyzing', 'script_generating', 'ai_thinking', 'ai_thinking_start']
+  const checkStopStreaming = (data) => {
+    if (!streamingTypes.includes(data.type)) stopStreaming()
+  }
+
+  // === 核心业务逻辑 (纯 WebSocket 驱动) ===
+  const sendMessage = async (textOverride) => {
+    const text = textOverride || inputText.value.trim()
+    if (!text) return
+
+    inputText.value = ''
+    addBlock('user_command', { content: text })
+
+    if (waitingForChoice.value) {
+      if (text.toLowerCase() === 'stop' || text.toLowerCase() === '停止') {
+        ws.sendConfirm('2')
+        waitingForChoice.value = false
+      } else if (ws.isConnected()) {
+        ws.sendChat(text)
+      }
+      return
+    }
+
+    isTyping.value = true
+
+    if (ws.isConnected()) {
+      const urlPattern = /^(https?:\/\/)?([\w-]+\.)+[\w-]+(\/[\w-./?%&=#]*)?$/i
+      const isStandaloneUrl = urlPattern.test(text) || (text.includes('.') && !text.includes(' '))
+      const hasModeKeyword = /\b(info|vuln|full|信息收集|漏洞扫描|完整扫描)\b/i.test(text)
+
+      if (isStandaloneUrl && !hasModeKeyword) {
+        showModeSelect.value = true
+        pendingModeSelect.value = { target: text }
+        scanActive.value = true
+        addBlock('agent_mode_select', {
+          target: text,
+          description: '请选择扫描模式以继续：',
+          modes: [
+            { key: 'info', label: '信息收集', desc: 'WHOIS、DNS、子域名、端口扫描等', badge: '轻量·快速', icon: 'target' },
+            { key: 'vuln', label: '漏洞扫描', desc: 'XSS、SQL注入、CSRF等Web漏洞检测', badge: '中等·3-5分钟', icon: 'shield' },
+            { key: 'full', label: '完整扫描', desc: '信息收集+漏洞扫描+AI决策', badge: '深度·5-10分钟', icon: 'layers' }
+          ],
+          resolved: false
+        })
+        return
+      }
+
+      if (isStandaloneUrl) ws.startScan(text, 'full')
+      else ws.sendChat(text)
+    } else {
+      isTyping.value = false
+      addBlock('agent_text', { content: '实时连接未就绪，无法发送指令。请检查网络或后端状态。' })
+    }
+  }
+
+  const handleQuickAction = (mode) => {
+    const target = inputText.value.trim()
+    if (!target) {
+      showToast('请先在输入框中填入扫描目标URL', 'warning')
+      return
+    }
+    addBlock('user_command', { content: `[执行参数]: mode=${mode}, target=${target}` })
+    isTyping.value = true
+    
+    if (ws.isConnected()) {
+      ws.startScan(target, mode)
+    } else {
+      isTyping.value = false
+      addBlock('agent_text', { content: `实时连接未就绪，无法执行任务。` })
+    }
+    inputText.value = ''
+  }
+
+  const handleModeSelect = (block, mode) => {
+    block.resolved = true
+    showModeSelect.value = false
+    const target = pendingModeSelect.value?.target || ''
+    pendingModeSelect.value = null
+    addBlock('user_command', { content: `[选择模式]: ${mode === 'info' ? '信息收集' : mode === 'vuln' ? '漏洞扫描' : '完整扫描'} | 目标: ${target}` })
+    isTyping.value = true
+    scanActive.value = true
+    currentThinking.value = ''
+    isThinking.value = true
+    const planLines = [
+      `## 思考过程`,
+      ``,
+      `正在为目标 **${target}** 制定扫描策略...`,
+      ``,
+      `**意图识别**: 扫描 → 模式: ${mode === 'info' ? '信息收集' : mode === 'vuln' ? '漏洞扫描' : '完整扫描'}`,
+      ``,
+      `## 总体规划`,
+      ``,
+      `扫描模式: **${mode === 'info' ? '信息收集' : mode === 'vuln' ? '漏洞扫描' : '完整扫描'}**`,
+      ``,
+      `### 可用脚本清单`,
+    ]
+    const infoScripts = ['portscan', 'subdomain', 'dirscan', 'waf', 'cdnexist', 'whatcms', 'infoleak', 'iplocating', 'webside', 'webweight', 'baseinfo']
+    const vulnScripts = ['sqli', 'xss', 'csrf', 'fileupload', 'cmdi', 'ssrf', 'lfi', 'weakpass']
+    let scripts = []
+    if (mode === 'info') scripts = infoScripts
+    else if (mode === 'vuln') scripts = [...vulnScripts]
+    else scripts = [...infoScripts, ...vulnScripts]
+    scripts.forEach((s, i) => { planLines.push(`${i + 1}. \`${s}\``) })
+    planLines.push('', `> 如需执行自定义脚本，可点击下方【上传脚本】或【生成脚本】`)
+    isThinking.value = false
+    addBlock('agent_text', { thought: `目标分析: ${target}\n模式: ${mode}`, content: planLines.join('\n') })
+    scriptQueue.value = scripts.map(s => ({ tool_name: s, status: 'pending', target }))
+    currentScriptIndex.value = 0
+    scriptLoopActive.value = true
+    setTimeout(() => triggerScriptConfirm(), 500)
+  }
+
+  const triggerScriptConfirm = () => {
+    if (!scriptLoopActive.value) return
+    if (currentScriptIndex.value >= scriptQueue.value.length) {
+      scriptLoopActive.value = false
+      scanActive.value = false
+      isTyping.value = false
+      addBlock('agent_text', { content: '## 所有脚本执行完毕\n\n扫描流程已完成。如需查看详细报告，请前往**报告页面**。' })
+      return
+    }
+    const script = scriptQueue.value[currentScriptIndex.value]
+    script.status = 'confirming'
+    isTyping.value = false
+    addBlock('agent_action_request', {
+      actionSource: 'script_confirm',
+      title: `确认执行: ${script.tool_name}`,
+      description: `目标: ${script.target}`,
+      params: {
+        'Script': script.tool_name,
+        'Target': script.target,
+        'Progress': `${currentScriptIndex.value + 1}/${scriptQueue.value.length}`
+      },
+      guideText: '如需执行自定义脚本，可点击下方【上传脚本】或【生成脚本】',
+      options: [
+        { key: 'execute', label: '执行', style: 'btn-primary' },
+        { key: 'skip', label: '跳过', style: 'btn-ghost' },
+        { key: 'stop_loop', label: '停止循环', style: 'btn-danger' },
+        { key: 'upload_script', label: '上传脚本', style: 'btn-outline' },
+        { key: 'generate_script', label: '生成脚本', style: 'btn-outline' }
+      ],
+      resolved: false
+    })
+  }
+
+  const showUploadScriptForm = (block) => {
+    addBlock('agent_input_request', {
+      type: 'agent_input_request',
+      title: '上传自定义脚本',
+      description: '请粘贴你的 Python 脚本代码。脚本必须包含 `run(target: str)` 函数并返回 `Dict` 类型结果。系统将自动进行安全审查。',
+      fields: [{
+        field: 'script_name',
+        label: '脚本名称',
+        description: '为脚本起一个名字（可选，不填则自动生成）',
+        placeholder: '例如: custom_scan',
+        required: false,
+        validation: '',
+        options: [],
+        value: ''
+      }, {
+        field: 'script_content',
+        label: '脚本内容',
+        description: '脚本必须包含 def run(target): 函数',
+        placeholder: 'def run(target):\n    # your code here\n    return {"success": True}',
+        required: true,
+        validation: 'python_code',
+        options: [],
+        value: ''
+      }],
+      resolved: false,
+      context: 'upload_script',
+      sourceBlock: block
+    })
+  }
+
+  const showGenerateScriptForm = (block) => {
+    addBlock('agent_input_request', {
+      type: 'agent_input_request',
+      title: 'AI 生成扫描脚本',
+      description: '请描述你需要的脚本功能，AI 将自动生成对应的 Python 扫描脚本。',
+      fields: [{
+        field: 'script_description',
+        label: '脚本功能描述',
+        description: '详细描述脚本需要检测的内容，例如"检测目标网站是否存在敏感文件泄露"',
+        placeholder: '检测目标网站是否存在敏感文件泄露',
+        required: true,
+        validation: 'text',
+        options: [],
+        value: ''
+      }],
+      resolved: false,
+      context: 'generate_script',
+      sourceBlock: block
+    })
+  }
+
+  const handleStop = () => {
+    if (scriptLoopActive.value) scriptLoopActive.value = false
+    scanActive.value = false
+    isTyping.value = false
+    isThinking.value = false
+    showModeSelect.value = false
+    ws.send('stop_scan', {})
+    addBlock('agent_info', { content: '已发送停止请求' })
+  }
+
+  // === 交互卡片事件分发 ===
+  const handleBlockAction = (block, choiceKey, choiceLabel) => {
+    block.resolved = true
+    addBlock('user_command', { content: `[授权决策]: ${choiceLabel}` })
+    isTyping.value = true
+
+    if (!ws.isConnected()) {
+        isTyping.value = false
+        return showToast('WebSocket 已断开', 'error')
+    }
+
+    switch (block.actionSource) {
+      case 'interaction_required':
+        waitingForChoice.value = false
+        ws.sendConfirm(choiceKey)
+        break
+      case 'high_risk':
+        ws.send('high_risk_confirm', { choice: choiceKey })
+        break
+      case 'tool_confirm':
+        ws.sendToolConfirm(choiceKey === 'approve')
+        break
+      case 'alternative_options':
+        ws.sendAlternativeSelected(choiceKey, choiceLabel)
+        break
+      case 'script_confirm':
+        if (choiceKey === 'execute') {
+          const script = scriptQueue.value[currentScriptIndex.value]
+          script.status = 'running'
+          isTyping.value = true
+          addBlock('agent_info', { content: `正在执行脚本: ${script.tool_name}` })
+          ws.send('execute_tool', { tool_name: script.tool_name, target: script.target })
+        } else if (choiceKey === 'skip') {
+          currentScriptIndex.value++
+          addBlock('agent_info', { content: `已跳过: ${scriptQueue.value[currentScriptIndex.value - 1]?.tool_name || '-'}` })
+          triggerScriptConfirm()
+        } else if (choiceKey === 'stop_loop') {
+          scriptLoopActive.value = false
+          scanActive.value = false
+          isTyping.value = false
+          addBlock('agent_info', { content: '脚本循环已终止' })
+        } else if (choiceKey === 'upload_script') {
+          pendingUploadScript.value = true
+          showUploadScriptForm(block)
+        } else if (choiceKey === 'generate_script') {
+          pendingGenerateScript.value = true
+          showGenerateScriptForm(block)
+        }
+        break
+    }
+  }
+
+  const submitBlockInput = (block, val) => {
+    if (!val) return showToast('内容不能为空', 'warning')
+    block.resolved = true
+    addBlock('user_command', { content: `[参数输入]: ${val}` })
+    isTyping.value = true
+    ws.send('input_response', { field: block.payload.field, value: val })
+  }
+
+  const handleInputResponse = (block, value) => {
+    if (block.type === 'agent_input_request' && Array.isArray(value)) {
+      const fields = value
+      for (const field of fields) {
+        if (field.required && !field.value) {
+          return showToast(`${field.label} 为必填项`, 'warning')
+        }
+      }
+      block.resolved = true
+      pendingInputRequest.value = null
+
+      if (block.context === 'upload_script') {
+        pendingUploadScript.value = false
+        const scriptName = fields.find(f => f.field === 'script_name')?.value || null
+        const scriptContent = fields.find(f => f.field === 'script_content')?.value || ''
+        const name = scriptName || `custom_${Date.now().toString(36)}`
+        addBlock('user_command', { content: `[上传脚本]: ${name}` })
+        isTyping.value = true
+        ws.send('script_content', { script_content: scriptContent, script_name: name })
+        return
+      } else if (block.context === 'generate_script') {
+        pendingGenerateScript.value = false
+        const description = fields.find(f => f.field === 'script_description')?.value || ''
+        addBlock('user_command', { content: `[生成脚本]: ${description}` })
+        isTyping.value = true
+        ws.send('script_description', { description: description })
+        return
+      }
+
+      const fieldLabels = fields.map(f => `${f.label}=${f.value}`).join(', ')
+      addBlock('user_command', { content: `[参数提交]: ${fieldLabels}` })
+      isTyping.value = true
+      for (const field of fields) {
+        if (field.value) {
+          ws.send('input_response', { field: field.field, value: field.value })
+        }
+      }
+      return
+    }
+    if (!value && block.required) return showToast('此字段为必填项', 'warning')
+    block.resolved = true
+    pendingInputRequest.value = null
+    addBlock('user_command', { content: `[参数提交]: ${block.label} = ${value}` })
+    isTyping.value = true
+    ws.send('input_response', { field: block.field, value })
+  }
+
+  // === WebSocket 消息路由 ===
+  const handleWSMessage = (data) => {
+    checkStopStreaming(data)
+
+    switch (data.type) {
+      case 'connected':
+        addBlock('agent_text', { content: `已连接到 AI Agent 引擎\nSession: ${data.payload?.session_id || 'Active'}\n可用工具: ${data.payload?.available_tools?.length || 0} 个` })
+        break
+
+      case 'ai_thinking_start':
+        isThinking.value = true
+        currentThinking.value = ''
+        if (!isTyping.value) isTyping.value = true
+        break
+
+      case 'ai_thinking':
+        currentThinking.value += data.payload?.token || ''
+        break
+
+      case 'ai_chat':
+      case 'ai_message':
+        isTyping.value = false
+        isThinking.value = false
+        const msgContent = data.payload?.content?.trim()
+        const msgThought = currentThinking.value || data.payload?.thought?.trim()
+        if (msgContent || msgThought) {
+          addBlock('agent_text', { thought: msgThought || '', content: msgContent || '' })
+        }
+        currentThinking.value = ''
+        break
+
+      case 'interaction_required':
+        isTyping.value = false
+        waitingForChoice.value = true
+        addBlock('agent_action_request', {
+          actionSource: 'interaction_required',
+          title: '需要进一步指令',
+          description: `目标: ${data.payload.target} | 规划节点: ${data.payload.next_task}`,
+          options: data.payload.options.map(opt => ({ key: opt.key, label: opt.label, style: 'btn-secondary' })),
+          resolved: false
+        })
+        break
+
+      case 'high_risk_vulnerability_detected':
+        isTyping.value = false
+        addBlock('agent_action_request', {
+          actionSource: 'high_risk',
+          title: '高危漏洞确认 (CRITICAL)',
+          description: data.payload.message || '系统检测到高危漏洞，请指示下一步动作。',
+          params: { 'Vuln count': data.payload.vulnerabilities?.length || 1, 'Severity': 'HIGH' },
+          options: [
+            { key: 'continue', label: '继续扫描', style: 'btn-primary' },
+            { key: 'poc_verify', label: 'POC验证', style: 'btn-secondary' },
+            { key: 'stop', label: '中止并阻断', style: 'btn-danger' }
+          ],
+          resolved: false
+        })
+        break
+
+      case 'scan_started':
+        scanStatus.value = 'scanning'
+        addInfoBlock(`扫描已启动 | 目标: ${data.payload?.target || '-'}`)
+        break
+
+      case 'scan_flow_started':
+        scanProgress.value = { current: 0, total: data.payload?.total_tasks || 0, activeTool: '' }
+        addInfoBlock(`工作流启动 | 模式: ${data.payload?.mode || '-'} | 计划任务: ${data.payload?.total_tasks || 0} 个`)
+        break
+
+      case 'scan_completed':
+        scanStatus.value = 'completed'
+        isTyping.value = false
+        const tasks = data.payload?.completed_tasks || []
+        const vulnCount = data.payload?.vulnerabilities_count ?? 0
+        let summary = `扫描完成\n目标: ${data.payload?.target || '-'}\n已完成工具: ${tasks.length} 个\n发现漏洞: ${vulnCount} 个`
+        if (data.payload?.report) summary += `\n报告: ${data.payload.report}`
+        addBlock('agent_text', { content: summary })
+        break
+
+      case 'scan_cancelled':
+        scanStatus.value = 'idle'
+        isTyping.value = false
+        addInfoBlock('扫描已取消')
+        break
+
+      case 'scan_terminated':
+        scanStatus.value = 'error'
+        isTyping.value = false
+        addErrorBlock(`扫描终止 | 原因: ${data.payload?.reason || '-'} | 建议: ${data.payload?.suggestion || '-'}`)
+        break
+
+      case 'workflow_progress':
+        scanProgress.value.current = data.payload?.completed ?? scanProgress.value.current
+        scanProgress.value.total = data.payload?.total ?? scanProgress.value.total
+        addInfoBlock(`进度: ${data.payload?.stage || '...'} (${data.payload?.completed || 0}/${data.payload?.total || 0})`)
+        break
+
+      case 'task_started':
+        scanProgress.value.activeTool = data.payload?.tool || ''
+        addInfoBlock(`执行工具: ${data.payload?.tool || '-'} → ${data.payload?.target || '-'}`)
+        break
+
+      case 'task_completed':
+        isTyping.value = false
+        const analysis = data.payload?.analysis || ''
+        const vuln = data.payload?.vulnerable ? '发现漏洞' : '未发现漏洞'
+        const auth = data.payload?.auth_obtained ? ' | 已获取认证' : ''
+        if (scriptLoopActive.value && currentScriptIndex.value < scriptQueue.value.length) {
+          const script = scriptQueue.value[currentScriptIndex.value]
+          script.status = 'completed'
+          addBlock('agent_script_result', {
+            tool_name: data.payload?.tool || script.tool_name,
+            target: script.target,
+            status: 'completed',
+            vulnerable: data.payload?.vulnerable || false,
+            analysis: analysis,
+            raw_result: data.payload?.raw_result || {},
+            auth_obtained: data.payload?.auth_obtained || false,
+            timestamp: data.payload?.timestamp || new Date().toISOString()
+          })
+          currentScriptIndex.value++
+          setTimeout(() => triggerScriptConfirm(), 800)
+        } else {
+          addBlock('agent_text', { content: `工具完成: ${data.payload?.tool || '-'}\n${vuln}${auth}\n${analysis}` })
+        }
+        break
+
+      case 'task_error':
+        isTyping.value = false
+        addErrorBlock(`工具错误 | ${data.payload?.tool || '-'}: ${data.payload?.error || '未知错误'}`)
+        break
+
+      case 'task_skipped':
+        addInfoBlock(`跳过工具: ${data.payload?.tool || '-'} | 原因: ${data.payload?.reason || '-'}`)
+        break
+
+      case 'ai_decision':
+        const reactInfo = data.payload?.react_selected ? ` | ReACT: ${data.payload?.react_thought || ''}` : ''
+        addInfoBlock(`AI 决策: ${data.payload?.next_task || '-'} | 进度: ${data.payload?.progress || ''}${reactInfo}`)
+        break
+
+      case 'ai_decision_complete':
+        addInfoBlock('所有任务决策完成')
+        break
+
+      case 'intent_recognized':
+        addInfoBlock(`意图识别: ${data.payload?.intent_type || '-'}${data.payload?.tool_name ? ' → ' + data.payload.tool_name : ''} | 置信度: ${data.payload?.confidence ?? '-'}`)
+        break
+
+      case 'intent_validation_error':
+        addErrorBlock(`校验错误: ${data.payload?.error || '-'}`)
+        break
+
+      case 'input_request':
+        isTyping.value = false
+        const field = data.payload
+        const inputBlock = {
+          type: 'agent_input_request',
+          title: '参数输入',
+          description: field.description || '请补充以下信息',
+          fields: [{
+            field: field.field,
+            label: field.label,
+            description: field.description || '',
+            placeholder: field.placeholder || '',
+            required: field.required !== false,
+            validation: field.validation || '',
+            options: field.options || [],
+            value: ''
+          }],
+          resolved: false
+        }
+        addBlock('agent_input_request', inputBlock)
+        pendingInputRequest.value = workspaceBlocks.value[workspaceBlocks.value.length - 1]
+        break
+
+      case 'multi_field_input_request':
+        isTyping.value = false
+        const multiFields = (data.payload?.fields || []).map(f => ({
+          field: f.field,
+          label: f.label,
+          description: f.description || '',
+          placeholder: f.placeholder || '',
+          required: f.required !== false,
+          validation: f.validation || '',
+          options: f.options || [],
+          value: ''
+        }))
+        const multiBlock = {
+          type: 'agent_input_request',
+          title: '参数输入',
+          description: data.payload?.message || '请补充以下信息',
+          fields: multiFields,
+          resolved: false
+        }
+        addBlock('agent_input_request', multiBlock)
+        pendingInputRequest.value = workspaceBlocks.value[workspaceBlocks.value.length - 1]
+        break
+
+      case 'tool_confirm_required':
+        isTyping.value = false
+        addBlock('agent_action_request', {
+          actionSource: 'tool_confirm',
+          title: `确认执行: ${data.payload?.tool_name || '-'}`,
+          description: data.payload?.description || `目标: ${data.payload?.target || '-'}`,
+          params: { 'Tool': data.payload?.tool_name || '-', 'Target': data.payload?.target || '-' },
+          options: [
+            { key: 'approve', label: '确认执行', style: 'btn-primary' },
+            { key: 'reject', label: '拒绝', style: 'btn-ghost' }
+          ],
+          resolved: false
+        })
+        break
+
+      case 'tool_not_found':
+        isTyping.value = false
+        const notFoundOpts = (data.payload?.options || []).map(o => ({ key: o.key, label: o.label, style: 'btn-secondary' }))
+        addBlock('agent_action_request', {
+          actionSource: 'interaction_required',
+          title: `工具未找到: ${data.payload?.tool_name || '-'}`,
+          description: data.payload?.message || '请选择替代工具',
+          options: notFoundOpts,
+          resolved: false
+        })
+        break
+
+      case 'tool_execution_started':
+        addInfoBlock(`工具执行开始: ${data.payload?.tool_name || '-'}`)
+        break
+
+      case 'tool_execution_completed':
+        addInfoBlock(`工具执行完成: ${data.payload?.tool_name || '-'}`)
+        break
+
+      case 'direct_tool_started':
+        addInfoBlock(`直接执行工具: ${data.payload?.tool || '-'} → ${data.payload?.target || '-'}`)
+        break
+
+      case 'direct_tool_completed':
+        isTyping.value = false
+        addBlock('agent_text', { content: `直接执行完成: ${data.payload?.tool || '-'}\n${data.payload?.formatted_result || data.payload?.analysis || ''}` })
+        break
+
+      case 'direct_tool_error':
+        isTyping.value = false
+        addErrorBlock(`直接执行失败 | ${data.payload?.tool || '-'}: ${data.payload?.error || '未知错误'}`)
+        break
+
+      case 'report_generation_started':
+        isTyping.value = true
+        addInfoBlock(`报告生成中... | 工具数: ${data.payload?.tool_count || 0} | 漏洞数: ${data.payload?.vulnerability_count || 0}`)
+        break
+
+      case 'report_generated':
+        isTyping.value = false
+        const reportUrl = data.payload?.report_url || ''
+        const preview = data.payload?.report_preview || ''
+        const reportContent = `报告已生成\n报告ID: ${data.payload?.report_id || '-'}${reportUrl ? '\n下载链接: ' + reportUrl : ''}${preview ? '\n\n' + preview : ''}`
+        addBlock('agent_text', { content: reportContent })
+        break
+
+      case 'report_error':
+        isTyping.value = false
+        addErrorBlock(`报告生成失败: ${data.payload?.error || '未知错误'}`)
+        break
+
+      case 'alternative_options':
+        isTyping.value = false
+        const altOpts = (data.payload?.alternatives || []).map(a => ({ key: a.action, label: a.label, style: 'btn-secondary' }))
+        addBlock('agent_action_request', {
+          actionSource: 'alternative_options',
+          title: `替代方案 (已拒绝: ${data.payload?.rejected_tool || '-'})`,
+          description: '请选择一个替代方案',
+          options: altOpts,
+          resolved: false
+        })
+        break
+
+      case 'auth_unavailable':
+        addInfoBlock(`认证不可用 | ${data.payload?.message || '继续无认证执行'}`)
+        break
+
+      case 'auth_refresh_required':
+        addInfoBlock(`认证刷新中... | 重试: ${data.payload?.retry_count || 0}/${data.payload?.max_retries || 3} | 原因: ${data.payload?.reason || '-'}`)
+        break
+
+      case 'auth_refresh_success':
+        addInfoBlock(`认证刷新成功 | 来源: ${data.payload?.source_tool || '-'} | 类型: ${data.payload?.auth_type || '-'}`)
+        break
+
+      case 'auth_retry_exhausted':
+        addErrorBlock(`认证重试耗尽 | ${data.payload?.message || '-'}`)
+        break
+
+      case 'auth_info_obtained':
+        addInfoBlock(`已获取认证信息 | 来源: ${data.payload?.source_tool || '-'} | 类型: ${data.payload?.auth_type || '-'}`)
+        break
+
+      case 'workflow_resumed':
+        scanStatus.value = 'scanning'
+        addInfoBlock(`工作流已恢复 | 已完成任务: ${(data.payload?.completed_tasks || []).length} 个`)
+        break
+
+      case 'script_registered':
+        const regToolName = data.payload?.tool_name || ''
+        addInfoBlock(`脚本已注册: ${regToolName} | ${data.payload?.message || ''}`)
+        if (pendingUploadScript.value) {
+          const target = scriptQueue.value[currentScriptIndex.value]?.target || ''
+          scriptQueue.value.splice(currentScriptIndex.value + 1, 0, { tool_name: regToolName, status: 'pending', target })
+          addInfoBlock(`新脚本 "${regToolName}" 已加入执行队列`)
+        }
+        break
+
+      case 'script_generating':
+        addInfoBlock(`AI 生成脚本中: ${data.payload?.message || ''}`)
+        break
+
+      case 'script_generated':
+        const genToolName = data.payload?.tool_name || ''
+        addInfoBlock(`脚本生成完成: ${genToolName} | ${data.payload?.message || ''}`)
+        isTyping.value = false
+        if (pendingGenerateScript.value) {
+          const target = scriptQueue.value[currentScriptIndex.value]?.target || ''
+          scriptQueue.value.splice(currentScriptIndex.value + 1, 0, { tool_name: genToolName, status: 'pending', target })
+          addInfoBlock(`新脚本 "${genToolName}" 已加入执行队列，继续循环`)
+          pendingGenerateScript.value = false
+          currentScriptIndex.value++
+          setTimeout(() => triggerScriptConfirm(), 500)
+        }
+        break
+
+      case 'script_analyzing':
+        addInfoBlock(`分析脚本中: ${data.payload?.message || ''}`)
+        break
+
+      case 'script_upload_request':
+        addInfoBlock(`${data.payload?.message || '请在输入框中粘贴脚本内容'}`)
+        break
+
+      case 'script_error':
+        addErrorBlock(`脚本错误: ${data.payload?.error || '未知错误'}`)
+        break
+
+      case 'script_generate_request':
+        addInfoBlock(`${data.payload?.message || '请描述需要生成的脚本功能'}`)
+        break
+
+      case 'node_retry':
+        addInfoBlock('节点重试中...')
+        break
+
+      case 'input_received':
+        addInfoBlock(`输入已接收 | ${data.payload?.field || ''} = ${data.payload?.value || ''}`)
+        break
+
+      case 'user_message_received':
+        break
+
+      case 'subscribed':
+        addInfoBlock(`已订阅会话 | Session: ${data.payload?.session_id || '-'}`)
+        if (data.payload?.state) {
+          scanStatus.value = data.payload.state.is_complete ? 'completed' : 'scanning'
+        }
+        break
+
+      case 'history':
+        const historyItems = data.payload?.history || []
+        if (historyItems.length > 0) {
+          addInfoBlock(`加载了 ${historyItems.length} 条历史记录`)
+        }
+        break
+
+      case 'status':
+        const state = data.payload?.state
+        if (state) {
+          scanStatus.value = state.is_complete ? 'completed' : 'scanning'
+          scanProgress.value.current = (state.completed_tasks || []).length
+          scanProgress.value.total = state.completed_tasks?.length || 0
+          addInfoBlock(`会话状态: ${scanStatus.value === 'completed' ? '已完成' : '扫描中'}`)
+        } else {
+          addInfoBlock('会话状态: 空闲')
+        }
+        break
+
+      case 'high_risk_confirmed':
+        addInfoBlock(`高危决策已确认 | 选择: ${data.payload?.choice || '-'}`)
+        break
+
+      case 'tool_execution_proceed':
+        addInfoBlock('工具已确认执行')
+        break
+
+      case 'tool_rejected_processing':
+        addInfoBlock('正在生成替代方案...')
+        break
+
+      case 'alternative_applied':
+        addInfoBlock(`已应用替代方案: ${data.payload?.choice_label || '-'}`)
+        break
+
+      case 'error':
+        isTyping.value = false
+        scanStatus.value = 'error'
+        addErrorBlock(`错误: ${data.payload?.error || '未知错误'}`)
+        break
+
+      case 'execution_plan':
+        addInfoBlock(`执行计划: ${JSON.stringify(data.payload || {})}`)
+        break
+
+      default:
+        break
+    }
+  }
+
+  onMounted(() => {
+    ws.on('*', handleWSMessage)
+  })
+
+  onUnmounted(() => {
+    ws.off('*', handleWSMessage)
+  })
+
+  return {
+    inputText,
+    workspaceBlocks,
+    isTyping,
+    waitingForChoice,
+    currentThinking,
+    isThinking,
+    thinkingExpanded,
+    scanProgress,
+    pendingInputRequest,
+    scanStatus,
+    scanActive,
+    sendMessage,
+    handleQuickAction,
+    handleBlockAction,
+    handleInputResponse,
+    handleStop,
+    handleModeSelect,
+    showUploadScriptForm,
+    showGenerateScriptForm,
+    submitBlockInput
+  }
+}

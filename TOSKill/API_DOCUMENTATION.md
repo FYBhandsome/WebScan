@@ -1,10 +1,10 @@
 # TOSKill API 接口文档
 
-> 版本: v1.0.0  
-> 基础地址: `http://localhost:8081`  
+> 版本: v1.0.0\
+> 基础地址: `http://localhost:8081`\
 > 更新日期: 2026-05-01
 
----
+***
 
 ## 目录
 
@@ -26,7 +26,7 @@
 16. [工具返回格式标准](#16-工具返回格式标准)
 17. [意图识别机制](#17-意图识别机制)
 
----
+***
 
 ## 1. 概述
 
@@ -45,15 +45,15 @@ TOSKill 是重构版的AI驱动Web安全扫描后端服务，基于LangGraph工�
 
 ### 服务信息
 
-| 项目 | 值 |
-|------|-----|
-| 服务名称 | TOSKill Security Scanner |
-| 默认端口 | 8081 |
-| 协议支持 | HTTP/1.1, WebSocket |
-| 数据格式 | JSON |
-| 内置工具数量 | 22 |
-| 动态工具 | 支持无限扩展 |
-| 框架版本 | LangGraph + Function Calling |
+| 项目     | 值                            |
+| ------ | ---------------------------- |
+| 服务名称   | TOSKill Security Scanner     |
+| 默认端口   | 8081                         |
+| 协议支持   | HTTP/1.1, WebSocket          |
+| 数据格式   | JSON                         |
+| 内置工具数量 | 22                           |
+| 动态工具   | 支持无限扩展                       |
+| 框架版本   | LangGraph + Function Calling |
 
 ### 架构特性
 
@@ -63,7 +63,7 @@ TOSKill 是重构版的AI驱动Web安全扫描后端服务，基于LangGraph工�
 - **Command恢复**: 使用`Command(resume=...)`恢复中断的工作流
 - **RAG增强**: LlamaIndex知识库检索增强AI决策
 
----
+***
 
 ## 2. 通用说明
 
@@ -88,11 +88,11 @@ Accept: application/json
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| code | integer | 状态码，200表示成功 |
-| message | string | 响应消息 |
-| data | object | 响应数据，可能为null |
+| 字段      | 类型      | 说明           |
+| ------- | ------- | ------------ |
+| code    | integer | 状态码，200表示成功  |
+| message | string  | 响应消息         |
+| data    | object  | 响应数据，可能为null |
 
 ### 2.3 错误响应格式
 
@@ -104,7 +104,7 @@ Accept: application/json
 }
 ```
 
----
+***
 
 ## 3. 扫描接口
 
@@ -114,10 +114,10 @@ Accept: application/json
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `POST` |
-| 路径 | `/api/scan` |
+| 项目           | 值                  |
+| ------------ | ------------------ |
+| 方法           | `POST`             |
+| 路径           | `/api/scan`        |
 | Content-Type | `application/json` |
 
 **请求体**
@@ -130,11 +130,11 @@ Accept: application/json
 }
 ```
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| target | string | 是 | - | 扫描目标域名或IP |
-| tools | array | 否 | 全部工具 | 指定工具名称列表 |
-| generate_report | boolean | 否 | true | 是否生成扫描报告 |
+| 参数               | 类型      | 必填 | 默认值  | 说明        |
+| ---------------- | ------- | -- | ---- | --------- |
+| target           | string  | 是  | -    | 扫描目标域名或IP |
+| tools            | array   | 否  | 全部工具 | 指定工具名称列表  |
+| generate\_report | boolean | 否  | true | 是否生成扫描报告  |
 
 **响应体**
 
@@ -150,7 +150,7 @@ Accept: application/json
 }
 ```
 
----
+***
 
 ### 3.2 信息收集扫描
 
@@ -158,10 +158,10 @@ Accept: application/json
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `POST` |
-| 路径 | `/api/scan/info` |
+| 项目           | 值                  |
+| ------------ | ------------------ |
+| 方法           | `POST`             |
+| 路径           | `/api/scan/info`   |
 | Content-Type | `application/json` |
 
 **请求体**
@@ -172,7 +172,7 @@ Accept: application/json
 }
 ```
 
----
+***
 
 ### 3.3 漏洞扫描
 
@@ -180,10 +180,10 @@ Accept: application/json
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `POST` |
-| 路径 | `/api/scan/vuln` |
+| 项目           | 值                  |
+| ------------ | ------------------ |
+| 方法           | `POST`             |
+| 路径           | `/api/scan/vuln`   |
 | Content-Type | `application/json` |
 
 **请求体**
@@ -194,7 +194,7 @@ Accept: application/json
 }
 ```
 
----
+***
 
 ### 3.4 完整扫描
 
@@ -202,10 +202,10 @@ Accept: application/json
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `POST` |
-| 路径 | `/api/scan/full` |
+| 项目           | 值                  |
+| ------------ | ------------------ |
+| 方法           | `POST`             |
+| 路径           | `/api/scan/full`   |
 | Content-Type | `application/json` |
 
 **请求体**
@@ -235,7 +235,7 @@ Accept: application/json
 }
 ```
 
----
+***
 
 ## 4. 工具执行接口
 
@@ -245,9 +245,9 @@ Accept: application/json
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `GET` |
+| 项目 | 值            |
+| -- | ------------ |
+| 方法 | `GET`        |
 | 路径 | `/api/tools` |
 
 **响应体**
@@ -259,7 +259,7 @@ Accept: application/json
 ]
 ```
 
----
+***
 
 ### 4.2 获取工具分类
 
@@ -267,9 +267,9 @@ Accept: application/json
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `GET` |
+| 项目 | 值                       |
+| -- | ----------------------- |
+| 方法 | `GET`                   |
 | 路径 | `/api/tools/categories` |
 
 **响应体**
@@ -282,7 +282,7 @@ Accept: application/json
 }
 ```
 
----
+***
 
 ### 4.3 执行单个工具
 
@@ -290,11 +290,11 @@ Accept: application/json
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `POST` |
-| 路径 | `/api/tools/execute` |
-| Content-Type | `application/json` |
+| 项目           | 值                    |
+| ------------ | -------------------- |
+| 方法           | `POST`               |
+| 路径           | `/api/tools/execute` |
+| Content-Type | `application/json`   |
 
 **请求体**
 
@@ -305,10 +305,10 @@ Accept: application/json
 }
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| tool_name | string | 是 | 工具名称，如`portscan` |
-| target | string | 是 | 扫描目标 |
+| 参数         | 类型     | 必填 | 说明               |
+| ---------- | ------ | -- | ---------------- |
+| tool\_name | string | 是  | 工具名称，如`portscan` |
+| target     | string | 是  | 扫描目标             |
 
 **响应体**
 
@@ -323,7 +323,7 @@ Accept: application/json
 }
 ```
 
----
+***
 
 ### 4.4 批量执行工具
 
@@ -331,11 +331,11 @@ Accept: application/json
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `POST` |
-| 路径 | `/api/tools/execute/batch` |
-| Content-Type | `application/json` |
+| 项目           | 值                          |
+| ------------ | -------------------------- |
+| 方法           | `POST`                     |
+| 路径           | `/api/tools/execute/batch` |
+| Content-Type | `application/json`         |
 
 **请求体**
 
@@ -346,7 +346,7 @@ Accept: application/json
 }
 ```
 
----
+***
 
 ## 5. 会话管理接口
 
@@ -356,10 +356,10 @@ Accept: application/json
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `POST` |
-| 路径 | `/api/sessions` |
+| 项目           | 值                  |
+| ------------ | ------------------ |
+| 方法           | `POST`             |
+| 路径           | `/api/sessions`    |
 | Content-Type | `application/json` |
 
 **请求体**
@@ -379,7 +379,7 @@ Accept: application/json
 }
 ```
 
----
+***
 
 ### 5.2 获取会话状态
 
@@ -387,9 +387,9 @@ Accept: application/json
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `GET` |
+| 项目 | 值                            |
+| -- | ---------------------------- |
+| 方法 | `GET`                        |
 | 路径 | `/api/sessions/{session_id}` |
 
 **响应体**
@@ -404,7 +404,7 @@ Accept: application/json
 }
 ```
 
----
+***
 
 ### 5.3 删除会话
 
@@ -412,12 +412,12 @@ Accept: application/json
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `DELETE` |
+| 项目 | 值                            |
+| -- | ---------------------------- |
+| 方法 | `DELETE`                     |
 | 路径 | `/api/sessions/{session_id}` |
 
----
+***
 
 ### 5.4 健康检查
 
@@ -425,9 +425,9 @@ Accept: application/json
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `GET` |
+| 项目 | 值         |
+| -- | --------- |
+| 方法 | `GET`     |
 | 路径 | `/health` |
 
 **响应体**
@@ -438,17 +438,17 @@ Accept: application/json
 }
 ```
 
----
+***
 
 ## 6. WebSocket API 接口
 
 ### 6.1 连接信息
 
-| 项目 | 值 |
-|------|-----|
-| 端点 | `ws://localhost:8081/api/ai-chat/ws` |
-| 协议 | WebSocket |
-| 数据格式 | JSON |
+| 项目   | 值                                    |
+| ---- | ------------------------------------ |
+| 端点   | `ws://localhost:8081/api/ai-chat/ws` |
+| 协议   | WebSocket                            |
+| 数据格式 | JSON                                 |
 
 ### 6.2 消息格式
 
@@ -463,70 +463,70 @@ Accept: application/json
 
 ### 6.3 客户端消息类型
 
-| 类型 | 说明 | payload |
-|------|------|---------|
-| `start_scan` | 开始扫描 | `{target, scan_mode}` |
-| `stop_scan` | 停止扫描 | `{}` |
-| `user_confirm` | 用户确认选择 | `{choice}` |
-| `user_choice` | 用户选择（别名） | `{choice}` |
-| `user_input` | 用户输入内容 | `{content}` |
-| `chat` | AI对话 | `{content}` |
-| `execute_tool` | 执行工具 | `{tool_name, target}` |
-| `script_content` | 上传自定义脚本 | `{script_content, script_name?}` |
-| `script_description` | AI生成脚本描述 | `{description}` |
-| `input_response` | 输入字段响应 | `{field, value}` |
-| `subscribe` | 订阅已有会话 | `{session_id}` |
-| `get_history` | 获取聊天历史 | `{}` |
-| `get_status` | 获取会话状态 | `{}` |
-| `high_risk_confirm` | 高危漏洞确认 | `{choice}` |
+| 类型                   | 说明       | payload                          |
+| -------------------- | -------- | -------------------------------- |
+| `start_scan`         | 开始扫描     | `{target, scan_mode}`            |
+| `stop_scan`          | 停止扫描     | `{}`                             |
+| `user_confirm`       | 用户确认选择   | `{choice}`                       |
+| `user_choice`        | 用户选择（别名） | `{choice}`                       |
+| `user_input`         | 用户输入内容   | `{content}`                      |
+| `chat`               | AI对话     | `{content}`                      |
+| `execute_tool`       | 执行工具     | `{tool_name, target}`            |
+| `script_content`     | 上传自定义脚本  | `{script_content, script_name?}` |
+| `script_description` | AI生成脚本描述 | `{description}`                  |
+| `input_response`     | 输入字段响应   | `{field, value}`                 |
+| `subscribe`          | 订阅已有会话   | `{session_id}`                   |
+| `get_history`        | 获取聊天历史   | `{}`                             |
+| `get_status`         | 获取会话状态   | `{}`                             |
+| `high_risk_confirm`  | 高危漏洞确认   | `{choice}`                       |
 
 ### 6.4 服务端消息类型
 
-| 类型 | 说明 |
-|------|------|
-| `connected` | 连接成功，返回session_id |
-| `interaction_required` | 需要用户交互（5个选项） |
-| `workflow_resumed` | 工作流已恢复 |
-| `high_risk_vulnerability_detected` | 高危漏洞检测 |
-| `high_risk_confirmed` | 高危漏洞已确认 |
-| `intent_recognized` | 意图识别结果 |
-| `intent_validation_error` | 意图校验错误 |
-| `tool_not_found` | 工具不存在 |
-| `scan_started` | 扫描已开始 |
-| `scan_completed` | 扫描已完成 |
-| `scan_cancelled` | 扫描已取消 |
-| `scan_flow_started` | 扫描流程启动 |
-| `direct_tool_started` | 工具直调开始 |
-| `direct_tool_completed` | 工具直调完成 |
-| `direct_tool_error` | 工具直调错误 |
-| `task_started` | 任务开始 |
-| `task_completed` | 任务完成 |
-| `task_skipped` | 任务跳过 |
-| `task_error` | 任务错误 |
-| `ai_decision` | AI决策信息 |
-| `ai_decision_complete` | AI决策完成 |
-| `ai_message` | AI聊天回复 |
-| `ai_chat` | AI聊天回复（别名） |
-| `workflow_progress` | 工作流进度更新 |
-| `report_generation_started` | 报告生成开始 |
-| `report_generated` | 报告生成完成 |
-| `report_error` | 报告生成错误 |
-| `auth_info_obtained` | 认证信息获取成功 |
-| `auth_refresh_required` | 需要刷新认证 |
-| `auth_refresh_success` | 认证刷新成功 |
-| `auth_unavailable` | 认证不可用 |
-| `auth_retry_exhausted` | 重试次数耗尽 |
-| `script_upload_request` | 请求上传脚本 |
-| `script_generate_request` | 请求生成脚本描述 |
-| `script_analyzing` | AI分析脚本中 |
-| `script_generating` | AI生成脚本中 |
-| `script_registered` | 脚本注册成功 |
-| `script_generated` | 脚本生成成功 |
-| `script_error` | 脚本处理错误 |
-| `history` | 聊天历史 |
-| `status` | 会话状态 |
-| `subscribed` | 订阅成功 |
-| `error` | 错误消息 |
+| 类型                                 | 说明                 |
+| ---------------------------------- | ------------------ |
+| `connected`                        | 连接成功，返回session\_id |
+| `interaction_required`             | 需要用户交互（5个选项）       |
+| `workflow_resumed`                 | 工作流已恢复             |
+| `high_risk_vulnerability_detected` | 高危漏洞检测             |
+| `high_risk_confirmed`              | 高危漏洞已确认            |
+| `intent_recognized`                | 意图识别结果             |
+| `intent_validation_error`          | 意图校验错误             |
+| `tool_not_found`                   | 工具不存在              |
+| `scan_started`                     | 扫描已开始              |
+| `scan_completed`                   | 扫描已完成              |
+| `scan_cancelled`                   | 扫描已取消              |
+| `scan_flow_started`                | 扫描流程启动             |
+| `direct_tool_started`              | 工具直调开始             |
+| `direct_tool_completed`            | 工具直调完成             |
+| `direct_tool_error`                | 工具直调错误             |
+| `task_started`                     | 任务开始               |
+| `task_completed`                   | 任务完成               |
+| `task_skipped`                     | 任务跳过               |
+| `task_error`                       | 任务错误               |
+| `ai_decision`                      | AI决策信息             |
+| `ai_decision_complete`             | AI决策完成             |
+| `ai_message`                       | AI聊天回复             |
+| `ai_chat`                          | AI聊天回复（别名）         |
+| `workflow_progress`                | 工作流进度更新            |
+| `report_generation_started`        | 报告生成开始             |
+| `report_generated`                 | 报告生成完成             |
+| `report_error`                     | 报告生成错误             |
+| `auth_info_obtained`               | 认证信息获取成功           |
+| `auth_refresh_required`            | 需要刷新认证             |
+| `auth_refresh_success`             | 认证刷新成功             |
+| `auth_unavailable`                 | 认证不可用              |
+| `auth_retry_exhausted`             | 重试次数耗尽             |
+| `script_upload_request`            | 请求上传脚本             |
+| `script_generate_request`          | 请求生成脚本描述           |
+| `script_analyzing`                 | AI分析脚本中            |
+| `script_generating`                | AI生成脚本中            |
+| `script_registered`                | 脚本注册成功             |
+| `script_generated`                 | 脚本生成成功             |
+| `script_error`                     | 脚本处理错误             |
+| `history`                          | 聊天历史               |
+| `status`                           | 会话状态               |
+| `subscribed`                       | 订阅成功               |
+| `error`                            | 错误消息               |
 
 ### 6.5 用户交互说明
 
@@ -534,17 +534,18 @@ Accept: application/json
 
 扫描过程中，用户可选择5个选项：
 
-| 选项 | 说明 |
-|------|------|
-| 1 | 执行当前任务 |
-| 2 | 停止扫描并生成报告 |
-| 3 | 与AI助手聊天 |
-| 4 | 上传自定义脚本 |
-| 5 | AI生成扫描脚本 |
+| 选项 | 说明        |
+| -- | --------- |
+| 1  | 执行当前任务    |
+| 2  | 停止扫描并生成报告 |
+| 3  | 与AI助手聊天   |
+| 4  | 上传自定义脚本   |
+| 5  | AI生成扫描脚本  |
 
 #### 交互消息示例
 
 服务端发送：
+
 ```json
 {
     "type": "interaction_required",
@@ -563,6 +564,7 @@ Accept: application/json
 ```
 
 客户端响应：
+
 ```json
 {
     "type": "user_confirm",
@@ -573,6 +575,7 @@ Accept: application/json
 ### 6.6 高危漏洞确认
 
 检测到高危漏洞时，服务端发送：
+
 ```json
 {
     "type": "high_risk_vulnerability_detected",
@@ -590,6 +593,7 @@ Accept: application/json
 ### 6.7 工作流进度
 
 服务端实时推送工作流进度：
+
 ```json
 {
     "type": "workflow_progress",
@@ -642,7 +646,7 @@ ws.send(JSON.stringify({
 }));
 ```
 
----
+***
 
 ## 7. 报告管理接口
 
@@ -650,9 +654,9 @@ ws.send(JSON.stringify({
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `GET` |
+| 项目 | 值                   |
+| -- | ------------------- |
+| 方法 | `GET`               |
 | 路径 | `/api/reports/list` |
 
 **响应体**
@@ -672,26 +676,26 @@ ws.send(JSON.stringify({
 }
 ```
 
----
+***
 
 ### 7.2 下载报告
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `GET` |
+| 项目 | 值                                  |
+| -- | ---------------------------------- |
+| 方法 | `GET`                              |
 | 路径 | `/api/reports/download/{filename}` |
 
----
+***
 
 ### 7.3 获取报告内容
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `GET` |
+| 项目 | 值                                 |
+| -- | --------------------------------- |
+| 方法 | `GET`                             |
 | 路径 | `/api/reports/{filename}/content` |
 
 **响应体**
@@ -704,24 +708,25 @@ ws.send(JSON.stringify({
 }
 ```
 
----
+***
 
 ### 7.4 删除报告
 
 **请求信息**
 
-| 项目 | 值 |
-|------|-----|
-| 方法 | `DELETE` |
+| 项目 | 值                         |
+| -- | ------------------------- |
+| 方法 | `DELETE`                  |
 | 路径 | `/api/reports/{filename}` |
 
----
+***
 
 ## 8. 脚本管理接口
 
 ### 8.1 脚本上传（WebSocket）
 
 **客户端提交脚本**
+
 ```json
 {
     "type": "script_content",
@@ -733,16 +738,18 @@ ws.send(JSON.stringify({
 ```
 
 **脚本要求**
+
 - 必须包含`run(target: str)`函数
 - 返回`Dict`类型结果
 - 建议包含错误处理
 - 自动进行安全审查
 
----
+***
 
 ### 8.2 AI生成脚本（WebSocket）
 
 **客户端提交描述**
+
 ```json
 {
     "type": "script_description",
@@ -753,6 +760,7 @@ ws.send(JSON.stringify({
 ```
 
 **生成成功响应**
+
 ```json
 {
     "type": "script_generated",
@@ -764,7 +772,7 @@ ws.send(JSON.stringify({
 }
 ```
 
----
+***
 
 ## 9. 聊天兼容接口
 
@@ -775,6 +783,7 @@ POST /api/chat/send
 ```
 
 **请求体**:
+
 ```json
 {
     "session_id": "abc12345",
@@ -789,6 +798,7 @@ GET /api/chat/history/{session_id}?limit=20
 ```
 
 **响应体**:
+
 ```json
 {
     "history": [
@@ -798,17 +808,17 @@ GET /api/chat/history/{session_id}?limit=20
 }
 ```
 
----
+***
 
 ## 10. 错误码说明
 
 ### 10.1 HTTP状态码
 
-| 状态码 | 说明 |
-|--------|------|
-| 200 | 请求成功 |
-| 400 | 请求参数错误 |
-| 404 | 资源不存在 |
+| 状态码 | 说明      |
+| --- | ------- |
+| 200 | 请求成功    |
+| 400 | 请求参数错误  |
+| 404 | 资源不存在   |
 | 500 | 服务器内部错误 |
 
 ### 10.2 错误响应示例
@@ -819,48 +829,48 @@ GET /api/chat/history/{session_id}?limit=20
 }
 ```
 
----
+***
 
 ## 11. 工具列表
 
 ### 11.1 信息收集工具 (11个)
 
-| 工具名称 | 说明 |
-|----------|------|
-| `baseinfo` | 基础信息收集 |
-| `portscan` | 端口扫描 |
-| `subdomain` | 子域名扫描 |
-| `dirscan` | 目录扫描 |
-| `waf` | WAF检测 |
-| `cdnexist` | CDN检测 |
-| `whatcms` | CMS识别 |
-| `infoleak` | 信息泄露扫描 |
-| `iplocating` | IP定位 |
-| `webside` | 备案查询 |
-| `webweight` | 权重查询 |
+| 工具名称         | 说明     |
+| ------------ | ------ |
+| `baseinfo`   | 基础信息收集 |
+| `portscan`   | 端口扫描   |
+| `subdomain`  | 子域名扫描  |
+| `dirscan`    | 目录扫描   |
+| `waf`        | WAF检测  |
+| `cdnexist`   | CDN检测  |
+| `whatcms`    | CMS识别  |
+| `infoleak`   | 信息泄露扫描 |
+| `iplocating` | IP定位   |
+| `webside`    | 备案查询   |
+| `webweight`  | 权重查询   |
 
 ### 11.2 漏洞扫描工具 (8个)
 
-| 工具名称 | 说明 | 风险等级 |
-|----------|------|---------|
-| `sqli` | SQL注入扫描 | 高危 |
-| `xss` | XSS扫描 | 中危 |
-| `csrf` | CSRF扫描 | 中危 |
-| `fileupload` | 文件上传扫描 | 严重 |
-| `cmdi` | 命令注入扫描 | 严重 |
-| `ssrf` | SSRF扫描 | 高危 |
-| `lfi` | LFI扫描 | 高危 |
-| `weakpass` | 弱口令扫描 | 高危 |
+| 工具名称         | 说明      | 风险等级 |
+| ------------ | ------- | ---- |
+| `sqli`       | SQL注入扫描 | 高危   |
+| `xss`        | XSS扫描   | 中危   |
+| `csrf`       | CSRF扫描  | 中危   |
+| `fileupload` | 文件上传扫描  | 严重   |
+| `cmdi`       | 命令注入扫描  | 严重   |
+| `ssrf`       | SSRF扫描  | 高危   |
+| `lfi`        | LFI扫描   | 高危   |
+| `weakpass`   | 弱口令扫描   | 高危   |
 
 ### 11.3 POC工具 (3个)
 
-| 工具名称 | 说明 |
-|----------|------|
+| 工具名称       | 说明             |
+| ---------- | -------------- |
 | `thinkphp` | ThinkPHP RCE检测 |
-| `struts2` | Struts2漏洞检测 |
-| `weblogic` | WebLogic漏洞检测 |
+| `struts2`  | Struts2漏洞检测    |
+| `weblogic` | WebLogic漏洞检测   |
 
----
+***
 
 ## 12. 认证机制
 
@@ -895,7 +905,7 @@ TOSKill支持在工作流节点间共享认证信息：
 - 检测401/403响应自动触发重试
 - 重试失败后通知用户手动认证
 
----
+***
 
 ## 13. RAG知识库
 
@@ -903,15 +913,15 @@ TOSKill支持在工作流节点间共享认证信息：
 
 TOSKill内置7个专业知识文档：
 
-| 文档 | 内容 |
-|------|------|
-| `01_vulnerability_types.md` | 漏洞类型分类 |
-| `02_attack_vectors.md` | 攻击向量说明 |
-| `03_tool_mapping.md` | 工具映射关系 |
-| `04_remediation_guide.md` | 修复建议指南 |
-| `05_severity_classification.md` | 严重程度分类 |
-| `06_owasp_top10.md` | OWASP Top 10 |
-| `07_scanning_workflow.md` | 扫描工作流程 |
+| 文档                              | 内容           |
+| ------------------------------- | ------------ |
+| `01_vulnerability_types.md`     | 漏洞类型分类       |
+| `02_attack_vectors.md`          | 攻击向量说明       |
+| `03_tool_mapping.md`            | 工具映射关系       |
+| `04_remediation_guide.md`       | 修复建议指南       |
+| `05_severity_classification.md` | 严重程度分类       |
+| `06_owasp_top10.md`             | OWASP Top 10 |
+| `07_scanning_workflow.md`       | 扫描工作流程       |
 
 ### 13.2 RAG检索增强
 
@@ -930,7 +940,7 @@ rag_strategy = get_scan_strategy(
 
 将Markdown文档放入`TOSKill/RAG/knowledge/`目录，系统会自动索引。
 
----
+***
 
 ## 14. 用户交互机制
 
@@ -971,7 +981,7 @@ user_decision = interrupt({
 })
 ```
 
----
+***
 
 ## 15. 记忆化机制
 
@@ -979,22 +989,22 @@ user_decision = interrupt({
 
 系统使用`MemoryStore`管理会话状态：
 
-| 存储内容 | 说明 |
-|---------|------|
-| 会话状态 | ScanState完整状态 |
-| 聊天历史 | 每个会话的聊天记录 |
-| 待处理交互 | 等待用户响应的交互请求 |
-| WebSocket回调 | 实时推送函数 |
+| 存储内容        | 说明            |
+| ----------- | ------------- |
+| 会话状态        | ScanState完整状态 |
+| 聊天历史        | 每个会话的聊天记录     |
+| 待处理交互       | 等待用户响应的交互请求   |
+| WebSocket回调 | 实时推送函数        |
 
 ### 15.2 TTL过期清理
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| 会话TTL | 3600秒 | 会话过期时间 |
-| 清理间隔 | 600秒 | 定时清理检查间隔 |
-| 最大聊天记录 | 100条 | 每会话最大聊天记录数 |
+| 配置项    | 默认值   | 说明         |
+| ------ | ----- | ---------- |
+| 会话TTL  | 3600秒 | 会话过期时间     |
+| 清理间隔   | 600秒  | 定时清理检查间隔   |
+| 最大聊天记录 | 100条  | 每会话最大聊天记录数 |
 
----
+***
 
 ## 16. 工具返回格式标准
 
@@ -1013,15 +1023,15 @@ user_decision = interrupt({
 }
 ```
 
-| 字段 | 类型 | 必需 | 说明 |
-|------|------|------|------|
-| success | boolean | 是 | 执行是否成功 |
-| data | object | 是 | 返回数据 |
-| error | string\|null | 否 | 错误信息 |
-| auth_info | object\|null | 否 | 认证信息 |
-| timestamp | string | 是 | 时间戳 |
+| 字段         | 类型           | 必需 | 说明     |
+| ---------- | ------------ | -- | ------ |
+| success    | boolean      | 是  | 执行是否成功 |
+| data       | object       | 是  | 返回数据   |
+| error      | string\|null | 否  | 错误信息   |
+| auth\_info | object\|null | 否  | 认证信息   |
+| timestamp  | string       | 是  | 时间戳    |
 
----
+***
 
 ## 17. 意图识别机制
 
@@ -1029,13 +1039,13 @@ user_decision = interrupt({
 
 系统支持5种意图类型：
 
-| 意图类型 | 说明 | 触发关键词 |
-|----------|------|-----------|
-| `scan` | 完整扫描流程 | 扫描、漏洞、渗透、检测 |
-| `tool` | 工具直调 | 调用、执行、使用工具 |
-| `chat` | 纯聊天 | 咨询、问答、闲聊 |
-| `upload_script` | 上传脚本 | 上传脚本、自定义脚本 |
-| `generate_script` | AI生成脚本 | 生成脚本、AI写脚本 |
+| 意图类型              | 说明     | 触发关键词       |
+| ----------------- | ------ | ----------- |
+| `scan`            | 完整扫描流程 | 扫描、漏洞、渗透、检测 |
+| `tool`            | 工具直调   | 调用、执行、使用工具  |
+| `chat`            | 纯聊天    | 咨询、问答、闲聊    |
+| `upload_script`   | 上传脚本   | 上传脚本、自定义脚本  |
+| `generate_script` | AI生成脚本 | 生成脚本、AI写脚本  |
 
 ### 17.2 Function Calling流程
 
@@ -1057,6 +1067,6 @@ ai_decision → user_interact → router → execute_task → vulnerability_chec
 - `execute_task`: 执行工具
 - `vulnerability_check`: 高危漏洞检测
 
----
+***
 
 *文档版本: 1.0.0 | 最后更新: 2026-05-01*

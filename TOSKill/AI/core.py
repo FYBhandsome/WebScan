@@ -12,7 +12,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from .state import ScanState, create_initial_state, update_state
-from .graph import get_agent_orchestrator, memory_store
+from .graph import get_agent_orchestrator, memory_store, safe_ws_send
 from .tools import get_tool_by_name, get_all_tool_names, clean_target, TOOL_MAP
 from ..config import settings
 
@@ -28,7 +28,9 @@ def _get_llm():
         model=settings.MODEL_ID,
         temperature=settings.LLM_TEMPERATURE,
         api_key=settings.OPENAI_API_KEY,
-        base_url=settings.OPENAI_BASE_URL
+        base_url=settings.OPENAI_BASE_URL,
+        max_retries=0, 
+        timeout=60.0
     )
 
 
@@ -223,12 +225,49 @@ async def chat(session_id: str, content: str) -> str:
         messages.append(HumanMessage(content=content))
     
     llm = _get_llm()
-    response = await llm.ainvoke(messages)
-    ai_content = response.content
     
-    memory_store.append_chat(session_id, "assistant", ai_content)
+    await safe_ws_send(session_id, {
+        "type": "ai_thinking_start",
+        "payload": {}
+    })
     
-    return ai_content
+    full_response = ""
+    async for chunk in llm.astream(messages):
+        token = chunk.content if hasattr(chunk, 'content') else str(chunk)
+        if token:
+            full_response += token
+            await safe_ws_send(session_id, {
+                "type": "ai_thinking",
+                "payload": {"token": token}
+            })
+    
+    thought, clean_content = _parse_chat_response(full_response)
+    
+    memory_store.append_chat(session_id, "assistant", clean_content)
+    
+    await safe_ws_send(session_id, {
+        "type": "ai_chat",
+        "payload": {"thought": thought, "content": clean_content}
+    })
+    
+    return clean_content
+
+
+def _parse_chat_response(full_response: str):
+    """从LLM完整响应中分离思考过程和最终回复"""
+    import re
+    thought = ""
+    content = full_response
+    match = re.match(
+        r'(?:思考[：:]\s*|分析[：:]\s*|Thought:\s*)(.*?)(?=回复[：:]|回答[：:]|Response:|$)',
+        full_response, re.DOTALL
+    )
+    if match:
+        thought = match.group(1).strip()
+        remaining = full_response[match.end():].strip()
+        remaining = re.sub(r'^(?:回复[：:]|回答[：:]|Response:)\s*', '', remaining)
+        content = remaining if remaining else content
+    return thought, content
 
 
 def append_chat_message(session_id: str, role: str, content: str) -> bool:
