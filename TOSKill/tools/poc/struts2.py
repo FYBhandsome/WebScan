@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 Struts2漏洞POC验证工具
-使用@tool装饰器封装backend.poc.struts2模块
+封装backend.poc.struts2模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def struts2_s2_032(target: str, timeout: int = 10) -> Dict[str, Any]:
     """Struts2 S2-032 远程代码执行漏洞检测工具
     

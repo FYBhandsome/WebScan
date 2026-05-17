@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 目录扫描工具
-使用@tool装饰器封装backend.plugins.dirscan模块
+封装backend.plugins.dirscan模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any, Optional
 
 
-@tool
 def dirscan(target: str, dict_path: Optional[str] = None) -> Dict[str, Any]:
     """目录扫描工具，对目标URL进行目录和文件爆破
     
@@ -66,5 +64,5 @@ def dirscan(target: str, dict_path: Optional[str] = None) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    test_result = dirscan.invoke({"target": "http://testphp.vulnweb.com"})
+    test_result = dirscan("http://testphp.vulnweb.com")
     print(test_result)

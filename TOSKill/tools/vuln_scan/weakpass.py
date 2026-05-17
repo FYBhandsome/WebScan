@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 弱口令/登录爆破扫描工具
-使用@tool装饰器封装backend.vulnerability_scan_plugins.weakpass模块
+封装backend.vulnerability_scan_plugins.weakpass模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any, List, Optional
 
 
-@tool
 def weakpass_scan(
     target: str,
     usernames: Optional[List[str]] = None,

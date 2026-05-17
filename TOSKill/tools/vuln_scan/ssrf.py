@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 SSRF服务端请求伪造漏洞扫描工具
-使用@tool装饰器封装backend.vulnerability_scan_plugins.ssrf模块
+封装backend.vulnerability_scan_plugins.ssrf模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def ssrf_scan(
     target: str,
     timeout: int = 30

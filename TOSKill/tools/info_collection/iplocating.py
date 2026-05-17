@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 IP定位工具
-使用@tool装饰器封装backend.plugins.iplocating模块
+封装backend.plugins.iplocating模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def ip_locate(ip: str) -> Dict[str, Any]:
     """IP定位工具，查询IP地址的地理位置信息
     
@@ -65,5 +63,5 @@ def ip_locate(ip: str) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    test_result = ip_locate.invoke("8.8.8.8")
+    test_result = ip_locate("8.8.8.8")
     print(test_result)

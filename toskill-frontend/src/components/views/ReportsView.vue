@@ -47,6 +47,12 @@
       <div class="viewer-content">
         <div v-if="viewer.isLoading" class="loading">加载中...</div>
         <div v-else-if="viewer.error" class="error" style="color: var(--error-color);">{{ viewer.error }}</div>
+        <iframe 
+          v-else-if="isHtmlReport" 
+          :srcdoc="viewer.content" 
+          class="html-report-frame"
+          sandbox="allow-same-origin"
+        ></iframe>
         <div v-else class="markdown-body" v-html="renderedContent"></div>
       </div>
     </div>
@@ -74,7 +80,14 @@ const viewer = reactive({
 
 const renderedContent = computed(() => {
   if (!viewer.content) return ''
+  if (viewer.filename && viewer.filename.endsWith('.html')) {
+    return viewer.content
+  }
   return marked(viewer.content) || ''
+})
+
+const isHtmlReport = computed(() => {
+  return viewer.filename && viewer.filename.endsWith('.html') && viewer.content
 })
 
 const fetchReports = async () => {
@@ -426,5 +439,13 @@ const formatDate = (dateStr) => {
 .report-card {
   background: #FAFAFA !important;
   border: 1px solid #EDEDED;
+}
+
+.html-report-frame {
+  width: 100%;
+  height: 80vh;
+  border: none;
+  border-radius: 8px;
+  background: white;
 }
 </style>

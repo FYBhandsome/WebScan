@@ -113,7 +113,7 @@ const saved = loadSettings()
 
 const settings = reactive({
   apiUrl: saved?.apiUrl || 'http://localhost:8081',
-  wsUrl: saved?.wsUrl || 'ws://localhost:8081/api/ai-chat/ws',
+  wsUrl: saved?.wsUrl || `ws://localhost:8081${API.WS_PATH}`,
   timeout: saved?.timeout || 300
 })
 

@@ -1,15 +1,13 @@
 # -*- coding:utf-8 -*-
 """
 日志处理工具
-使用@tool装饰器封装backend.plugins.loginfo模块
+封装backend.plugins.loginfo模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any, Optional
 import logging
 
 
-@tool
 def log_handler(
     name: str,
     level: str = "INFO",

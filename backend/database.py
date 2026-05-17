@@ -39,10 +39,17 @@ async def init_db() -> None:
     db_url = get_db_url()
     logger.info(f"🔍 开始初始化Tortoise-ORM，数据库URL: {db_url}")
     
+    if db_url.startswith("sqlite://"):
+        db_path_str = db_url[9:]
+        db_path = Path(db_path_str) if os.path.isabs(db_path_str) else PROJECT_ROOT / db_path_str
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        if not db_path.exists():
+            db_path.touch()
+    
     await Tortoise.init(
         db_url=db_url,
         modules={"models": ["backend.models"]},
-        _create_db=True,
+        _create_db=False,
         use_tz=False
     )
     await Tortoise.generate_schemas(safe=True)

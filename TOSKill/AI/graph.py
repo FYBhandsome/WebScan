@@ -18,10 +18,11 @@ from typing import Dict, Optional, Callable, List, Any
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 import threading
+import sqlite3
 
 from langgraph.graph import StateGraph, END
 from langgraph.types import interrupt, Command
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langchain_openai import ChatOpenAI
 
 from .state import ScanState, create_initial_state, append_chat, update_state
@@ -34,38 +35,38 @@ logger = logging.getLogger(__name__)
 AUTH_MAX_RETRY_COUNT = 3
 
 TOOL_MAPPING_MATRIX = {
-    "fast": ["xss", "sqli"],
-    "deep": ["xss", "sqli", "cmdi", "fileupload", "weakpass", "ssrf", "csrf", "lfi"],
-    "full": ["portscan", "dirscan", "subdomain", "waf", "baseinfo", "cdnexist", "whatcms", "infoleak",
-             "xss", "sqli", "cmdi", "fileupload", "weakpass", "ssrf", "csrf", "lfi"],
+    "fast": ["xss_scan", "sqli_scan"],
+    "deep": ["xss_scan", "sqli_scan", "cmdi_scan", "fileupload_scan", "weakpass_scan", "ssrf_scan", "csrf_scan", "lfi_scan"],
+    "full": ["port_scan", "dir_brute", "subdomain_scan", "waf_detect_scan", "baseinfo_scan", "cdn_detect_scan", "cms_detect_scan", "infoleak_scan",
+             "xss_scan", "sqli_scan", "cmdi_scan", "fileupload_scan", "weakpass_scan", "ssrf_scan", "csrf_scan", "lfi_scan"],
 }
 
 CONTEXT_TOOL_RULES = {
-    "3306": ["sqli", "weakpass"],
-    "1433": ["sqli", "weakpass"],
-    "6379": ["weakpass"],
-    "27017": ["weakpass"],
-    "22": ["weakpass"],
-    "21": ["weakpass"],
-    "3389": ["weakpass"],
-    "80": ["xss", "sqli", "dirscan"],
-    "443": ["xss", "sqli", "dirscan"],
-    "8080": ["xss", "sqli", "dirscan"],
-    "8443": ["xss", "sqli", "dirscan"],
+    "3306": ["sqli_scan", "weakpass_scan"],
+    "1433": ["sqli_scan", "weakpass_scan"],
+    "6379": ["weakpass_scan"],
+    "27017": ["weakpass_scan"],
+    "22": ["weakpass_scan"],
+    "21": ["weakpass_scan"],
+    "3389": ["weakpass_scan"],
+    "80": ["xss_scan", "sqli_scan", "dir_brute"],
+    "443": ["xss_scan", "sqli_scan", "dir_brute"],
+    "8080": ["xss_scan", "sqli_scan", "dir_brute"],
+    "8443": ["xss_scan", "sqli_scan", "dir_brute"],
 }
 
 FALLBACK_TOOL_MAP = {
-    "sqli": ["xss", "cmdi"],
-    "xss": ["csrf"],
-    "cmdi": ["lfi"],
-    "fileupload": ["dirscan"],
-    "weakpass": ["baseinfo"],
-    "ssrf": ["csrf"],
-    "csrf": ["xss"],
-    "lfi": ["cmdi"],
+    "sqli_scan": ["xss_scan", "cmdi_scan"],
+    "xss_scan": ["csrf_scan"],
+    "cmdi_scan": ["lfi_scan"],
+    "fileupload_scan": ["dir_brute"],
+    "weakpass_scan": ["baseinfo_scan"],
+    "ssrf_scan": ["csrf_scan"],
+    "csrf_scan": ["xss_scan"],
+    "lfi_scan": ["cmdi_scan"],
 }
 
-DEFAULT_FALLBACK_TOOLS = ["xss", "sqli"]
+DEFAULT_FALLBACK_TOOLS = ["xss_scan", "sqli_scan"]
 
 
 def get_tools_by_context(port_results: dict) -> list:
@@ -1684,6 +1685,9 @@ def build_react_prompt(state: dict, rag_strategy: str) -> str:
     last_result = state.get("task_result", {})
     tool_sequence = get_tool_sequence(mode)
     remaining = [t for t in tool_sequence if t not in done]
+    
+    max_rag_length = 2000 if len(remaining) > 3 else 1500
+    rag_content = rag_strategy[:max_rag_length] if rag_strategy else '暂无专业知识参考'
 
     prompt = f"""你是一名Web安全扫描专家，使用ReACT框架进行决策。
 
@@ -1695,7 +1699,7 @@ def build_react_prompt(state: dict, rag_strategy: str) -> str:
 - 上一步结果: {str(last_result)[:500]}
 
 ## 专业知识参考 (RAG)
-{rag_strategy[:800] if rag_strategy else '暂无专业知识参考'}
+{rag_content}
 
 ## 指令
 请按以下格式输出，不要输出其他内容：
@@ -1738,19 +1742,26 @@ async def ai_decision(state: ScanState) -> ScanState:
     tool_sequence = get_tool_sequence(mode)
     ws_callback = memory_store.get_websocket_callback(session_id)
     
+    remaining_tasks = [t for t in tool_sequence if t not in done]
+    next_candidate = remaining_tasks[0] if remaining_tasks else ""
+    
     # =================== RAG 知识库检索 ===================
     target = state.get("target", "")
     last_result = state.get("task_result", {})
     rag_strategy = ""
+    rag_sources = []
     try:
         rag_strategy = get_scan_strategy(
             target=target,
-            current_task="",
+            current_task=next_candidate,
             completed_tasks=done,
             last_result=last_result
         )
         if rag_strategy:
-            logger.info(f"RAG 策略检索成功: {rag_strategy[:100]}...")
+            import re
+            source_matches = re.findall(r'来源: ([^\|]+)', rag_strategy)
+            rag_sources = source_matches[:3]
+            logger.info(f"RAG 策略检索成功: 来源={rag_sources}, 内容长度={len(rag_strategy)}")
     except Exception as e:
         logger.warning(f"RAG 检索异常（不影响主流程）: {e}")
     # =====================================================
@@ -1818,7 +1829,9 @@ async def ai_decision(state: ScanState) -> ScanState:
             "next_task": t,
             "completed_count": len(done),
             "total_count": len(tool_sequence),
-            "rag_reference": rag_strategy,
+            "rag_reference": rag_strategy[:500] if rag_strategy else "",
+            "rag_sources": rag_sources,
+            "rag_used": len(rag_strategy) > 0,
             "react_chain": {
                 "thought": react_decision.get("thought", "") if react_decision else "",
                 "action": react_decision.get("action", "") if react_decision else "",
@@ -1920,14 +1933,19 @@ async def user_interact(state: ScanState) -> ScanState:
     memory_store.set_pending_interaction(session_id, interaction_data)
     
     ws_callback = memory_store.get_websocket_callback(session_id)
+    logger.info(f"获取到 WebSocket 回调: {ws_callback}")
+    logger.info(f"发送交互数据: {interaction_data}")
+    
     if ws_callback:
         try:
             await ws_callback(interaction_data)
         except Exception as e:
             logger.error(f"WebSocket 回调失败: {e}")
     
+    logger.info(f"等待用户选择...")
     user_choice = interrupt(interaction_data)
-    
+    logger.info(f"用户选择: {user_choice}")
+
     memory_store.clear_pending_interaction(session_id)
     
     if isinstance(user_choice, dict):
@@ -2196,11 +2214,23 @@ async def execute_task(state: ScanState) -> ScanState:
         
     except Exception as e:
         logger.error(f"执行任务失败: {e}")
+        
+        from TOSKill.utils.error_handler import format_tool_error
+        error_response = format_tool_error(task, e)
+        
         if ws_callback:
             try:
                 await ws_callback({
                     "type": "task_error",
-                    "payload": {"tool": task, "error": str(e)}
+                    "payload": {
+                        "tool": task,
+                        "target": target,
+                        "error": str(e),
+                        "code": error_response.get("payload", {}).get("code"),
+                        "source": error_response.get("payload", {}).get("source"),
+                        "suggestion": error_response.get("payload", {}).get("suggestion"),
+                        "details": error_response.get("payload", {}).get("details", {})
+                    }
                 })
             except Exception as we:
                 logger.error(f"WebSocket推送失败: {we}")
@@ -2417,7 +2447,26 @@ async def report_generation(state: ScanState) -> ScanState:
             }
         )
         
-        logger.info(f"报告已保存: {report_info.get('download_url')}")
+        logger.info(f"Markdown报告已保存: {report_info.get('download_url')}")
+        
+        ai_analysis = report_manager.generate_professional_ai_analysis(
+            tool_results=tool_results,
+            vulnerabilities=vulnerabilities,
+            target=target
+        )
+        logger.info(f"AI分析完成: 风险等级={ai_analysis.get('risk_assessment', {}).get('overall_risk', 'unknown')}")
+        
+        html_report_info = report_manager.save_html_report(
+            session_id=session_id,
+            target=target,
+            scan_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            vulnerabilities=vulnerabilities,
+            tool_results=tool_results,
+            ai_analysis=ai_analysis
+        )
+        
+        html_download_url = html_report_info.get("download_url", "")
+        logger.info(f"HTML报告已保存: {html_download_url}")
         
         if ws_callback:
             try:
@@ -2426,7 +2475,9 @@ async def report_generation(state: ScanState) -> ScanState:
                     "payload": {
                         "report_url": report_info.get("download_url", ""),
                         "report_id": report_info.get("report_id", ""),
-                        "report_preview": report[:500] if report else ""
+                        "report_preview": report[:500] if report else "",
+                        "html_report_url": html_download_url,
+                        "html_report_id": html_report_info.get("report_id", "")
                     }
                 })
             except Exception as e:
@@ -2438,7 +2489,8 @@ async def report_generation(state: ScanState) -> ScanState:
             report=report, 
             scan_summary=scan_summary,
             report_url=report_info.get("download_url", ""),
-            report_id=report_info.get("report_id", "")
+            report_id=report_info.get("report_id", ""),
+            html_report_url=html_download_url
         )
     except Exception as e:
         logger.error(f"保存报告失败: {e}")
@@ -2663,11 +2715,19 @@ def router(state: ScanState) -> str:
     return "user_interact"
 
 
+def create_checkpointer(db_path: str = "data/langgraph_checkpoints.db") -> SqliteSaver:
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
+    checkpointer.setup()
+    return checkpointer
+
+
 class IntentRecognitionGraph:
     """用户意图识别子图 - 系统总入口"""
     
     @staticmethod
-    def build() -> StateGraph:
+    def build(checkpointer: SqliteSaver = None) -> StateGraph:
         workflow = StateGraph(ScanState)
         
         workflow.add_node("intent_recognition", intent_recognition)
@@ -2690,14 +2750,16 @@ class IntentRecognitionGraph:
         workflow.add_edge("script_upload_process", END)
         workflow.add_edge("script_generate_process", END)
         
-        return workflow.compile(checkpointer=MemorySaver())
+        if checkpointer is None:
+            checkpointer = create_checkpointer()
+        return workflow.compile(checkpointer=checkpointer)
 
 
 class InfoCollectionGraph:
     """信息收集子图"""
     
     @staticmethod
-    def build() -> StateGraph:
+    def build(checkpointer: SqliteSaver = None) -> StateGraph:
         workflow = StateGraph(ScanState)
         
         workflow.add_node("ai_decision", ai_decision)
@@ -2723,14 +2785,16 @@ class InfoCollectionGraph:
         workflow.add_edge("script_generate_process", "ai_decision")
         workflow.add_edge("report_generation", END)
         
-        return workflow.compile(checkpointer=MemorySaver())
+        if checkpointer is None:
+            checkpointer = create_checkpointer()
+        return workflow.compile(checkpointer=checkpointer)
 
 
 class VulnScanGraph:
     """漏洞扫描子图"""
     
     @staticmethod
-    def build() -> StateGraph:
+    def build(checkpointer: SqliteSaver = None) -> StateGraph:
         workflow = StateGraph(ScanState)
         
         workflow.add_node("ai_decision", ai_decision)
@@ -2756,14 +2820,16 @@ class VulnScanGraph:
         workflow.add_edge("script_generate_process", "ai_decision")
         workflow.add_edge("report_generation", END)
         
-        return workflow.compile(checkpointer=MemorySaver())
+        if checkpointer is None:
+            checkpointer = create_checkpointer()
+        return workflow.compile(checkpointer=checkpointer)
 
 
 class ReportGraph:
     """报告生成子图"""
     
     @staticmethod
-    def build() -> StateGraph:
+    def build(checkpointer: SqliteSaver = None) -> StateGraph:
         workflow = StateGraph(ScanState)
         
         workflow.add_node("report_generation", report_generation)
@@ -2771,16 +2837,19 @@ class ReportGraph:
         workflow.set_entry_point("report_generation")
         workflow.add_edge("report_generation", END)
         
-        return workflow.compile(checkpointer=MemorySaver())
+        if checkpointer is None:
+            checkpointer = create_checkpointer()
+        return workflow.compile(checkpointer=checkpointer)
 
 class AgentOrchestrator:
     """Agent编排器 - 管理多个子图的执行，支持暂停/恢复"""
     
     def __init__(self):
-        self.intent_graph = IntentRecognitionGraph.build()
-        self.info_graph = InfoCollectionGraph.build()
-        self.vuln_graph = VulnScanGraph.build()
-        self.report_graph = ReportGraph.build()
+        self._checkpointer = create_checkpointer()
+        self.intent_graph = IntentRecognitionGraph.build(checkpointer=self._checkpointer)
+        self.info_graph = InfoCollectionGraph.build(checkpointer=self._checkpointer)
+        self.vuln_graph = VulnScanGraph.build(checkpointer=self._checkpointer)
+        self.report_graph = ReportGraph.build(checkpointer=self._checkpointer)
         self._running_tasks: Dict[str, asyncio.Task] = {}
         logger.info("Agent编排器初始化完成")
     
@@ -2790,18 +2859,25 @@ class AgentOrchestrator:
     
     async def resume_workflow(self, session_id: str, user_choice: str) -> Optional[ScanState]:
         """恢复暂停的工作流 - 使用 Command(resume=...) 恢复 interrupt"""
-        state = memory_store.get_session(session_id)
-        if not state:
-            logger.warning(f"会话 {session_id} 不存在")
-            return None
-        
-        mode = state.get("mode", "")
         config = {"configurable": {"thread_id": session_id}}
         
         if isinstance(user_choice, dict):
             resume_value = user_choice
         else:
             resume_value = {"choice": user_choice}
+        
+        try:
+            checkpoint = await self.info_graph.aget_state(config)
+            if not checkpoint or not checkpoint.values:
+                checkpoint = await self.vuln_graph.aget_state(config)
+            if not checkpoint or not checkpoint.values:
+                checkpoint = await self.intent_graph.aget_state(config)
+            mode = "full_scan"
+            if checkpoint and checkpoint.values:
+                mode = checkpoint.values.get("mode", "full_scan")
+        except Exception:
+            state = memory_store.get_session(session_id)
+            mode = state.get("mode", "full_scan") if state else "full_scan"
         
         logger.info(f"[{session_id}] 恢复工作流，用户选择: {user_choice}, 模式: {mode}")
         
@@ -2826,22 +2902,17 @@ class AgentOrchestrator:
                 result = dict(result)
 
             if result:
-                old_state = memory_store.get_session(session_id)
-                if old_state:
-                    for key in ("completed_tasks", "tool_results", "vulnerabilities",
-                               "task_history", "decision_history", "is_complete", "report"):
-                        if key in result:
-                            old_state = update_state(old_state, **{key: result[key]})
-                    result = old_state
-
-            memory_store.save_session(session_id, result)
+                memory_store.save_session(session_id, result)
+            
             logger.info(f"工作流 {session_id} 已恢复完成")
             return result
             
         except Exception as e:
             logger.error(f"恢复工作流失败: {e}")
-            state = update_state(state, user_choice=user_choice)
-            memory_store.save_session(session_id, state)
+            state = memory_store.get_session(session_id)
+            if state:
+                state = update_state(state, user_choice=user_choice)
+                memory_store.save_session(session_id, state)
             return state
     
     def get_pending_interaction(self, session_id: str) -> Optional[Dict]:
@@ -2859,8 +2930,6 @@ class AgentOrchestrator:
         if websocket_callback:
             memory_store.set_websocket_callback(session_id, websocket_callback)
         
-        memory_store.save_session(session_id, state)
-        
         result = await self.intent_graph.ainvoke(
             state,
             config={"configurable": {"thread_id": session_id}}
@@ -2870,7 +2939,6 @@ class AgentOrchestrator:
             logger.info(f"[{session_id}] 意图识别完成，开始扫描流程")
             result = await self.run_full_scan(result, websocket_callback)
         
-        memory_store.save_session(session_id, result)
         return result
     
     async def run_direct_tool(self, tool_name: str, target: str, session_id: str, websocket_callback: Callable = None) -> Dict[str, Any]:
@@ -2930,7 +2998,6 @@ class AgentOrchestrator:
         logger.info(f"[{state.get('task_id')}] 开始完整扫描流程")
         
         session_id = state.get("websocket_session_id") or state.get("task_id")
-        memory_store.save_session(session_id, state)
         
         if websocket_callback:
             memory_store.set_websocket_callback(session_id, websocket_callback)
@@ -2941,14 +3008,12 @@ class AgentOrchestrator:
                 state,
                 config={"configurable": {"thread_id": session_id}}
             )
-            memory_store.save_session(session_id, state)
             
             state = update_state(state, mode="vuln_scan")
             state = await self.vuln_graph.ainvoke(
                 state,
                 config={"configurable": {"thread_id": session_id}}
             )
-            memory_store.save_session(session_id, state)
             
             state = await self.report_graph.ainvoke(
                 state,

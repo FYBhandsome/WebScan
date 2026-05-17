@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 子域名枚举工具
-使用@tool装饰器封装backend.plugins.subdomain模块
+封装backend.plugins.subdomain模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def subdomain(domain: str) -> Dict[str, Any]:
     """子域名枚举工具，获取域名的子域名列表
     
@@ -62,5 +60,5 @@ def subdomain(domain: str) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    test_result = subdomain.invoke("baidu.com")
+    test_result = subdomain("baidu.com")
     print(test_result)

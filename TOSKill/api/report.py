@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/reports", tags=["reports"])
 
 REPORTS_DIR = PROJECT_ROOT / "reports"
-REPORT_EXTENSIONS = ["*.md", "*.html"]
+REPORT_EXTENSIONS = ["*.md", "*.html", "*.pdf"]
 
 
 def ensure_reports_dir():

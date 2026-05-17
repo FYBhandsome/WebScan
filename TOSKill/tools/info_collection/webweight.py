@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 网站权重查询工具
-使用@tool装饰器封装backend.plugins.webweight模块
+封装backend.plugins.webweight模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def web_weight(domain: str) -> Dict[str, Any]:
     """网站权重查询工具，查询域名的百度权重
     
@@ -63,5 +61,5 @@ def web_weight(domain: str) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    test_result = web_weight.invoke("https://www.baidu.com")
+    test_result = web_weight("https://www.baidu.com")
     print(test_result)

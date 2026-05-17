@@ -54,8 +54,40 @@ export function useAgentChat() {
     addBlock('agent_info', { content: message })
   }
 
-  const addErrorBlock = (message) => {
-    addBlock('agent_error', { content: message })
+  const addErrorBlock = (message, errorData = {}) => {
+    const { code, source, category, suggestion, details } = errorData
+    let fullMessage = message
+    
+    if (source) {
+      const sourceLabels = {
+        'frontend': '前端',
+        'backend': '后端服务',
+        'network': '网络',
+        'tool': '工具执行',
+        'ai_model': 'AI模型',
+        'database': '数据库',
+        'websocket': 'WebSocket连接',
+        'unknown': '未知'
+      }
+      fullMessage = `[${sourceLabels[source] || source}] ${message}`
+    }
+    
+    if (code) {
+      fullMessage = `(${code}) ${fullMessage}`
+    }
+    
+    if (suggestion) {
+      fullMessage = `${fullMessage}\n💡 建议: ${suggestion}`
+    }
+    
+    addBlock('agent_error', { 
+      content: fullMessage,
+      code,
+      source,
+      category,
+      suggestion,
+      details
+    })
   }
 
   const streamingTypes = ['script_analyzing', 'script_generating', 'ai_thinking', 'ai_thinking_start']
@@ -154,8 +186,8 @@ export function useAgentChat() {
       ``,
       `### 可用脚本清单`,
     ]
-    const infoScripts = ['portscan', 'subdomain', 'dirscan', 'waf', 'cdnexist', 'whatcms', 'infoleak', 'iplocating', 'webside', 'webweight', 'baseinfo']
-    const vulnScripts = ['sqli', 'xss', 'csrf', 'fileupload', 'cmdi', 'ssrf', 'lfi', 'weakpass']
+    const infoScripts = ['port_scan', 'subdomain_scan', 'dir_brute', 'waf_detect_scan', 'cdn_detect_scan', 'cms_detect_scan', 'infoleak_scan', 'ip_locate_scan', 'webside_query_scan', 'web_weight_scan', 'baseinfo_scan']
+    const vulnScripts = ['sqli_scan', 'xss_scan', 'csrf_scan', 'fileupload_scan', 'cmdi_scan', 'ssrf_scan', 'lfi_scan', 'weakpass_scan']
     let scripts = []
     if (mode === 'info') scripts = infoScripts
     else if (mode === 'vuln') scripts = [...vulnScripts]
@@ -500,7 +532,19 @@ export function useAgentChat() {
 
       case 'task_error':
         isTyping.value = false
-        addErrorBlock(`工具错误 | ${data.payload?.tool || '-'}: ${data.payload?.error || '未知错误'}`)
+        const taskError = data.payload || {}
+        addErrorBlock(
+          `工具执行失败: ${taskError.tool || '-'}`,
+          {
+            source: 'tool',
+            suggestion: taskError.suggestion || '请检查目标是否可达，或尝试其他工具',
+            details: { 
+              tool: taskError.tool,
+              error: taskError.error,
+              target: taskError.target
+            }
+          }
+        )
         break
 
       case 'task_skipped':
@@ -627,8 +671,18 @@ export function useAgentChat() {
       case 'report_generated':
         isTyping.value = false
         const reportUrl = data.payload?.report_url || ''
+        const htmlReportUrl = data.payload?.html_report_url || ''
         const preview = data.payload?.report_preview || ''
-        const reportContent = `报告已生成\n报告ID: ${data.payload?.report_id || '-'}${reportUrl ? '\n下载链接: ' + reportUrl : ''}${preview ? '\n\n' + preview : ''}`
+        let reportContent = `报告已生成\n报告ID: ${data.payload?.report_id || '-'}`
+        if (htmlReportUrl) {
+          reportContent += `\n📄 HTML报告: ${htmlReportUrl}`
+        }
+        if (reportUrl) {
+          reportContent += `\n📝 Markdown报告: ${reportUrl}`
+        }
+        if (preview) {
+          reportContent += `\n\n${preview}`
+        }
         addBlock('agent_text', { content: reportContent })
         break
 
@@ -774,7 +828,17 @@ export function useAgentChat() {
       case 'error':
         isTyping.value = false
         scanStatus.value = 'error'
-        addErrorBlock(`错误: ${data.payload?.error || '未知错误'}`)
+        const errorPayload = data.payload || {}
+        addErrorBlock(
+          errorPayload.message || errorPayload.error || '未知错误',
+          {
+            code: errorPayload.code,
+            source: errorPayload.source,
+            category: errorPayload.category,
+            suggestion: errorPayload.suggestion,
+            details: errorPayload.details
+          }
+        )
         break
 
       case 'execution_plan':
@@ -788,6 +852,29 @@ export function useAgentChat() {
 
   onMounted(() => {
     ws.on('*', handleWSMessage)
+    
+    ws.onConnect(() => {
+      addInfoBlock('✅ WebSocket 连接成功')
+    })
+    
+    ws.onDisconnect((event) => {
+      const reason = event?.reason || '连接已关闭'
+      addErrorBlock(`WebSocket 连接断开: ${reason}`, { 
+        source: 'websocket',
+        suggestion: '正在尝试重新连接...'
+      })
+    })
+    
+    ws.onError((error) => {
+      addErrorBlock('WebSocket 连接错误', { 
+        source: 'websocket',
+        suggestion: '请检查网络连接，或刷新页面重试'
+      })
+    })
+    
+    ws.onReconnect((sessionId) => {
+      addInfoBlock('🔄 WebSocket 重新连接成功')
+    })
   })
 
   onUnmounted(() => {

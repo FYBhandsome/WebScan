@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 SQL注入漏洞扫描工具
-使用@tool装饰器封装backend.vulnerability_scan_plugins.sqli模块
+封装backend.vulnerability_scan_plugins.sqli模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any, Optional
 
 
-@tool
 def sqli_scan(
     target: str,
     timeout: int = 10,

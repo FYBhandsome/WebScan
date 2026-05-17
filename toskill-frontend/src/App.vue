@@ -96,13 +96,13 @@ onMounted(() => {
       const parsed = JSON.parse(savedSettings)
       if (parsed.apiUrl) API.setBaseUrl(parsed.apiUrl)
       if (parsed.wsUrl) {
-        const finalWsUrl = parsed.wsUrl.includes('/api/ai-chat/ws')
+        const finalWsUrl = parsed.wsUrl.includes(API.WS_PATH)
           ? parsed.wsUrl
-          : parsed.wsUrl.replace(/\/$/, '') + '/api/ai-chat/ws'
+          : parsed.wsUrl.replace(/\/$/, '') + API.WS_PATH
         ws.setUrl(finalWsUrl)
       }
     } catch (e) {
-      console.error('配置加载失败:', e)
+      if (import.meta.env.DEV) console.error('配置加载失败:', e)
     }
   }
 
@@ -113,7 +113,7 @@ onMounted(() => {
   ws.onDisconnect(() => { connectionStatus.value = '未连接' })
   
   ws.connect().then(sessionId => {
-    console.log('应用启动: WS 连接成功，Session:', sessionId)
+    if (import.meta.env.DEV) console.log('应用启动: WS 连接成功，Session:', sessionId)
   }).catch(err => {
     connectionStatus.value = '连接失败'
   })

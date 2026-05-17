@@ -63,6 +63,7 @@ class ScanState(TypedDict, total=False):
     tool_exists: bool
     report_url: str
     report_id: str
+    html_report_url: str
     last_activity_time: str
     conversation_turn: int
     auth_cookies: Dict[str, str]
@@ -162,6 +163,7 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         tool_exists=True,
         report_url="",
         report_id="",
+        html_report_url="",
         last_activity_time=now,
         conversation_turn=0,
         auth_cookies={},

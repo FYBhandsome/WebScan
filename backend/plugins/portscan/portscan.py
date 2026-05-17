@@ -3,6 +3,7 @@
 TCP全连接端口扫描工具
 功能:识别目标开放端口及对应服务,支持IP/域名/URL输入
 优化点:线程安全、资源释放、正则预编译、代码规范、功能扩展
+【扩充版】新增SRC高频端口、内网服务、测试后台、中间件、运维面板
 """
 import socket
 import re
@@ -26,35 +27,109 @@ class ServiceSign:
     service: str
     pattern: re.Pattern
 
-# 预编译SIGNS正则(字节串匹配)
+
+# 预编译SIGNS正则(字节串匹配)【扩充完整版，SRC全场景覆盖】
 SIGNS = [
+    # 基础通用服务
     ServiceSign(b'smb', b'smb', re.compile(rb'^\0\0\0.\xffSMBr\0\0\0.*', re.IGNORECASE)),
     ServiceSign(b'xmpp', b'xmpp', re.compile(rb'^<\?xml version=\'1.0\'\?>', re.IGNORECASE)),
     ServiceSign(b'netbios', b'netbios', re.compile(rb'^\x79\x08.*BROWSE', re.IGNORECASE)),
-    ServiceSign(b'http', b'http', re.compile(rb'HTTP/1.1', re.IGNORECASE)),
+    ServiceSign(b'http', b'http', re.compile(rb'HTTP/1.', re.IGNORECASE)),
     ServiceSign(b'ftp', b'ftp', re.compile(b'^220.*FTP', re.IGNORECASE)),
     ServiceSign(b'ssh', b'ssh', re.compile(b'^SSH-', re.IGNORECASE)),
-    ServiceSign(b'redis', b'redis', re.compile(b'^-ERR unknown command', re.IGNORECASE)),
-    ServiceSign(b'mysql', b'mysql', re.compile(b'mysql_native_password', re.IGNORECASE)),
+    ServiceSign(b'redis', b'redis', re.compile(b'^-ERR unknown command|^\+PONG', re.IGNORECASE)),
+    ServiceSign(b'mysql', b'mysql', re.compile(b'mysql_native_password|^\d\.\d\.\d{1,2}', re.IGNORECASE)),
     ServiceSign(b'rdp', b'rdp', re.compile(b'^\x03\x00\x00\x0b', re.IGNORECASE)),
-    # 其余指纹可按此格式补充,省略部分以简化代码
+
+    # Web中间件/服务器
+    ServiceSign(b'nginx', b'nginx', re.compile(rb'Server: nginx', re.IGNORECASE)),
+    ServiceSign(b'apache', b'apache', re.compile(rb'Server: Apache', re.IGNORECASE)),
+    ServiceSign(b'tomcat', b'tomcat', re.compile(rb'Apache Tomcat', re.IGNORECASE)),
+    ServiceSign(b'jetty', b'jetty', re.compile(rb'Jetty', re.IGNORECASE)),
+    ServiceSign(b'weblogic', b'weblogic', re.compile(rb'WebLogic', re.IGNORECASE)),
+    ServiceSign(b'jboss', b'jboss', re.compile(rb'JBoss|WildFly', re.IGNORECASE)),
+    ServiceSign(b'iis', b'iis', re.compile(rb'Server: Microsoft-IIS', re.IGNORECASE)),
+
+    # 数据库
+    ServiceSign(b'postgresql', b'postgresql', re.compile(rb'^PostgreSQL', re.IGNORECASE)),
+    ServiceSign(b'sqlserver', b'sqlserver', re.compile(rb'^\x04\x01\x00\x00', re.IGNORECASE)),
+    ServiceSign(b'oracle', b'oracle', re.compile(rb'^\x00\x00\x06\x02', re.IGNORECASE)),
+    ServiceSign(b'mongodb', b'mongodb', re.compile(rb'^MongoDB', re.IGNORECASE)),
+    ServiceSign(b'elasticsearch', b'es', re.compile(rb'\"number\":\"[\d\.]+\"', re.IGNORECASE)),
+
+    # 消息队列/分布式组件
+    ServiceSign(b'rabbitmq', b'rabbitmq', re.compile(rb'RabbitMQ', re.IGNORECASE)),
+    ServiceSign(b'kafka', b'kafka', re.compile(rb'Kafka', re.IGNORECASE)),
+    ServiceSign(b'zookeeper', b'zookeeper', re.compile(rb'^ZooKeeper', re.IGNORECASE)),
+    ServiceSign(b'nacos', b'nacos', re.compile(rb'Nacos', re.IGNORECASE)),
+    ServiceSign(b'dubbo', b'dubbo', re.compile(rb'Dubbo', re.IGNORECASE)),
+
+    # 运维/监控/测试面板
+    ServiceSign(b'jenkins', b'jenkins', re.compile(rb'Jenkins', re.IGNORECASE)),
+    ServiceSign(b'gitlab', b'gitlab', re.compile(rb'GitLab', re.IGNORECASE)),
+    ServiceSign(b'prometheus', b'prometheus', re.compile(rb'Prometheus', re.IGNORECASE)),
+    ServiceSign(b'grafana', b'grafana', re.compile(rb'Grafana', re.IGNORECASE)),
+    ServiceSign(b'btpanel', b'btpanel', re.compile(rb'\xe5\xae\x9d\xe5\xa1\x94Linux\xe9\x9d\xa2\xe6\x9d\xbf', re.IGNORECASE)),
+    ServiceSign(b'qinglong', b'qinglong', re.compile(rb'Qinglong', re.IGNORECASE)),
+
+    # 内网/文件服务
+    ServiceSign(b'minio', b'minio', re.compile(rb'Minio', re.IGNORECASE)),
+    ServiceSign(b'fastdfs', b'fastdfs', re.compile(rb'FastDFS', re.IGNORECASE)),
+    ServiceSign(b'svn', b'svn', re.compile(rb'svn', re.IGNORECASE)),
+    ServiceSign(b'telnet', b'telnet', re.compile(rb'^Telnet', re.IGNORECASE)),
+    ServiceSign(b'dns', b'dns', re.compile(rb'^DNS', re.IGNORECASE)),
 ]
 
-# -------------------------- 端口-服务映射表 --------------------------
+# -------------------------- 端口-服务映射表【完整版扩充】 --------------------------
 PORT_SERVICE_MAP: Dict[str, str] = {
+    # 基础网络服务
     '21': 'FTP', '22': 'SSH', '23': 'Telnet', '25': 'SMTP', '53': 'DNS',
-    '80': 'HTTP', '443': 'HTTPS', '139': 'NetBIOS', '445': 'SMB',
-    '3306': 'MySQL/MariaDB', '3389': 'RDP', '6379': 'Redis',
-    '27017': 'MongoDB', '11211': 'Memcached', '8080': 'HTTP',
-    # 其余端口映射可补充
+    '67': 'DHCP', '68': 'DHCP', '80': 'HTTP', '110': 'POP3', '143': 'IMAP',
+    '443': 'HTTPS', '465': 'SMTP-SSL', '995': 'POP3-SSL',
+
+    # Windows内网服务
+    '135': 'RPC', '139': 'NetBIOS', '445': 'SMB', '5985': 'WinRM',
+
+    # 数据库服务
+    '1433': 'SQLServer', '1521': 'Oracle', '3306': 'MySQL', '5432': 'PostgreSQL',
+    '6379': 'Redis', '8123': 'ClickHouse', '9200': 'Elasticsearch', '27017': 'MongoDB',
+
+    # Web中间件/测试后台(SRC核心)
+    '7001': 'WebLogic', '8080': 'Tomcat/HTTP', '8081': '测试后台', '8082': '内部服务',
+    '8088': 'Hadoop', '8090': '测试接口', '8443': 'HTTPS-Tomcat', '9000': '测试面板',
+    '9080': 'WebSphere', '9090': '监控面板',
+
+    # 运维/面板服务
+    '888': '宝塔面板', '8888': '宝塔/测试后台', '3000': 'NodeJS', '5601': 'Kibana',
+    '9100': 'Prometheus', '3389': 'RDP', '5900': 'VNC',
+
+    # 分布式/消息队列
+    '2181': 'ZooKeeper', '5672': 'RabbitMQ', '8848': 'Nacos', '9092': 'Kafka',
+    '20880': 'Dubbo', '11211': 'Memcached',
+
+    # 文件/存储服务
+    '873': 'RSYNC', '2049': 'NFS', '9001': 'MinIO',
+
+    # SRC冷门边缘资产端口
+    '7000': '内部系统', '8000': '通用后台', '8008': '废弃服务', '10000': '管理后台'
 }
 
-# -------------------------- 探测报文(多协议,覆盖更多场景) --------------------------
+# -------------------------- 探测报文【完整版扩充】 --------------------------
 PROBES = [
-    b'GET / HTTP/1.1\r\nHost: {ip}\r\nConnection: close\r\n\r\n',  # HTTP
+    # Web服务探测
+    b'GET / HTTP/1.1\r\nHost: {ip}\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n',
+    b'HEAD / HTTP/1.1\r\nHost: {ip}\r\nConnection: close\r\n\r\n',
+    b'GET /manager/html HTTP/1.1\r\nHost: {ip}\r\nConnection: close\r\n\r\n',  # Tomcat
+    b'GET /login HTTP/1.1\r\nHost: {ip}\r\nConnection: close\r\n\r\n',  # 通用后台
+
+    # 数据库探测
     b'\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07\x75\x73\x65\x72\x6e\x61\x6d\x65\x00\x00\x00\x00',  # MySQL
+    b'NAMESPACE system\r\nGET /_cat/health?v HTTP/1.1\r\nHost: {ip}\r\nConnection: close\r\n\r\n',  # ES
     b'*1\r\n$4\r\nping\r\n',  # Redis
-    b'SSH-2.0-Test\r\n',  # SSH
+
+    # 远程/登录服务
+    b'SSH-2.0-ScanTool\r\n',  # SSH
+    b'\x03\x00\x00\x0b',  # RDP
 ]
 
 # -------------------------- 端口扫描核心类 --------------------------
@@ -66,11 +141,15 @@ class ScanPort:
         """
         self.target = target
         self.ipaddr: str = ""
-        # 线程安全的结果存储(用锁保护)
+        self._last_error: str = ""
         self.open_ports: Set[str] = set()
         self.service_results: Set[str] = set()
         self.lock = threading.Lock()
-        self.portspoof_flag = False  # 是否触发端口欺骗标记
+        self.portspoof_flag = False
+
+    def get_last_error(self) -> str:
+        """获取最后一次错误信息"""
+        return self._last_error
 
     def _normalize_target(self) -> bool:
         """
@@ -78,29 +157,29 @@ class ScanPort:
         :return: 标准化成功返回True,失败返回False
         """
         try:
-            # 去除HTTP/HTTPS协议和路径
             normalized = self.target.replace('http://', '').replace('https://', '').rstrip('/')
             normalized = normalized.split('/')[0]
             
-            # 提取IP(去除端口)
             if ':' in normalized:
                 normalized = normalized.split(':')[0]
             
-            # 检查是否为IP
             if re.match(r'\d+\.\d+\.\d+\.\d+', normalized):
                 self.ipaddr = normalized
                 return True
             
-            # 域名解析(处理多IP场景,取第一个)
-            ip_list = socket.gethostbyname_ex(normalized)[2]
-            if ip_list:
-                self.ipaddr = ip_list[0]
-                return True
-            else:
-                print(f"[ERROR] 域名 {normalized} 未解析到IP")
+            try:
+                ip_list = socket.gethostbyname_ex(normalized)[2]
+                if ip_list:
+                    self.ipaddr = ip_list[0]
+                    return True
+                else:
+                    self._last_error = f"域名 {normalized} 未解析到IP地址，请检查域名是否正确"
+                    return False
+            except socket.gaierror as e:
+                self._last_error = f"DNS解析失败: 域名 '{normalized}' 无法解析 (错误码: {e.errno})"
                 return False
-        except (socket.gaierror, ValueError, TypeError) as e:
-            print(f"[ERROR] 目标标准化失败:{e}")
+        except (ValueError, TypeError) as e:
+            self._last_error = f"目标格式无效: {str(e)}"
             return False
 
     def _get_service_by_port(self, port: str) -> str:
@@ -183,10 +262,13 @@ class ScanPort:
         if not self._normalize_target():
             return False
         
-        # 生成待扫描端口列表
+        # 生成待扫描端口列表【完整版扩充，覆盖SRC全场景】
         ports = [
-            21,22,23,25,53,80,443,139,445,3306,3389,6379,27017,11211,8080
-        ]  # 简化端口列表,可替换为原完整列表
+            21,22,23,25,53,80,135,139,443,445,
+            888,1433,1521,3306,3389,5432,5900,6379,8000,8080,
+            8081,8082,8088,8090,8443,8888,9000,9090,9200,2181,
+            5672,8848,9092,20880,27017,11211,10000
+        ]
         host_ports = [f"{self.ipaddr}:{p}" for p in ports]
         
         # 多线程扫描
@@ -222,7 +304,7 @@ def main():
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <target>")
         print(f"Example: {sys.argv[0]} 127.0.0.1")
-        print(f"Example: {sys.argv[0]} https://baidu.com")
+        print(f"Example: {sys.argv[0]} http://testasp.vulnweb.com")
         sys.exit(1)
     
     target = sys.argv[1]

@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 CDN检测工具
-使用@tool装饰器封装backend.plugins.cdnexist模块
+封装backend.plugins.cdnexist模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def cdn_detect(target: str) -> Dict[str, Any]:
     """CDN检测工具，检测目标主机是否使用CDN
     

@@ -241,3 +241,5 @@ TOSKill/scripts/custom/*
 !TOSKill/scripts/custom/.gitkeep
 
 codeguarddemo/*
+demo_presentation_report/*
+generate_ai_reports.py

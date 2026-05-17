@@ -724,7 +724,7 @@ class POCVerificationResult(Model):
     """
     id = fields.UUIDField(pk=True, description="结果ID")
     verification_task: fields.ForeignKeyRelation[POCVerificationTask] = fields.ForeignKeyField(
-        "models.POCVerificationTask", related_name="verification_results", description="关联验证任务"
+        "models.POCVerificationTask", related_name="results", description="关联验证任务"
     )
     poc_name = fields.CharField(max_length=255, description="POC名称")
     poc_id = fields.CharField(max_length=100, description="POC ID")

@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 命令注入漏洞扫描工具
-使用@tool装饰器封装backend.vulnerability_scan_plugins.cmdi模块
+封装backend.vulnerability_scan_plugins.cmdi模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def cmdi_scan(
     target: str,
     timeout: int = 30

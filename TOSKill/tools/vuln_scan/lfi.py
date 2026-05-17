@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 本地文件包含/目录遍历漏洞扫描工具
-使用@tool装饰器封装backend.vulnerability_scan_plugins.lfi模块
+封装backend.vulnerability_scan_plugins.lfi模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def lfi_scan(
     target: str,
     timeout: int = 30

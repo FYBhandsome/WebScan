@@ -1,17 +1,15 @@
 # -*- coding:utf-8 -*-
 """
 WebLogic漏洞POC验证工具
-使用@tool装饰器封装backend.poc.weblogic模块
+封装backend.poc.weblogic模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 import socket
 import time
 import re
 
 
-@tool
 def weblogic_cve_2020_2551(target: str, timeout: int = 10) -> Dict[str, Any]:
     """WebLogic CVE-2020-2551 T3/IIOP协议反序列化漏洞检测工具
     

@@ -1,9 +1,16 @@
 // src/services/websocket.js
-import { API } from './api.js'; // 引入刚才配置好的 API，用来获取最新的 WS 地址
+import { API } from './api.js';
+
+const isDev = import.meta.env.DEV;
+const LOG = {
+    log: (...args) => isDev && console.log(...args),
+    error: (...args) => isDev && console.error(...args),
+    warn: (...args) => isDev && console.warn(...args),
+};
 
 class WSManager {
     constructor() {
-        this.url = ''; 
+        this.url = '';
         this.ws = null;
         this.connected = false;
         this.reconnectAttempts = 0;
@@ -19,6 +26,8 @@ class WSManager {
         this.onErrorCallback = null;
         this.onReconnectCallback = null;
         this.sessionId = null;
+        this._firstConnect = true;
+        this._shouldReconnect = true;
     }
 
     // 设置或者更新 WS 地址
@@ -53,23 +62,25 @@ class WSManager {
 
             try {
                 const rawUrl = this.url || API.getWebSocketUrl();
-                const targetUrl = rawUrl.includes('/api/ai-chat/ws')
+                const targetUrl = rawUrl.includes(API.WS_PATH)
                     ? rawUrl
-                    : rawUrl.replace(/\/$/, '') + '/api/ai-chat/ws';
+                    : rawUrl.replace(/\/$/, '') + API.WS_PATH;
                 this.ws = new WebSocket(targetUrl);
 
                 this.ws.onopen = () => {
-                    console.log('WebSocket connected');
+                    LOG.log('WebSocket connected');
                     this.connected = true;
                     this.reconnectAttempts = 0;
+                    this._shouldReconnect = true;
 
                     if (this.onConnectCallback) {
                         this.onConnectCallback();
                     }
 
-                    if (this.onReconnectCallback && this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    if (!this._firstConnect && this.onReconnectCallback) {
                         this.onReconnectCallback(this.sessionId);
                     }
+                    this._firstConnect = false;
                 };
 
                 this.ws.onmessage = (event) => {
@@ -86,37 +97,38 @@ class WSManager {
                             }
                         }
                     } catch (error) {
-                        console.error('Failed to parse WebSocket message:', error);
+                        LOG.error('Failed to parse WebSocket message:', error);
                     }
                 };
 
                 this.ws.onclose = (event) => {
-                    console.log('WebSocket closed:', event.code, event.reason);
+                    LOG.log('WebSocket closed:', event.code, event.reason);
                     this.connected = false;
 
                     if (this.onDisconnectCallback) {
                         this.onDisconnectCallback(event);
                     }
 
-                    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-                        const delay = Math.min(
+                    if (this._shouldReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
+                        const baseDelay = Math.min(
                             this.reconnectDelay * Math.pow(2, this.reconnectAttempts),
                             this.maxReconnectDelay
                         );
+                        const delay = baseDelay * (0.5 + Math.random() * 0.5);
                         this.reconnectAttempts++;
-                        console.log(`Reconnecting... Attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
+                        LOG.log(`Reconnecting... Attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${Math.round(delay)}ms`);
                         this.reconnectTimer = setTimeout(() => {
                             this.reconnectTimer = null;
                             this.connect();
                         }, delay);
                     } else {
-                        console.log('Max reconnect attempts reached');
+                        LOG.log('Max reconnect attempts reached');
                         this.cleanupConnectPromise(new Error('Max reconnect attempts reached'));
                     }
                 };
 
                 this.ws.onerror = (error) => {
-                    console.error('WebSocket error:', error);
+                    LOG.error('WebSocket error:', error);
                     if (this.onErrorCallback) {
                         this.onErrorCallback(error);
                     }
@@ -142,7 +154,7 @@ class WSManager {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
         }
-        this.reconnectAttempts = this.maxReconnectAttempts;
+        this._shouldReconnect = false;
         this.cleanupConnectPromise(new Error('Disconnected'));
         if (this.ws) {
             this.ws.close();
@@ -154,7 +166,7 @@ class WSManager {
 
     send(type, payload = {}) {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            console.error('WebSocket is not connected');
+            LOG.error('WebSocket is not connected');
             return false;
         }
         const message = { type, payload };

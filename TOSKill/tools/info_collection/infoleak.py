@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 信息泄露扫描工具
-使用@tool装饰器封装backend.plugins.infoleak模块
+封装backend.plugins.infoleak模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def infoleak_scan(target: str) -> Dict[str, Any]:
     """信息泄露扫描工具，扫描目标URL的敏感文件和目录
     

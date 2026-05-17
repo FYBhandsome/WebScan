@@ -3,6 +3,7 @@ class ApiService {
     this.baseUrl = '/api';
     this.wsUrl = '';
     this.wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    this.WS_PATH = '/api/ai-chat/ws';
   }
 
   setBaseUrl(url) {
@@ -50,7 +51,7 @@ class ApiService {
 
       return data;
     } catch (error) {
-      console.error('API Error:', error);
+      if (import.meta.env.DEV) console.error('API Error:', error);
       throw error;
     }
   }
@@ -142,7 +143,7 @@ class ApiService {
       return this.wsUrl;
     }
     const host = window.location.host;
-    return `${this.wsProtocol}//${host}/api/ai-chat/ws`;
+    return `${this.wsProtocol}//${host}${this.WS_PATH}`;
   }
 
   // --- Chat ---

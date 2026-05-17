@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 WAF检测工具
-使用@tool装饰器封装backend.plugins.waf模块
+封装backend.plugins.waf模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def waf_detect(target: str) -> Dict[str, Any]:
     """WAF(Web应用防火墙)检测工具，检测目标网站是否部署WAF
     
@@ -65,5 +63,5 @@ def waf_detect(target: str) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    test_result = waf_detect.invoke("https://www.baidu.com")
+    test_result = waf_detect("https://www.baidu.com")
     print(test_result)

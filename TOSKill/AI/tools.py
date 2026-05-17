@@ -275,8 +275,30 @@ def wrap_tool_result(
 
 def clean_target(target: str) -> str:
     """URL 自动清洗 - 类比 demo.py"""
+    import re
+    
+    target = target.strip()
+    
+    url_pattern = r'(https?://[\w\.-]+(?::\d+)?(?:/[\w\./-]*)?)'
+    match = re.search(url_pattern, target)
+    if match:
+        target = match.group(1)
+    
+    ip_pattern = r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?)'
+    match = re.search(ip_pattern, target)
+    if match:
+        return match.group(1)
+    
+    domain_pattern = r'([\w-]+\.[\w.-]+(?::\d+)?)'
+    match = re.search(domain_pattern, target)
+    if match:
+        return match.group(1)
+    
     parsed = urlparse(target)
-    return parsed.netloc.strip() if parsed.netloc else target.strip()
+    if parsed.netloc:
+        return parsed.netloc.strip()
+    
+    return target
 
 
 def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None) -> Any:
@@ -432,7 +454,7 @@ def baseinfo_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行基础信息收集：{t}")
     try:
-        raw_result = baseinfo.invoke({"target": t})
+        raw_result = baseinfo(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -464,10 +486,25 @@ def port_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行端口扫描：{t}")
     try:
-        raw_result = portscan.invoke({"target": t})
+        from backend.plugins.portscan.portscan import ScanPort
+        
+        scanner = ScanPort(t)
+        
+        if not scanner.run_scan():
+            error_msg = scanner.get_last_error() or "端口扫描执行失败，可能是目标不可达"
+            logger.warning(f"端口扫描失败: {error_msg}")
+            return wrap_tool_result(success=False, data={}, error=error_msg)
+        
+        raw_result = scanner.get_results()
+        logger.info(f"端口扫描完成，发现 {len(raw_result)} 个开放端口")
+        
         return wrap_tool_result(
             success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
+            data={
+                "open_ports": raw_result,
+                "total_count": len(raw_result),
+                "portspoof_detected": "Portspoof:0" in raw_result
+            }
         )
     except Exception as e:
         logger.error(f"端口扫描失败: {e}")
@@ -495,7 +532,7 @@ def subdomain_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行子域名扫描：{t}")
     try:
-        raw_result = subdomain.invoke({"domain": t})
+        raw_result = subdomain(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -527,7 +564,7 @@ def dir_brute(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行目录扫描：{t}")
     try:
-        raw_result = dirscan.invoke({"target": t})
+        raw_result = dirscan(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -559,7 +596,7 @@ def waf_detect_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行WAF检测：{t}")
     try:
-        raw_result = waf_detect.invoke({"target": t})
+        raw_result = waf_detect(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -591,7 +628,7 @@ def cdn_detect_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行CDN检测：{t}")
     try:
-        raw_result = cdn_detect.invoke({"target": t})
+        raw_result = cdn_detect(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -623,7 +660,7 @@ def cms_detect_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行CMS识别：{t}")
     try:
-        raw_result = cms_detect.invoke({"target": t})
+        raw_result = cms_detect(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -655,7 +692,7 @@ def infoleak_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行信息泄露扫描：{t}")
     try:
-        raw_result = infoleak.invoke({"target": t})
+        raw_result = infoleak(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -689,7 +726,7 @@ def ip_locate_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行IP定位：{t}")
     try:
-        raw_result = ip_locate.invoke({"ip": t})
+        raw_result = ip_locate(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -722,7 +759,7 @@ def webside_query_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行备案查询：{t}")
     try:
-        raw_result = webside_query.invoke({"ip": t})
+        raw_result = webside_query(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -754,7 +791,7 @@ def web_weight_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行权重查询：{t}")
     try:
-        raw_result = web_weight.invoke({"domain": t})
+        raw_result = web_weight(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -808,7 +845,7 @@ def sqli_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = sqli.invoke(params)
+        raw_result = sqli(params)
         auth_extracted = extract_auth_from_result(raw_result) if isinstance(raw_result, dict) else None
         return wrap_tool_result(
             success=True,
@@ -861,7 +898,7 @@ def xss_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = xss.invoke(params)
+        raw_result = xss(params)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -911,7 +948,7 @@ def csrf_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = csrf.invoke(params)
+        raw_result = csrf(params)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -962,7 +999,7 @@ def fileupload_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = fileupload.invoke(params)
+        raw_result = fileupload(params)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -1013,7 +1050,7 @@ def cmdi_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = cmdi.invoke(params)
+        raw_result = cmdi(params)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -1064,7 +1101,7 @@ def ssrf_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = ssrf.invoke(params)
+        raw_result = ssrf(params)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -1115,7 +1152,7 @@ def lfi_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = lfi.invoke(params)
+        raw_result = lfi(params)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -1170,7 +1207,7 @@ def weakpass_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = weakpass.invoke(params)
+        raw_result = weakpass(params)
         auth_extracted = extract_auth_from_result(raw_result) if isinstance(raw_result, dict) else None
         return wrap_tool_result(
             success=True,
@@ -1207,7 +1244,7 @@ def thinkphp_rce_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行ThinkPHP RCE检测：{t}")
     try:
-        raw_result = thinkphp_rce.invoke({"target": t})
+        raw_result = thinkphp_rce(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -1240,7 +1277,7 @@ def struts2_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行Struts2漏洞检测：{t}")
     try:
-        raw_result = struts2_s2_032.invoke({"target": t})
+        raw_result = struts2_s2_032(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -1273,7 +1310,7 @@ def weblogic_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行WebLogic漏洞检测：{t}")
     try:
-        raw_result = weblogic_cve_2020_2551.invoke({"target": t})
+        raw_result = weblogic_cve_2020_2551(t)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}

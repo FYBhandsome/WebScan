@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 基础信息收集工具
-使用@tool装饰器封装backend.plugins.baseinfo模块
+封装backend.plugins.baseinfo模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def baseinfo(target: str) -> Dict[str, Any]:
     """基础信息收集工具，收集目标域名/IP的基本信息
     
@@ -64,5 +62,5 @@ def baseinfo(target: str) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    test_result = baseinfo.invoke("https://www.baidu.com")
+    test_result = baseinfo("https://www.baidu.com")
     print(test_result)

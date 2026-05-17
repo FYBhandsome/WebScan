@@ -67,5 +67,5 @@ def cms_detect(target: str) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    test_result = cms_detect.invoke("https://www.baidu.com")
+    test_result = cms_detect("https://www.baidu.com")
     print(test_result)

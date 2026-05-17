@@ -14,6 +14,9 @@ def get_scan_strategy(
 ) -> str:
     """
     获取扫描策略建议（供 ai_decision 节点调用）
+    
+    使用 LlamaIndex VectorIndexRetriever 进行语义检索，
+    返回知识库中相关的专业知识片段。
 
     Args:
         target: 扫描目标 URL
@@ -31,3 +34,38 @@ def get_scan_strategy(
         completed_tasks=completed_tasks,
         last_result=last_result
     )
+
+
+def get_rag_stats() -> Dict[str, Any]:
+    """
+    获取 RAG 引擎统计信息
+    
+    Returns:
+        Dict: 包含缓存命中率、查询次数、文档数等统计信息
+    """
+    engine = get_rag_engine()
+    return engine.get_stats()
+
+
+def is_rag_ready() -> bool:
+    """
+    检查 RAG 引擎是否就绪
+    
+    Returns:
+        bool: RAG 是否可用
+    """
+    engine = get_rag_engine()
+    return engine.is_ready
+
+
+def rebuild_knowledge_base() -> bool:
+    """
+    重建知识库索引
+    
+    在添加/修改知识库文档后调用，重新生成向量索引。
+    
+    Returns:
+        bool: 重建是否成功
+    """
+    from .rag_engine import rebuild_knowledge_base as _rebuild
+    return _rebuild()

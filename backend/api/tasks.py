@@ -20,6 +20,7 @@ import asyncio
 from backend.models import Task, Vulnerability, POCScanResult, Report
 from backend.config import settings
 from backend.api.common import APIResponse
+from backend.AVWS.API.Vuln import Vuln
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,27 @@ def standardize_severity(severity_val) -> str:
         return severity_val.capitalize()
     
     return 'Info'
+
+def standardize_title(vt_name: str) -> str:
+    """清洗 AWVS 漏洞标题，去除前后空白，统一为可读格式"""
+    if not vt_name:
+        return 'Unknown Vulnerability'
+    title = vt_name.strip()
+    title = ' '.join(title.split())
+    if not title:
+        return 'Unknown Vulnerability'
+    return title
+
+def validate_vulnerability_consistency(val: dict) -> list:
+    """检查 AWVS 漏洞数据字段完整性，返回缺失字段的警告列表"""
+    errors = []
+    if not val.get('vuln_id'):
+        errors.append('Missing vuln_id')
+    if not val.get('vt_name'):
+        errors.append('Missing vt_name')
+    if not val.get('severity') and val.get('severity') != 0:
+        errors.append('Missing severity')
+    return errors
 
 # ====== 业务规则常量 ======
 

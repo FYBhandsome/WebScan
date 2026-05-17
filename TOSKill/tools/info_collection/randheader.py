@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 随机请求头生成工具
-使用@tool装饰器封装backend.plugins.randheader模块
+封装backend.plugins.randheader模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any, Optional
 
 
-@tool
 def random_headers(conn_type: Optional[str] = "keep-alive") -> Dict[str, Any]:
     """随机请求头生成工具，生成伪造的HTTP请求头
     
@@ -64,5 +62,5 @@ def random_headers(conn_type: Optional[str] = "keep-alive") -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    test_result = random_headers.invoke({"conn_type": "keep-alive"})
+    test_result = random_headers("keep-alive")
     print(test_result)

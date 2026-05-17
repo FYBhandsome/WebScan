@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 ThinkPHP漏洞POC验证工具
-使用@tool装饰器封装backend.poc.thinkphp模块
+封装backend.poc.thinkphp模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def thinkphp_rce(target: str, timeout: int = 10) -> Dict[str, Any]:
     """ThinkPHP 远程代码执行漏洞检测工具
     

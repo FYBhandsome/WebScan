@@ -1,14 +1,12 @@
 # -*- coding:utf-8 -*-
 """
 端口扫描工具
-使用@tool装饰器封装backend.plugins.portscan模块
+封装backend.plugins.portscan模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def portscan(target: str) -> Dict[str, Any]:
     """TCP全连接端口扫描工具，识别目标开放端口及对应服务
     
@@ -34,10 +32,11 @@ def portscan(target: str) -> Dict[str, Any]:
         scanner = ScanPort(target)
         
         if not scanner.run_scan():
+            error_msg = scanner.get_last_error() or "端口扫描执行失败，可能是目标不可达"
             return {
                 "success": False,
                 "data": None,
-                "error": "端口扫描执行失败，可能是目标不可达",
+                "error": error_msg,
                 "metadata": {"tool": "portscan", "target": target}
             }
         

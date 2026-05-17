@@ -17,6 +17,7 @@ from TOSKill.AI.state import create_initial_state, append_chat, update_state
 from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm as _get_llm
 from TOSKill.AI.core import CHAT_SYSTEM_PROMPT
 from TOSKill.AI.tools import get_tool_by_name, get_all_tool_names
+from TOSKill.utils.error_handler import create_error_response, format_tool_error, ErrorSource, ErrorCategory
 
 router = APIRouter(prefix="/ai-chat", tags=["AI对话WebSocket"])
 logger = logging.getLogger(__name__)
@@ -64,8 +65,22 @@ class AIChatManager:
             except Exception as e:
                 logger.error(f"发送消息失败: {e}")
     
-    async def _send_error(self, session_id: str, error: str, **extra):
-        await self._send(session_id, {"type": "error", "payload": {"error": error, **extra}})
+    async def _send_error(self, session_id: str, error: str, error_code: str = None, **extra):
+        if error_code:
+            error_response = create_error_response(error_code, custom_message=error, details=extra)
+        else:
+            error_response = {
+                "type": "error",
+                "payload": {
+                    "code": "E999",
+                    "message": error,
+                    "source": ErrorSource.BACKEND.value,
+                    "category": ErrorCategory.EXECUTION.value,
+                    "suggestion": "请查看详细错误信息，或联系技术支持",
+                    "details": extra
+                }
+            }
+        await self._send(session_id, error_response)
     
     async def handle_message(self, session_id: str, message: Dict):
         msg_type = message.get("type")
@@ -152,22 +167,37 @@ class AIChatManager:
     async def _handle_start_scan(self, session_id: str, payload: Dict):
         target = payload.get("target", "")
         if not target:
-            await self._send_error(session_id, "目标地址不能为空")
+            await self._send_error(session_id, "目标地址不能为空", error_code="INVALID_TARGET")
             return
         
-        task_id = str(uuid4())[:8]
+        import re
+        target_pattern = r'^[\w\.-]+(:\d+)?$|^https?://[\w\.-]+(:\d+)?(/.*)?$'
+        if not re.match(target_pattern, target.strip()):
+            await self._send_error(
+                session_id, 
+                f"目标地址格式无效: {target}", 
+                error_code="INVALID_TARGET",
+                valid_formats=["example.com", "192.168.1.1", "http://example.com", "example.com:8080"]
+            )
+            return
+        
         mode = SCAN_MODE_MAP.get(payload.get("scan_mode", "info"), "info_collection")
-        state = create_initial_state(target=target, task_id=task_id, mode=mode)
+        state = create_initial_state(target=target, task_id=session_id, mode=mode)
         state["websocket_session_id"] = session_id
         memory_store.save_session(session_id, state)
         
-        self.tasks[session_id] = asyncio.create_task(self._run_scan(session_id, task_id, target, mode, state))
+        self.tasks[session_id] = asyncio.create_task(self._run_scan(session_id, target, mode, state))
     
-    async def _run_scan(self, session_id: str, task_id: str, target: str, mode: str, state: Dict):
+    async def _run_scan(self, session_id: str, target: str, mode: str, state: Dict):
         orchestrator = get_agent_orchestrator()
         
+        async def _ws_callback(message: Dict):
+            await self._send(session_id, message)
+        
+        orchestrator.set_websocket_callback(session_id, _ws_callback)
+        
         try:
-            await self._send(session_id, {"type": "scan_started", "payload": {"task_id": task_id, "target": target}})
+            await self._send(session_id, {"type": "scan_started", "payload": {"task_id": session_id, "target": target}})
             
             methods = {
                 "full_scan": orchestrator.run_full_scan,
@@ -187,7 +217,7 @@ class AIChatManager:
                 await self._send(session_id, {
                     "type": "scan_completed",
                     "payload": {
-                        "task_id": task_id,
+                        "session_id": session_id,
                         "target": target,
                         "completed_tasks": result.get("completed_tasks", []),
                         "vulnerabilities_count": len(result.get("vulnerabilities", [])),
@@ -195,10 +225,10 @@ class AIChatManager:
                     }
                 })
         except asyncio.CancelledError:
-            await self._send(session_id, {"type": "scan_cancelled", "payload": {"task_id": task_id}})
+            await self._send(session_id, {"type": "scan_cancelled", "payload": {"session_id": session_id}})
         except Exception as e:
             logger.error(f"[{session_id}] 扫描任务异常: {e}")
-            await self._send_error(session_id, str(e), task_id=task_id)
+            await self._send_error(session_id, str(e))
     
     async def _handle_get_history(self, session_id: str, payload: Dict):
         history = memory_store.get_chat_history(session_id)

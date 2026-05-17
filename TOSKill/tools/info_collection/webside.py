@@ -65,5 +65,5 @@ def webside_query(ip: str) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    test_result = webside_query.invoke("8.8.8.8")
+    test_result = webside_query("8.8.8.8")
     print(test_result)
