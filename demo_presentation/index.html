@@ -1,0 +1,1373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI for Security - 实训教学管理平台</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- 侧边栏导航 -->
+        <nav class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fas fa-shield-alt"></i>
+                    <span>AI for Security</span>
+                </div>
+                <p class="subtitle">实训教学管理平台</p>
+            </div>
+            
+            <div class="user-info">
+                <div class="avatar">
+                    <i class="fas fa-user"></i>
+                </div>
+                <div class="user-details">
+                    <span class="user-name">张三</span>
+                    <span class="user-role">学生</span>
+                </div>
+            </div>
+            
+            <ul class="nav-menu">
+                <li class="nav-item active" data-page="dashboard">
+                    <i class="fas fa-home"></i>
+                    <span>学习中心</span>
+                </li>
+                <li class="nav-item" data-page="exams">
+                    <i class="fas fa-clipboard-list"></i>
+                    <span>模考中心</span>
+                </li>
+                <li class="nav-item" data-page="dvwa-lab">
+                    <i class="fas fa-flask"></i>
+                    <span>DVWA靶场</span>
+                </li>
+                <li class="nav-item" data-page="question-bank">
+                    <i class="fas fa-database"></i>
+                    <span>题库练习</span>
+                </li>
+                <li class="nav-item" data-page="progress">
+                    <i class="fas fa-chart-line"></i>
+                    <span>学习进度</span>
+                </li>
+                <li class="nav-item" data-page="achievements">
+                    <i class="fas fa-trophy"></i>
+                    <span>成就系统</span>
+                </li>
+                <li class="nav-item" data-page="teacher-admin" style="display: none;">
+                    <i class="fas fa-cog"></i>
+                    <span>教师管理</span>
+                </li>
+            </ul>
+            
+            <div class="sidebar-footer">
+                <button class="switch-role-btn" onclick="switchRole()">
+                    <i class="fas fa-exchange-alt"></i>
+                    切换角色
+                </button>
+            </div>
+        </nav>
+
+        <!-- 主内容区域 -->
+        <main class="main-content">
+            <!-- 顶部导航栏 -->
+            <header class="top-header">
+                <button class="menu-toggle" onclick="toggleSidebar()">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <div class="header-title">
+                    <h1 id="page-title">学习中心</h1>
+                </div>
+                <div class="header-actions">
+                    <div class="notification">
+                        <i class="fas fa-bell"></i>
+                        <span class="badge">3</span>
+                    </div>
+                    <div class="search-box">
+                        <i class="fas fa-search"></i>
+                        <input type="text" placeholder="搜索...">
+                    </div>
+                </div>
+            </header>
+
+            <!-- 页面内容容器 -->
+            <div class="content-container">
+                <!-- 学习中心页面 -->
+                <div class="page active" id="dashboard-page">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-icon blue">
+                                <i class="fas fa-book-open"></i>
+                            </div>
+                            <div class="stat-info">
+                                <h3>已完成课程</h3>
+                                <p class="stat-number">12</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon green">
+                                <i class="fas fa-check-circle"></i>
+                            </div>
+                            <div class="stat-info">
+                                <h3>通过模考</h3>
+                                <p class="stat-number">8</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon orange">
+                                <i class="fas fa-fire"></i>
+                            </div>
+                            <div class="stat-info">
+                                <h3>连续学习</h3>
+                                <p class="stat-number">15天</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon purple">
+                                <i class="fas fa-star"></i>
+                            </div>
+                            <div class="stat-info">
+                                <h3>总积分</h3>
+                                <p class="stat-number">2,450</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="dashboard-grid">
+                        <div class="card recent-exams">
+                            <div class="card-header">
+                                <h2><i class="fas fa-clock"></i> 最近模考</h2>
+                                <a href="#" onclick="navigateTo('exams')">查看全部</a>
+                            </div>
+                            <div class="exam-list">
+                                <div class="exam-item" onclick="startExam('sql-injection')">
+                                    <div class="exam-icon sql">
+                                        <i class="fas fa-database"></i>
+                                    </div>
+                                    <div class="exam-info">
+                                        <h3>SQL注入漏洞检测</h3>
+                                        <p>难度: 中级 | 题目: 20道</p>
+                                    </div>
+                                    <div class="exam-status completed">
+                                        <span>已完成</span>
+                                        <strong>92分</strong>
+                                    </div>
+                                </div>
+                                <div class="exam-item" onclick="startExam('xss')">
+                                    <div class="exam-icon xss">
+                                        <i class="fas fa-code"></i>
+                                    </div>
+                                    <div class="exam-info">
+                                        <h3>XSS跨站脚本攻击</h3>
+                                        <p>难度: 高级 | 题目: 25道</p>
+                                    </div>
+                                    <div class="exam-status pending">
+                                        <span>进行中</span>
+                                        <strong>60%</strong>
+                                    </div>
+                                </div>
+                                <div class="exam-item" onclick="startExam('csrf')">
+                                    <div class="exam-icon csrf">
+                                        <i class="fas fa-exchange-alt"></i>
+                                    </div>
+                                    <div class="exam-info">
+                                        <h3>CSRF跨站请求伪造</h3>
+                                        <p>难度: 初级 | 题目: 15道</p>
+                                    </div>
+                                    <div class="exam-status not-started">
+                                        <span>未开始</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card learning-path">
+                            <div class="card-header">
+                                <h2><i class="fas fa-route"></i> 学习路径</h2>
+                            </div>
+                            <div class="path-progress">
+                                <div class="path-item completed">
+                                    <div class="path-node">
+                                        <i class="fas fa-check"></i>
+                                    </div>
+                                    <div class="path-content">
+                                        <h4>Web安全基础</h4>
+                                        <p>已完成 5/5 课程</p>
+                                    </div>
+                                </div>
+                                <div class="path-item completed">
+                                    <div class="path-node">
+                                        <i class="fas fa-check"></i>
+                                    </div>
+                                    <div class="path-content">
+                                        <h4>信息收集技术</h4>
+                                        <p>已完成 8/8 课程</p>
+                                    </div>
+                                </div>
+                                <div class="path-item active">
+                                    <div class="path-node">
+                                        <span>3</span>
+                                    </div>
+                                    <div class="path-content">
+                                        <h4>漏洞扫描与利用</h4>
+                                        <p>进行中 6/12 课程</p>
+                                        <div class="progress-bar">
+                                            <div class="progress" style="width: 50%"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="path-item">
+                                    <div class="path-node">
+                                        <span>4</span>
+                                    </div>
+                                    <div class="path-content">
+                                        <h4>渗透测试实战</h4>
+                                        <p>未开始 0/10 课程</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 模考中心页面 -->
+                <div class="page" id="exams-page">
+                    <div class="page-header">
+                        <div class="filter-tabs">
+                            <button class="tab active">全部</button>
+                            <button class="tab">SQL注入</button>
+                            <button class="tab">XSS</button>
+                            <button class="tab">CSRF</button>
+                            <button class="tab">文件上传</button>
+                            <button class="tab">命令注入</button>
+                        </div>
+                        <div class="search-filter">
+                            <input type="text" placeholder="搜索模考...">
+                            <select>
+                                <option>全部难度</option>
+                                <option>初级</option>
+                                <option>中级</option>
+                                <option>高级</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="exams-grid">
+                        <div class="exam-card" onclick="startExam('sql-injection')">
+                            <div class="exam-card-header sql">
+                                <i class="fas fa-database"></i>
+                                <span class="difficulty intermediate">中级</span>
+                            </div>
+                            <div class="exam-card-body">
+                                <h3>SQL注入漏洞检测与防御</h3>
+                                <p>全面掌握SQL注入原理、检测方法和防御策略</p>
+                                <div class="exam-meta">
+                                    <span><i class="fas fa-question-circle"></i> 20题</span>
+                                    <span><i class="fas fa-clock"></i> 45分钟</span>
+                                    <span><i class="fas fa-users"></i> 1,234人已参加</span>
+                                </div>
+                            </div>
+                            <div class="exam-card-footer">
+                                <div class="rating">
+                                    <i class="fas fa-star"></i>
+                                    <span>4.8</span>
+                                </div>
+                                <button class="start-btn">开始模考</button>
+                            </div>
+                        </div>
+
+                        <div class="exam-card" onclick="startExam('xss')">
+                            <div class="exam-card-header xss">
+                                <i class="fas fa-code"></i>
+                                <span class="difficulty advanced">高级</span>
+                            </div>
+                            <div class="exam-card-body">
+                                <h3>XSS跨站脚本攻击实战</h3>
+                                <p>深入理解XSS攻击类型、绕过技巧与防护方案</p>
+                                <div class="exam-meta">
+                                    <span><i class="fas fa-question-circle"></i> 25题</span>
+                                    <span><i class="fas fa-clock"></i> 60分钟</span>
+                                    <span><i class="fas fa-users"></i> 892人已参加</span>
+                                </div>
+                            </div>
+                            <div class="exam-card-footer">
+                                <div class="rating">
+                                    <i class="fas fa-star"></i>
+                                    <span>4.6</span>
+                                </div>
+                                <button class="start-btn">开始模考</button>
+                            </div>
+                        </div>
+
+                        <div class="exam-card" onclick="startExam('csrf')">
+                            <div class="exam-card-header csrf">
+                                <i class="fas fa-exchange-alt"></i>
+                                <span class="difficulty beginner">初级</span>
+                            </div>
+                            <div class="exam-card-body">
+                                <h3>CSRF跨站请求伪造入门</h3>
+                                <p>学习CSRF攻击原理与防御机制</p>
+                                <div class="exam-meta">
+                                    <span><i class="fas fa-question-circle"></i> 15题</span>
+                                    <span><i class="fas fa-clock"></i> 30分钟</span>
+                                    <span><i class="fas fa-users"></i> 2,156人已参加</span>
+                                </div>
+                            </div>
+                            <div class="exam-card-footer">
+                                <div class="rating">
+                                    <i class="fas fa-star"></i>
+                                    <span>4.9</span>
+                                </div>
+                                <button class="start-btn">开始模考</button>
+                            </div>
+                        </div>
+
+                        <div class="exam-card" onclick="startExam('fileupload')">
+                            <div class="exam-card-header fileupload">
+                                <i class="fas fa-upload"></i>
+                                <span class="difficulty advanced">高级</span>
+                            </div>
+                            <div class="exam-card-body">
+                                <h3>文件上传漏洞深度解析</h3>
+                                <p>掌握文件上传漏洞利用与安全配置</p>
+                                <div class="exam-meta">
+                                    <span><i class="fas fa-question-circle"></i> 18题</span>
+                                    <span><i class="fas fa-clock"></i> 40分钟</span>
+                                    <span><i class="fas fa-users"></i> 678人已参加</span>
+                                </div>
+                            </div>
+                            <div class="exam-card-footer">
+                                <div class="rating">
+                                    <i class="fas fa-star"></i>
+                                    <span>4.7</span>
+                                </div>
+                                <button class="start-btn">开始模考</button>
+                            </div>
+                        </div>
+
+                        <div class="exam-card" onclick="startExam('cmdi')">
+                            <div class="exam-card-header cmdi">
+                                <i class="fas fa-terminal"></i>
+                                <span class="difficulty intermediate">中级</span>
+                            </div>
+                            <div class="exam-card-body">
+                                <h3>命令注入漏洞检测</h3>
+                                <p>学习命令注入原理、检测与防御</p>
+                                <div class="exam-meta">
+                                    <span><i class="fas fa-question-circle"></i> 20题</span>
+                                    <span><i class="fas fa-clock"></i> 45分钟</span>
+                                    <span><i class="fas fa-users"></i> 543人已参加</span>
+                                </div>
+                            </div>
+                            <div class="exam-card-footer">
+                                <div class="rating">
+                                    <i class="fas fa-star"></i>
+                                    <span>4.5</span>
+                                </div>
+                                <button class="start-btn">开始模考</button>
+                            </div>
+                        </div>
+
+                        <div class="exam-card" onclick="startExam('ssrf')">
+                            <div class="exam-card-header ssrf">
+                                <i class="fas fa-server"></i>
+                                <span class="difficulty advanced">高级</span>
+                            </div>
+                            <div class="exam-card-body">
+                                <h3>SSRF服务端请求伪造</h3>
+                                <p>深入理解SSRF攻击场景与防护措施</p>
+                                <div class="exam-meta">
+                                    <span><i class="fas fa-question-circle"></i> 22题</span>
+                                    <span><i class="fas fa-clock"></i> 50分钟</span>
+                                    <span><i class="fas fa-users"></i> 421人已参加</span>
+                                </div>
+                            </div>
+                            <div class="exam-card-footer">
+                                <div class="rating">
+                                    <i class="fas fa-star"></i>
+                                    <span>4.8</span>
+                                </div>
+                                <button class="start-btn">开始模考</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 答题页面 -->
+                <div class="page" id="exam-taking-page">
+                    <div class="exam-header">
+                        <div class="exam-title-info">
+                            <h2>SQL注入漏洞检测与防御</h2>
+                            <span class="question-progress">题目 1/20</span>
+                        </div>
+                        <div class="exam-timer" id="timer">
+                            <i class="fas fa-clock"></i>
+                            <span id="time-display">45:00</span>
+                        </div>
+                    </div>
+
+                    <div class="exam-content">
+                        <div class="question-nav">
+                            <h3>答题卡</h3>
+                            <div class="question-grid" id="question-grid">
+                                <!-- 动态生成 -->
+                            </div>
+                        </div>
+
+                        <div class="question-area">
+                            <div class="question-type">
+                                <span class="type-badge">单选题</span>
+                                <span class="score">分值: 5分</span>
+                            </div>
+                            
+                            <div class="question-text" id="question-text">
+                                <p>以下哪种SQL注入类型是通过在应用程序的输入字段中插入恶意SQL代码来实现的？</p>
+                            </div>
+
+                            <div class="options-list" id="options-list">
+                                <label class="option-item">
+                                    <input type="radio" name="answer" value="A">
+                                    <span class="option-label">A</span>
+                                    <span class="option-text">盲注（Blind SQL Injection）</span>
+                                </label>
+                                <label class="option-item">
+                                    <input type="radio" name="answer" value="B">
+                                    <span class="option-label">B</span>
+                                    <span class="option-text">联合查询注入（Union-based SQL Injection）</span>
+                                </label>
+                                <label class="option-item">
+                                    <input type="radio" name="answer" value="C">
+                                    <span class="option-label">C</span>
+                                    <span class="option-text">错误注入（Error-based SQL Injection）</span>
+                                </label>
+                                <label class="option-item">
+                                    <input type="radio" name="answer" value="D">
+                                    <span class="option-label">D</span>
+                                    <span class="option-text">时间盲注（Time-based Blind SQL Injection）</span>
+                                </label>
+                            </div>
+
+                            <div class="question-actions">
+                                <button class="btn-secondary" onclick="prevQuestion()">
+                                    <i class="fas fa-arrow-left"></i> 上一题
+                                </button>
+                                <button class="btn-primary" onclick="nextQuestion()">
+                                    下一题 <i class="fas fa-arrow-right"></i>
+                                </button>
+                                <button class="btn-warning" onclick="markQuestion()">
+                                    <i class="fas fa-flag"></i> 标记
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 成绩报告页面 -->
+                <div class="page" id="result-page">
+                    <div class="result-header">
+                        <div class="result-icon success">
+                            <i class="fas fa-trophy"></i>
+                        </div>
+                        <h2>模考完成！</h2>
+                        <p class="result-subtitle">SQL注入漏洞检测与防御</p>
+                    </div>
+
+                    <div class="result-stats">
+                        <div class="result-score">
+                            <div class="score-circle">
+                                <svg viewBox="0 0 100 100">
+                                    <circle cx="50" cy="50" r="45" class="bg-circle"></circle>
+                                    <circle cx="50" cy="50" r="45" class="progress-circle" style="stroke-dasharray: 254; stroke-dashoffset: 20;"></circle>
+                                </svg>
+                                <div class="score-text">
+                                    <span class="score-number">92</span>
+                                    <span class="score-label">分</span>
+                                </div>
+                            </div>
+                            <p class="score-comment">优秀！继续保持！</p>
+                        </div>
+
+                        <div class="result-details">
+                            <div class="detail-item">
+                                <i class="fas fa-check-circle"></i>
+                                <div>
+                                    <span class="detail-label">正确题数</span>
+                                    <span class="detail-value">18/20</span>
+                                </div>
+                            </div>
+                            <div class="detail-item">
+                                <i class="fas fa-times-circle"></i>
+                                <div>
+                                    <span class="detail-label">错误题数</span>
+                                    <span class="detail-value">2/20</span>
+                                </div>
+                            </div>
+                            <div class="detail-item">
+                                <i class="fas fa-clock"></i>
+                                <div>
+                                    <span class="detail-label">用时</span>
+                                    <span class="detail-value">32:15</span>
+                                </div>
+                            </div>
+                            <div class="detail-item">
+                                <i class="fas fa-ranking-star"></i>
+                                <div>
+                                    <span class="detail-label">排名</span>
+                                    <span class="detail-value">Top 5%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="result-breakdown">
+                        <h3>知识点掌握情况</h3>
+                        <div class="knowledge-bars">
+                            <div class="knowledge-item">
+                                <div class="knowledge-info">
+                                    <span>SQL注入原理</span>
+                                    <span>100%</span>
+                                </div>
+                                <div class="knowledge-bar">
+                                    <div class="bar-fill" style="width: 100%"></div>
+                                </div>
+                            </div>
+                            <div class="knowledge-item">
+                                <div class="knowledge-info">
+                                    <span>注入类型识别</span>
+                                    <span>90%</span>
+                                </div>
+                                <div class="knowledge-bar">
+                                    <div class="bar-fill" style="width: 90%"></div>
+                                </div>
+                            </div>
+                            <div class="knowledge-item">
+                                <div class="knowledge-info">
+                                    <span>防御措施</span>
+                                    <span>85%</span>
+                                </div>
+                                <div class="knowledge-bar">
+                                    <div class="bar-fill" style="width: 85%"></div>
+                                </div>
+                            </div>
+                            <div class="knowledge-item">
+                                <div class="knowledge-info">
+                                    <span>绕过技巧</span>
+                                    <span>75%</span>
+                                </div>
+                                <div class="knowledge-bar">
+                                    <div class="bar-fill" style="width: 75%"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="wrong-questions">
+                        <h3><i class="fas fa-exclamation-triangle"></i> 错题回顾</h3>
+                        <div class="wrong-list">
+                            <div class="wrong-item">
+                                <div class="wrong-header">
+                                    <span class="wrong-number">第5题</span>
+                                    <span class="wrong-type">单选题</span>
+                                </div>
+                                <p class="wrong-question">以下哪种防御措施可以有效防止SQL注入攻击？</p>
+                                <div class="wrong-answers">
+                                    <div class="your-answer">
+                                        <span>你的答案:</span>
+                                        <span class="wrong">B. 使用存储过程</span>
+                                    </div>
+                                    <div class="correct-answer">
+                                        <span>正确答案:</span>
+                                        <span class="correct">D. 使用参数化查询</span>
+                                    </div>
+                                </div>
+                                <div class="explanation">
+                                    <h4>解析:</h4>
+                                    <p>参数化查询是防止SQL注入的最有效方法，它将SQL语句和参数分开处理，避免了恶意SQL代码的注入。存储过程虽然可以减少注入风险，但如果内部使用字符串拼接，仍然可能存在注入漏洞。</p>
+                                </div>
+                            </div>
+                            <div class="wrong-item">
+                                <div class="wrong-header">
+                                    <span class="wrong-number">第12题</span>
+                                    <span class="wrong-type">多选题</span>
+                                </div>
+                                <p class="wrong-question">SQL注入的常见检测方法包括哪些？</p>
+                                <div class="wrong-answers">
+                                    <div class="your-answer">
+                                        <span>你的答案:</span>
+                                        <span class="wrong">A, B</span>
+                                    </div>
+                                    <div class="correct-answer">
+                                        <span>正确答案:</span>
+                                        <span class="correct">A, B, C, D</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="result-actions">
+                        <button class="btn-primary" onclick="navigateTo('exams')">
+                            <i class="fas fa-list"></i> 返回模考列表
+                        </button>
+                        <button class="btn-secondary" onclick="reviewExam()">
+                            <i class="fas fa-eye"></i> 查看全部解析
+                        </button>
+                        <button class="btn-success" onclick="shareResult()">
+                            <i class="fas fa-share-alt"></i> 分享成绩
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 题库练习页面 -->
+                <div class="page" id="question-bank-page">
+                    <div class="bank-header">
+                        <div class="bank-stats">
+                            <div class="stat">
+                                <span class="stat-value">1,234</span>
+                                <span class="stat-label">总题数</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-value">856</span>
+                                <span class="stat-label">已练习</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-value">69%</span>
+                                <span class="stat-label">正确率</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="category-list">
+                        <div class="category-card" onclick="showCategory('sql')">
+                            <div class="category-icon sql">
+                                <i class="fas fa-database"></i>
+                            </div>
+                            <div class="category-info">
+                                <h3>SQL注入</h3>
+                                <p>320题</p>
+                                <div class="category-progress">
+                                    <div class="progress-bar">
+                                        <div class="progress" style="width: 75%"></div>
+                                    </div>
+                                    <span>75%</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="category-card" onclick="showCategory('xss')">
+                            <div class="category-icon xss">
+                                <i class="fas fa-code"></i>
+                            </div>
+                            <div class="category-info">
+                                <h3>XSS跨站脚本</h3>
+                                <p>280题</p>
+                                <div class="category-progress">
+                                    <div class="progress-bar">
+                                        <div class="progress" style="width: 60%"></div>
+                                    </div>
+                                    <span>60%</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="category-card" onclick="showCategory('csrf')">
+                            <div class="category-icon csrf">
+                                <i class="fas fa-exchange-alt"></i>
+                            </div>
+                            <div class="category-info">
+                                <h3>CSRF跨站请求伪造</h3>
+                                <p>180题</p>
+                                <div class="category-progress">
+                                    <div class="progress-bar">
+                                        <div class="progress" style="width: 45%"></div>
+                                    </div>
+                                    <span>45%</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="category-card" onclick="showCategory('fileupload')">
+                            <div class="category-icon fileupload">
+                                <i class="fas fa-upload"></i>
+                            </div>
+                            <div class="category-info">
+                                <h3>文件上传漏洞</h3>
+                                <p>150题</p>
+                                <div class="category-progress">
+                                    <div class="progress-bar">
+                                        <div class="progress" style="width: 30%"></div>
+                                    </div>
+                                    <span>30%</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="category-card" onclick="showCategory('cmdi')">
+                            <div class="category-icon cmdi">
+                                <i class="fas fa-terminal"></i>
+                            </div>
+                            <div class="category-info">
+                                <h3>命令注入</h3>
+                                <p>120题</p>
+                                <div class="category-progress">
+                                    <div class="progress-bar">
+                                        <div class="progress" style="width: 55%"></div>
+                                    </div>
+                                    <span>55%</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="category-card" onclick="showCategory('ssrf')">
+                            <div class="category-icon ssrf">
+                                <i class="fas fa-server"></i>
+                            </div>
+                            <div class="category-info">
+                                <h3>SSRF服务端请求伪造</h3>
+                                <p>184题</p>
+                                <div class="category-progress">
+                                    <div class="progress-bar">
+                                        <div class="progress" style="width: 20%"></div>
+                                    </div>
+                                    <span>20%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 学习进度页面 -->
+                <div class="page" id="progress-page">
+                    <div class="progress-overview">
+                        <div class="progress-chart">
+                            <h3>学习时长统计</h3>
+                            <div class="chart-container">
+                                <canvas id="studyChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="progress-calendar">
+                            <h3>学习打卡日历</h3>
+                            <div class="calendar" id="calendar">
+                                <!-- 动态生成 -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="progress-details">
+                        <div class="detail-card">
+                            <h3>本周学习</h3>
+                            <div class="weekly-stats">
+                                <div class="day-stat">
+                                    <span class="day">周一</span>
+                                    <div class="bar" style="height: 60%"></div>
+                                    <span class="hours">2h</span>
+                                </div>
+                                <div class="day-stat">
+                                    <span class="day">周二</span>
+                                    <div class="bar" style="height: 80%"></div>
+                                    <span class="hours">3h</span>
+                                </div>
+                                <div class="day-stat">
+                                    <span class="day">周三</span>
+                                    <div class="bar" style="height: 40%"></div>
+                                    <span class="hours">1.5h</span>
+                                </div>
+                                <div class="day-stat">
+                                    <span class="day">周四</span>
+                                    <div class="bar" style="height: 100%"></div>
+                                    <span class="hours">4h</span>
+                                </div>
+                                <div class="day-stat">
+                                    <span class="day">周五</span>
+                                    <div class="bar" style="height: 70%"></div>
+                                    <span class="hours">2.5h</span>
+                                </div>
+                                <div class="day-stat">
+                                    <span class="day">周六</span>
+                                    <div class="bar" style="height: 90%"></div>
+                                    <span class="hours">3.5h</span>
+                                </div>
+                                <div class="day-stat">
+                                    <span class="day">周日</span>
+                                    <div class="bar active" style="height: 50%"></div>
+                                    <span class="hours">2h</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="detail-card">
+                            <h3>技能雷达图</h3>
+                            <div class="radar-container">
+                                <canvas id="skillRadar"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 成就系统页面 -->
+                <div class="page" id="achievements-page">
+                    <div class="achievements-header">
+                        <div class="total-achievements">
+                            <span class="number">23</span>
+                            <span class="label">已获得成就</span>
+                        </div>
+                        <div class="total-points">
+                            <span class="number">2,450</span>
+                            <span class="label">总积分</span>
+                        </div>
+                    </div>
+
+                    <div class="achievements-grid">
+                        <div class="achievement-card unlocked">
+                            <div class="achievement-icon">
+                                <i class="fas fa-graduation-cap"></i>
+                            </div>
+                            <h4>初学者</h4>
+                            <p>完成第一个模考</p>
+                            <span class="achievement-date">2026-03-15</span>
+                        </div>
+
+                        <div class="achievement-card unlocked">
+                            <div class="achievement-icon gold">
+                                <i class="fas fa-fire"></i>
+                            </div>
+                            <h4>学习狂人</h4>
+                            <p>连续学习15天</p>
+                            <span class="achievement-date">2026-05-10</span>
+                        </div>
+
+                        <div class="achievement-card unlocked">
+                            <div class="achievement-icon silver">
+                                <i class="fas fa-star"></i>
+                            </div>
+                            <h4>高分达人</h4>
+                            <p>模考获得90分以上</p>
+                            <span class="achievement-date">2026-04-20</span>
+                        </div>
+
+                        <div class="achievement-card unlocked">
+                            <div class="achievement-icon bronze">
+                                <i class="fas fa-database"></i>
+                            </div>
+                            <h4>SQL专家</h4>
+                            <p>完成所有SQL注入题目</p>
+                            <span class="achievement-date">2026-05-05</span>
+                        </div>
+
+                        <div class="achievement-card locked">
+                            <div class="achievement-icon">
+                                <i class="fas fa-crown"></i>
+                            </div>
+                            <h4>安全大师</h4>
+                            <p>完成所有模考并获得80分以上</p>
+                            <div class="progress-info">
+                                <span>进度: 8/12</span>
+                                <div class="mini-progress">
+                                    <div class="mini-bar" style="width: 66%"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="achievement-card locked">
+                            <div class="achievement-icon">
+                                <i class="fas fa-bolt"></i>
+                            </div>
+                            <h4>闪电答题</h4>
+                            <p>10分钟内完成模考</p>
+                            <div class="progress-info">
+                                <span>未解锁</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- DVWA靶场页面 -->
+                <div class="page" id="dvwa-lab-page">
+                    <div class="dvwa-header">
+                        <div class="dvwa-title">
+                            <h2><i class="fas fa-flask"></i> DVWA漏洞靶场实训</h2>
+                            <p class="dvwa-desc">Damn Vulnerable Web Application - 真实漏洞环境实战训练</p>
+                        </div>
+                        <div class="dvwa-status">
+                            <span class="dvwa-mode-indicator demo">演示模式</span>
+                            <span class="status-badge online"><i class="fas fa-circle"></i> 靶场在线</span>
+                            <span class="target-url">目标: http://localhost:8080</span>
+                            <button class="btn-primary" onclick="startDVWAScan()" style="margin-top: 10px;">
+                                <i class="fas fa-search"></i> 开始扫描
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="dvwa-stats-row">
+                        <div class="dvwa-stat-card">
+                            <div class="stat-icon red"><i class="fas fa-bug"></i></div>
+                            <div class="stat-content">
+                                <span class="stat-value">12</span>
+                                <span class="stat-label">已发现漏洞</span>
+                            </div>
+                        </div>
+                        <div class="dvwa-stat-card">
+                            <div class="stat-icon green"><i class="fas fa-check-double"></i></div>
+                            <div class="stat-content">
+                                <span class="stat-value">8</span>
+                                <span class="stat-label">已验证漏洞</span>
+                            </div>
+                        </div>
+                        <div class="dvwa-stat-card">
+                            <div class="stat-icon blue"><i class="fas fa-shield-alt"></i></div>
+                            <div class="stat-content">
+                                <span class="stat-value">6</span>
+                                <span class="stat-label">已修复漏洞</span>
+                            </div>
+                        </div>
+                        <div class="dvwa-stat-card">
+                            <div class="stat-icon orange"><i class="fas fa-clock"></i></div>
+                            <div class="stat-content">
+                                <span class="stat-value">2h 35m</span>
+                                <span class="stat-label">实训时长</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="dvwa-content-grid">
+                        <div class="dvwa-panel vuln-overview">
+                            <div class="panel-header">
+                                <h3><i class="fas fa-chart-pie"></i> 漏洞类型分布</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div class="chart-wrapper">
+                                    <canvas id="vulnTypeChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="dvwa-panel scan-timeline">
+                            <div class="panel-header">
+                                <h3><i class="fas fa-history"></i> 扫描时间线</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div class="chart-wrapper">
+                                    <canvas id="scanTimelineChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="dvwa-panel vuln-list-panel">
+                            <div class="panel-header">
+                                <h3><i class="fas fa-list"></i> 漏洞详情列表</h3>
+                                <div class="filter-actions">
+                                    <select id="vuln-filter" onchange="filterVulnList()">
+                                        <option value="all">全部漏洞</option>
+                                        <option value="sql">SQL注入</option>
+                                        <option value="xss">XSS</option>
+                                        <option value="csrf">CSRF</option>
+                                        <option value="fileupload">文件上传</option>
+                                        <option value="cmdi">命令注入</option>
+                                    </select>
+                                    <select id="severity-filter" onchange="filterVulnList()">
+                                        <option value="all">全部级别</option>
+                                        <option value="critical">严重</option>
+                                        <option value="high">高危</option>
+                                        <option value="medium">中危</option>
+                                        <option value="low">低危</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="panel-body">
+                                <div class="vuln-list" id="vuln-list">
+                                    <div class="vuln-item critical">
+                                        <div class="vuln-header">
+                                            <span class="vuln-id">#VULN-001</span>
+                                            <span class="vuln-type sql">SQL注入</span>
+                                            <span class="vuln-severity critical">严重</span>
+                                        </div>
+                                        <div class="vuln-body">
+                                            <h4>用户登录处存在SQL注入漏洞</h4>
+                                            <p class="vuln-path"><i class="fas fa-link"></i> /vulnerabilities/sqli/?id=1&Submit=Submit</p>
+                                            <p class="vuln-payload"><i class="fas fa-code"></i> Payload: <code>1' OR '1'='1</code></p>
+                                        </div>
+                                        <div class="vuln-footer">
+                                            <span class="vuln-time"><i class="fas fa-clock"></i> 2026-05-17 14:32:15</span>
+                                            <div class="vuln-actions">
+                                                <button class="btn-sm btn-info" onclick="showVulnDetail('VULN-001')"><i class="fas fa-eye"></i> 详情</button>
+                                                <button class="btn-sm btn-success" onclick="verifyVuln('VULN-001')"><i class="fas fa-check"></i> 验证</button>
+                                                <button class="btn-sm btn-warning" onclick="generatePOC('VULN-001')"><i class="fas fa-file-code"></i> POC</button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="vuln-item high">
+                                        <div class="vuln-header">
+                                            <span class="vuln-id">#VULN-002</span>
+                                            <span class="vuln-type xss">XSS(反射型)</span>
+                                            <span class="vuln-severity high">高危</span>
+                                        </div>
+                                        <div class="vuln-body">
+                                            <h4>反射型XSS跨站脚本漏洞</h4>
+                                            <p class="vuln-path"><i class="fas fa-link"></i> /vulnerabilities/xss_r/?name=</p>
+                                            <p class="vuln-payload"><i class="fas fa-code"></i> Payload: <code>&lt;script&gt;alert('XSS')&lt;/script&gt;</code></p>
+                                        </div>
+                                        <div class="vuln-footer">
+                                            <span class="vuln-time"><i class="fas fa-clock"></i> 2026-05-17 14:45:22</span>
+                                            <div class="vuln-actions">
+                                                <button class="btn-sm btn-info" onclick="showVulnDetail('VULN-002')"><i class="fas fa-eye"></i> 详情</button>
+                                                <button class="btn-sm btn-success" onclick="verifyVuln('VULN-002')"><i class="fas fa-check"></i> 验证</button>
+                                                <button class="btn-sm btn-warning" onclick="generatePOC('VULN-002')"><i class="fas fa-file-code"></i> POC</button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="vuln-item high">
+                                        <div class="vuln-header">
+                                            <span class="vuln-id">#VULN-003</span>
+                                            <span class="vuln-type xss">XSS(存储型)</span>
+                                            <span class="vuln-severity high">高危</span>
+                                        </div>
+                                        <div class="vuln-body">
+                                            <h4>存储型XSS跨站脚本漏洞</h4>
+                                            <p class="vuln-path"><i class="fas fa-link"></i> /vulnerabilities/xss_s/</p>
+                                            <p class="vuln-payload"><i class="fas fa-code"></i> Payload: <code>&lt;img src=x onerror=alert('XSS')&gt;</code></p>
+                                        </div>
+                                        <div class="vuln-footer">
+                                            <span class="vuln-time"><i class="fas fa-clock"></i> 2026-05-17 15:12:08</span>
+                                            <div class="vuln-actions">
+                                                <button class="btn-sm btn-info" onclick="showVulnDetail('VULN-003')"><i class="fas fa-eye"></i> 详情</button>
+                                                <button class="btn-sm btn-success" onclick="verifyVuln('VULN-003')"><i class="fas fa-check"></i> 验证</button>
+                                                <button class="btn-sm btn-warning" onclick="generatePOC('VULN-003')"><i class="fas fa-file-code"></i> POC</button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="vuln-item medium">
+                                        <div class="vuln-header">
+                                            <span class="vuln-id">#VULN-004</span>
+                                            <span class="vuln-type csrf">CSRF</span>
+                                            <span class="vuln-severity medium">中危</span>
+                                        </div>
+                                        <div class="vuln-body">
+                                            <h4>跨站请求伪造漏洞</h4>
+                                            <p class="vuln-path"><i class="fas fa-link"></i> /vulnerabilities/csrf/</p>
+                                            <p class="vuln-payload"><i class="fas fa-code"></i> 可构造恶意表单修改用户密码</p>
+                                        </div>
+                                        <div class="vuln-footer">
+                                            <span class="vuln-time"><i class="fas fa-clock"></i> 2026-05-17 15:28:45</span>
+                                            <div class="vuln-actions">
+                                                <button class="btn-sm btn-info" onclick="showVulnDetail('VULN-004')"><i class="fas fa-eye"></i> 详情</button>
+                                                <button class="btn-sm btn-success" onclick="verifyVuln('VULN-004')"><i class="fas fa-check"></i> 验证</button>
+                                                <button class="btn-sm btn-warning" onclick="generatePOC('VULN-004')"><i class="fas fa-file-code"></i> POC</button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="vuln-item critical">
+                                        <div class="vuln-header">
+                                            <span class="vuln-id">#VULN-005</span>
+                                            <span class="vuln-type cmdi">命令注入</span>
+                                            <span class="vuln-severity critical">严重</span>
+                                        </div>
+                                        <div class="vuln-body">
+                                            <h4>操作系统命令注入漏洞</h4>
+                                            <p class="vuln-path"><i class="fas fa-link"></i> /vulnerabilities/exec/</p>
+                                            <p class="vuln-payload"><i class="fas fa-code"></i> Payload: <code>127.0.0.1; cat /etc/passwd</code></p>
+                                        </div>
+                                        <div class="vuln-footer">
+                                            <span class="vuln-time"><i class="fas fa-clock"></i> 2026-05-17 15:45:33</span>
+                                            <div class="vuln-actions">
+                                                <button class="btn-sm btn-info" onclick="showVulnDetail('VULN-005')"><i class="fas fa-eye"></i> 详情</button>
+                                                <button class="btn-sm btn-success" onclick="verifyVuln('VULN-005')"><i class="fas fa-check"></i> 验证</button>
+                                                <button class="btn-sm btn-warning" onclick="generatePOC('VULN-005')"><i class="fas fa-file-code"></i> POC</button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="vuln-item high">
+                                        <div class="vuln-header">
+                                            <span class="vuln-id">#VULN-006</span>
+                                            <span class="vuln-type fileupload">文件上传</span>
+                                            <span class="vuln-severity high">高危</span>
+                                        </div>
+                                        <div class="vuln-body">
+                                            <h4>任意文件上传漏洞</h4>
+                                            <p class="vuln-path"><i class="fas fa-link"></i> /vulnerabilities/upload/</p>
+                                            <p class="vuln-payload"><i class="fas fa-code"></i> 可上传PHP WebShell获取服务器权限</p>
+                                        </div>
+                                        <div class="vuln-footer">
+                                            <span class="vuln-time"><i class="fas fa-clock"></i> 2026-05-17 16:02:18</span>
+                                            <div class="vuln-actions">
+                                                <button class="btn-sm btn-info" onclick="showVulnDetail('VULN-006')"><i class="fas fa-eye"></i> 详情</button>
+                                                <button class="btn-sm btn-success" onclick="verifyVuln('VULN-006')"><i class="fas fa-check"></i> 验证</button>
+                                                <button class="btn-sm btn-warning" onclick="generatePOC('VULN-006')"><i class="fas fa-file-code"></i> POC</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="dvwa-panel attack-success-rate">
+                            <div class="panel-header">
+                                <h3><i class="fas fa-percentage"></i> 攻击成功率统计</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div class="chart-wrapper">
+                                    <canvas id="attackSuccessChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="dvwa-panel ai-analysis">
+                            <div class="panel-header">
+                                <h3><i class="fas fa-robot"></i> AI智能分析</h3>
+                            </div>
+                            <div class="panel-body">
+                                <div class="ai-suggestions">
+                                    <div class="suggestion-item">
+                                        <div class="suggestion-icon warning"><i class="fas fa-exclamation-triangle"></i></div>
+                                        <div class="suggestion-content">
+                                            <h4>高危漏洞预警</h4>
+                                            <p>检测到2个严重级别漏洞，建议优先修复SQL注入和命令注入漏洞，攻击者可利用这些漏洞获取数据库权限和服务器权限。</p>
+                                        </div>
+                                    </div>
+                                    <div class="suggestion-item">
+                                        <div class="suggestion-icon info"><i class="fas fa-lightbulb"></i></div>
+                                        <div class="suggestion-content">
+                                            <h4>修复建议</h4>
+                                            <p>SQL注入：使用参数化查询或预编译语句<br>XSS：对用户输入进行HTML实体编码<br>CSRF：添加Anti-CSRF Token验证</p>
+                                        </div>
+                                    </div>
+                                    <div class="suggestion-item">
+                                        <div class="suggestion-icon success"><i class="fas fa-shield-alt"></i></div>
+                                        <div class="suggestion-content">
+                                            <h4>安全加固建议</h4>
+                                            <p>建议启用WAF防护，配置安全响应头，实施最小权限原则，定期进行安全审计。</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 教师管理页面 -->
+                <div class="page" id="teacher-admin-page">
+                    <div class="admin-tabs">
+                        <button class="admin-tab active" onclick="showAdminTab('students')">学生管理</button>
+                        <button class="admin-tab" onclick="showAdminTab('questions')">题库管理</button>
+                        <button class="admin-tab" onclick="showAdminTab('exams-admin')">模考管理</button>
+                        <button class="admin-tab" onclick="showAdminTab('statistics')">数据统计</button>
+                    </div>
+
+                    <div class="admin-content" id="students-tab">
+                        <div class="admin-header">
+                            <div class="search-box">
+                                <i class="fas fa-search"></i>
+                                <input type="text" placeholder="搜索学生...">
+                            </div>
+                            <button class="btn-primary">
+                                <i class="fas fa-plus"></i> 添加学生
+                            </button>
+                        </div>
+
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>学号</th>
+                                    <th>姓名</th>
+                                    <th>班级</th>
+                                    <th>已完成模考</th>
+                                    <th>平均分</th>
+                                    <th>学习时长</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>2023001</td>
+                                    <td>张三</td>
+                                    <td>计算机2301班</td>
+                                    <td>8</td>
+                                    <td><span class="score-high">92</span></td>
+                                    <td>45h</td>
+                                    <td>
+                                        <button class="btn-icon"><i class="fas fa-eye"></i></button>
+                                        <button class="btn-icon"><i class="fas fa-edit"></i></button>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>2023002</td>
+                                    <td>李四</td>
+                                    <td>计算机2301班</td>
+                                    <td>6</td>
+                                    <td><span class="score-mid">78</span></td>
+                                    <td>32h</td>
+                                    <td>
+                                        <button class="btn-icon"><i class="fas fa-eye"></i></button>
+                                        <button class="btn-icon"><i class="fas fa-edit"></i></button>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>2023003</td>
+                                    <td>王五</td>
+                                    <td>计算机2302班</td>
+                                    <td>10</td>
+                                    <td><span class="score-high">88</span></td>
+                                    <td>56h</td>
+                                    <td>
+                                        <button class="btn-icon"><i class="fas fa-eye"></i></button>
+                                        <button class="btn-icon"><i class="fas fa-edit"></i></button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="admin-content" id="questions-tab" style="display: none;">
+                        <div class="admin-header">
+                            <div class="filter-group">
+                                <select>
+                                    <option>全部类型</option>
+                                    <option>SQL注入</option>
+                                    <option>XSS</option>
+                                    <option>CSRF</option>
+                                </select>
+                                <select>
+                                    <option>全部难度</option>
+                                    <option>初级</option>
+                                    <option>中级</option>
+                                    <option>高级</option>
+                                </select>
+                            </div>
+                            <button class="btn-primary">
+                                <i class="fas fa-plus"></i> 添加题目
+                            </button>
+                        </div>
+
+                        <div class="question-list-admin">
+                            <div class="question-item-admin">
+                                <div class="question-info">
+                                    <span class="q-type">单选题</span>
+                                    <span class="q-category">SQL注入</span>
+                                    <span class="q-difficulty intermediate">中级</span>
+                                </div>
+                                <p class="q-text">以下哪种SQL注入类型是通过在应用程序的输入字段中插入恶意SQL代码来实现的？</p>
+                                <div class="question-actions-admin">
+                                    <button class="btn-icon"><i class="fas fa-edit"></i></button>
+                                    <button class="btn-icon danger"><i class="fas fa-trash"></i></button>
+                                </div>
+                            </div>
+                            <div class="question-item-admin">
+                                <div class="question-info">
+                                    <span class="q-type">多选题</span>
+                                    <span class="q-category">XSS</span>
+                                    <span class="q-difficulty advanced">高级</span>
+                                </div>
+                                <p class="q-text">XSS攻击的常见类型包括哪些？</p>
+                                <div class="question-actions-admin">
+                                    <button class="btn-icon"><i class="fas fa-edit"></i></button>
+                                    <button class="btn-icon danger"><i class="fas fa-trash"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="admin-content" id="exams-admin-tab" style="display: none;">
+                        <div class="admin-header">
+                            <button class="btn-primary">
+                                <i class="fas fa-plus"></i> 创建模考
+                            </button>
+                        </div>
+                        <div class="exam-list-admin">
+                            <div class="exam-item-admin">
+                                <div class="exam-info-admin">
+                                    <h4>SQL注入漏洞检测与防御</h4>
+                                    <p>20题 | 45分钟 | 中级</p>
+                                </div>
+                                <div class="exam-stats-admin">
+                                    <span><i class="fas fa-users"></i> 1,234人已参加</span>
+                                    <span><i class="fas fa-chart-line"></i> 平均分: 76</span>
+                                </div>
+                                <div class="exam-actions-admin">
+                                    <button class="btn-icon"><i class="fas fa-edit"></i></button>
+                                    <button class="btn-icon"><i class="fas fa-chart-bar"></i></button>
+                                    <button class="btn-icon danger"><i class="fas fa-trash"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="admin-content" id="statistics-tab" style="display: none;">
+                        <div class="stats-grid-admin">
+                            <div class="stat-card-admin">
+                                <h4>总学生数</h4>
+                                <span class="stat-value-admin">156</span>
+                            </div>
+                            <div class="stat-card-admin">
+                                <h4>总模考次数</h4>
+                                <span class="stat-value-admin">1,234</span>
+                            </div>
+                            <div class="stat-card-admin">
+                                <h4>平均通过率</h4>
+                                <span class="stat-value-admin">78%</span>
+                            </div>
+                            <div class="stat-card-admin">
+                                <h4>总学习时长</h4>
+                                <span class="stat-value-admin">4,567h</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 模态框 -->
+    <div class="modal" id="exam-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>开始模考</h2>
+                <button class="close-btn" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="exam-preview">
+                    <h3>SQL注入漏洞检测与防御</h3>
+                    <div class="preview-info">
+                        <div class="info-item">
+                            <i class="fas fa-question-circle"></i>
+                            <span>题目数量: 20道</span>
+                        </div>
+                        <div class="info-item">
+                            <i class="fas fa-clock"></i>
+                            <span>考试时长: 45分钟</span>
+                        </div>
+                        <div class="info-item">
+                            <i class="fas fa-signal"></i>
+                            <span>难度等级: 中级</span>
+                        </div>
+                        <div class="info-item">
+                            <i class="fas fa-star"></i>
+                            <span>及格分数: 60分</span>
+                        </div>
+                    </div>
+                    <div class="exam-tips">
+                        <h4>考试须知:</h4>
+                        <ul>
+                            <li>考试过程中请保持网络连接稳定</li>
+                            <li>答题过程中可标记不确定的题目</li>
+                            <li>考试结束后可查看详细解析</li>
+                            <li>请认真作答，诚信考试</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal()">取消</button>
+                <button class="btn-primary" onclick="confirmStartExam()">开始考试</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
