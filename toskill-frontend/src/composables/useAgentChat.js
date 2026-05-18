@@ -1050,6 +1050,29 @@ export function useAgentChat() {
         addInfoBlock(`高危决策已确认 | 选择: ${data.payload?.choice || '-'}`)
         break
 
+      case 'workflow_error':
+        isTyping.value = false
+        isThinking.value = false
+        addErrorBlock(`工作流错误: ${data.payload?.error || '未知错误'}`, {
+          source: 'backend',
+          category: data.payload?.code || 'WORKFLOW_ERROR',
+          suggestion: data.payload?.suggestion || '请刷新页面重试',
+          details: JSON.stringify(data.payload, null, 2)
+        })
+        break
+
+      case 'workflow_timeout':
+        isTyping.value = false
+        isThinking.value = false
+        scanStatus.value = 'idle'
+        addErrorBlock(`工作流超时: ${data.payload?.message || '已超过30分钟未响应，自动结束'}`, {
+          source: 'backend',
+          category: 'WORKFLOW_TIMEOUT',
+          suggestion: '请重新发起扫描',
+          details: `超时时间: ${data.payload?.elapsed_seconds || 'N/A'}秒`
+        })
+        break
+
       case 'tool_execution_proceed':
         addInfoBlock('工具已确认执行')
         break

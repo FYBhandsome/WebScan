@@ -32,8 +32,9 @@ class TestWSManagerLogic:
         from TOSKill.api.ai_chat_websocket import AIChatManager
         
         manager = AIChatManager()
-        handler = manager._get_handler("start_scan")
-        assert handler is not None or True
+        assert hasattr(manager, 'handle_message')
+        assert hasattr(manager, 'connect')
+        assert hasattr(manager, 'disconnect')
 
     @pytest.mark.asyncio
     async def test_ws_error_handler(self):

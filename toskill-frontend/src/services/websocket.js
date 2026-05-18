@@ -77,8 +77,9 @@ class WSManager {
                         this.onConnectCallback();
                     }
 
-                    if (!this._firstConnect && this.onReconnectCallback) {
+                    if (!this._firstConnect && this.sessionId && this.onReconnectCallback) {
                         this.onReconnectCallback(this.sessionId);
+                        this.sendGetStatus();
                     }
                     this._firstConnect = false;
                 };

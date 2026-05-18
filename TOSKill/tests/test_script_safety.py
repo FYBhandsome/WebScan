@@ -120,19 +120,18 @@ class TestFileValidation:
 
 
 class TestASTAnalysis:
-    """AST分析测试"""
+    """安全分析测试"""
 
-    def test_ast_analysis_basic(self):
-        """基本AST分析"""
-        from TOSKill.AI.script_safety import _analyze_script_ast, _check_dangerous_imports
-        try:
-            result = _analyze_script_ast("import os\nos.system('ls')")
-            assert result is not None
-        except (AttributeError, ImportError):
-            pytest.skip("AST分析函数名不同")
-        
-        try:
-            issues = _check_dangerous_imports("import os\nimport subprocess")
-            assert len(issues) >= 0
-        except (AttributeError, ImportError):
-            pytest.skip("dangerous_imports函数名不同")
+    def test_validate_script_safety(self):
+        """脚本安全验证"""
+        from TOSKill.AI.script_safety import validate_script_safety
+        safe, reason = validate_script_safety("import os\nos.system('ls')")
+        assert isinstance(safe, bool)
+        assert isinstance(reason, str)
+
+    def test_validate_script_completeness(self):
+        """脚本完整性验证"""
+        from TOSKill.AI.script_safety import validate_script_completeness
+        complete, reason = validate_script_completeness("print('hello')")
+        assert isinstance(complete, bool)
+        assert isinstance(reason, str)

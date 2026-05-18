@@ -187,6 +187,29 @@
           </el-descriptions-item>
         </el-descriptions>
       </el-card>
+
+      <el-card shadow="hover" class="server-log-section">
+        <template #header>
+          <div class="section-header">
+            <h3>🖥️ 服务器运行日志</h3>
+            <el-button
+              type="primary"
+              size="small"
+              @click="showLogPanel = !showLogPanel"
+            >
+              {{ showLogPanel ? '收起' : '展开' }}
+            </el-button>
+          </div>
+        </template>
+        <ServerLogBox 
+          v-if="showLogPanel" 
+          height="400px"
+          :auto-connect="true"
+        />
+        <div v-else class="log-placeholder">
+          <span>点击"展开"查看实时日志</span>
+        </div>
+      </el-card>
     </div>
 
     <el-alert
@@ -208,6 +231,7 @@ import { ArrowRight } from '@element-plus/icons-vue'
 import StatCard from '@/components/common/StatCard.vue'
 import TaskCard from '@/components/business/TaskCard.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import ServerLogBox from '@/components/business/ServerLogBox.vue'
 import Chart from 'chart.js/auto'
 
 export default {
@@ -216,7 +240,8 @@ export default {
     StatCard,
     TaskCard,
     AppIcon,
-    ArrowRight
+    ArrowRight,
+    ServerLogBox
   },
   setup() {
     const router = useRouter()
@@ -228,6 +253,7 @@ export default {
     const systemInfo = ref(null)
     const trendChart = ref(null)
     const distributionChart = ref(null)
+    const showLogPanel = ref(false)
     let chartInstances = null
 
     const loadStatistics = async () => {
@@ -497,6 +523,7 @@ export default {
       systemInfo,
       trendChart,
       distributionChart,
+      showLogPanel,
       handleCancelTask,
       handleViewTask,
       handleGenerateReport,
@@ -591,6 +618,19 @@ export default {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
+}
+
+.server-log-section {
+  margin-bottom: var(--spacing-lg);
+}
+
+.log-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100px;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
 }
 
 @media (max-width: 768px) {

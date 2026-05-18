@@ -31,6 +31,7 @@ from .llm_client import get_llm, is_llm_available
 from .log_collector import log_collector
 from ..config import settings
 from ..RAG.retriever import get_scan_strategy
+from ..utils.log_writer import log_info, log_warn, log_error, log_success, log_debug
 
 logger = logging.getLogger(__name__)
 
@@ -1733,6 +1734,8 @@ async def start_scan_node(state: ScanState) -> ScanState:
     ws_callback = memory_store.get_websocket_callback(session_id)
     
     logger.info(f"[{session_id}] 开始扫描流程")
+    log_info(f"扫描流程启动", category="workflow", node="start_scan", session_id=session_id, 
+             details={"target": state.get("target", ""), "mode": "full_scan"})
     
     mode = "full_scan"
     planned_tasks = get_tool_sequence(mode)
@@ -2018,6 +2021,8 @@ async def ai_decision(state: ScanState) -> ScanState:
     logger.info(f"[{state.get('task_id')}] AI决策节点开始执行（RAG增强版）")
     
     session_id = state.get("websocket_session_id") or state.get("task_id")
+    log_info("AI决策节点开始执行", category="workflow", node="ai_decision", session_id=session_id,
+             details={"target": state.get("target", ""), "mode": state.get("mode", "full_scan")})
     
     # 检查是否需要跳过剩余任务（高危漏洞确认后用户选择停止）
     if state.get("skip_remaining_tasks"):

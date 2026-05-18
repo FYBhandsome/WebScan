@@ -63,6 +63,7 @@ declare module 'vue' {
     POCScanForm: typeof import('./components/business/POCScanForm.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    ServerLogBox: typeof import('./components/business/ServerLogBox.vue')['default']
     StatCard: typeof import('./components/common/StatCard.vue')['default']
     TaskCard: typeof import('./components/business/TaskCard.vue')['default']
     TaskPlanningDisplay: typeof import('./components/business/TaskPlanningDisplay.vue')['default']

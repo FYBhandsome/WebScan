@@ -19,6 +19,7 @@ from TOSKill.AI.core import CHAT_SYSTEM_PROMPT
 from TOSKill.AI.tools import get_tool_by_name, get_all_tool_names
 from TOSKill.AI.log_collector import log_collector
 from TOSKill.utils.error_handler import create_error_response, format_tool_error, ErrorSource, ErrorCategory
+from TOSKill.utils.log_writer import log_info, log_warn, log_error, log_success, log_debug
 
 router = APIRouter(prefix="/ai-chat", tags=["AI对话WebSocket"])
 logger = logging.getLogger(__name__)
@@ -45,6 +46,9 @@ class AIChatManager:
         session_id = session_id or str(uuid4())[:8]
         self.connections[session_id] = websocket
         memory_store.save_session(session_id, create_initial_state(target="", task_id=session_id))
+        
+        log_info("WebSocket连接建立", category="api", node="ai_chat", session_id=session_id,
+                 details={"client_ip": websocket.client.host if websocket.client else "unknown"})
         
         await self._send(session_id, {
             "type": "connected",
@@ -88,6 +92,8 @@ class AIChatManager:
         payload = message.get("payload", {})
         
         logger.info(f"[{session_id}] 收到WebSocket消息: type={msg_type}, payload={payload}")
+        log_debug(f"收到消息: {msg_type}", category="api", node="ai_chat", session_id=session_id,
+                  details={"type": msg_type})
         
         handlers = {
             "user_input": self._handle_user_input,
