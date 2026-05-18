@@ -50,6 +50,9 @@
         <span>{{ toast.message }}</span>
       </div>
     </div>
+
+    <!-- 浮动日志面板 -->
+    <FloatingLogPanel />
   </div>
 </template>
 
@@ -67,6 +70,7 @@ import ScanView from './components/views/ScanView.vue'
 import ToolsView from './components/views/ToolsView.vue'
 import ReportsView from './components/views/ReportsView.vue'
 import SettingsView from './components/views/SettingsView.vue'
+import FloatingLogPanel from './components/FloatingLogPanel.vue'
 
 const connectionStatus = ref('未连接')
 const currentPage = ref('console')

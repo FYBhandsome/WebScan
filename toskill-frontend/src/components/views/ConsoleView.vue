@@ -10,6 +10,8 @@
           @action="handleBlockAction"
           @submit-input="handleInputResponse"
           @select-mode="handleModeSelect"
+          @scan-confirm="handleScanConfirm"
+          @scan-cancel="handleScanCancel"
         />
         <CommandInput 
           v-show="!inputCollapsed"
@@ -76,7 +78,9 @@ const {
   handleInputResponse,
   scanActive,
   handleStop,
-  handleModeSelect
+  handleModeSelect,
+  handleScanConfirm,
+  handleScanCancel
 } = useAgentChat()
 </script>
 

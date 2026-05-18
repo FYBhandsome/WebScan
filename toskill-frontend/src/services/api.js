@@ -157,6 +157,11 @@ class ApiService {
   async getChatHistory(sessionId, limit = 20) {
     return this.get(`/chat/history/${sessionId}?limit=${limit}`);
   }
+
+  // --- Intent Parsing ---
+  async parseIntent(message) {
+    return this.post('/parse-intent', { message });
+  }
 }
 
 // 导出一个单例实例

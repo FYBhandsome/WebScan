@@ -140,11 +140,16 @@ def get_ip_list(domain: str) -> List[str]:
 
 def infer_os_from_server(server: str) -> str:
     """
-    从Server头推断操作系统(优化逻辑)
+    从Server头推断操作系统(修复空值BUG)
     :param server: Server头内容
     :return: 操作系统描述
     """
-    server_lower = server.lower() if server else ""
+    # ✅ 强制安全处理 None，这是报错的核心原因
+    if server is None or server.strip() == "":
+        return "未知操作系统"
+    
+    server_lower = server.strip().lower()
+    
     # 扩展OS判断规则
     os_mapping = [
         ("iis", "Windows Server"),

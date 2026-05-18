@@ -1,6 +1,8 @@
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { ws } from '../services/websocket.js'
 import { showToast, globalState } from '../store.js'
+import { API } from '../services/api.js'
+import { addLog } from './useLogBus.js'
 
 export function useAgentChat() {
   const inputText = ref('')
@@ -23,6 +25,79 @@ export function useAgentChat() {
   const overallPlan = ref(null)
   const pendingUploadScript = ref(false)
   const pendingGenerateScript = ref(false)
+  const pendingScanConfirm = ref(null)
+  const showScanConfirm = ref(false)
+  
+  const scriptUploadProgress = ref({ stage: '', progress: 0, message: '' })
+  const scriptGenerationProgress = ref({ stage: '', progress: 0, message: '' })
+  const scriptHistory = ref([])
+  const MAX_SCRIPT_SIZE = 500 * 1024
+  
+  const validateScriptFile = (file) => {
+    if (!file) return { valid: false, error: '未选择文件' }
+    
+    const ext = file.name.toLowerCase().split('.').pop()
+    if (ext !== 'py') {
+      return { valid: false, error: `不支持的文件类型: .${ext}，仅支持 .py 文件` }
+    }
+    
+    if (file.size > MAX_SCRIPT_SIZE) {
+      const sizeKB = Math.round(file.size / 1024)
+      return { valid: false, error: `文件大小超过限制 (${sizeKB}KB > 500KB)` }
+    }
+    
+    return { valid: true }
+  }
+  
+  const handleScriptFileSelect = async (file) => {
+    const validation = validateScriptFile(file)
+    if (!validation.valid) {
+      addErrorBlock(validation.error, { source: 'frontend' })
+      return null
+    }
+    
+    scriptUploadProgress.value = { stage: 'reading', progress: 10, message: '正在读取文件...' }
+    
+    try {
+      const content = await readFileContent(file)
+      scriptUploadProgress.value = { stage: 'validating', progress: 20, message: '正在验证脚本...' }
+      return { name: file.name.replace('.py', ''), content }
+    } catch (error) {
+      scriptUploadProgress.value = { stage: 'failed', progress: 100, message: error.message }
+      addErrorBlock(`文件读取失败: ${error.message}`, { source: 'frontend' })
+      return null
+    }
+  }
+  
+  const readFileContent = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = (e) => resolve(e.target.result)
+      reader.onerror = (e) => reject(new Error('文件读取失败'))
+      reader.readAsText(file)
+    })
+  }
+  
+  const loadScriptHistory = () => {
+    try {
+      const saved = localStorage.getItem('toskill_script_history')
+      if (saved) {
+        scriptHistory.value = JSON.parse(saved)
+      }
+    } catch (e) {
+      console.warn('加载脚本历史失败:', e)
+    }
+  }
+  
+  const saveScriptHistory = (script) => {
+    const history = scriptHistory.value.filter(s => s.tool_name !== script.tool_name)
+    history.unshift({
+      ...script,
+      timestamp: new Date().toISOString()
+    })
+    scriptHistory.value = history.slice(0, 50)
+    localStorage.setItem('toskill_script_history', JSON.stringify(scriptHistory.value))
+  }
 
   // === UI 辅助方法 ===
   const addBlock = (type, data = {}) => {
@@ -116,33 +191,144 @@ export function useAgentChat() {
     isTyping.value = true
 
     if (ws.isConnected()) {
-      const urlPattern = /^(https?:\/\/)?([\w-]+\.)+[\w-]+(\/[\w-./?%&=#]*)?$/i
-      const isStandaloneUrl = urlPattern.test(text) || (text.includes('.') && !text.includes(' '))
-      const hasModeKeyword = /\b(info|vuln|full|信息收集|漏洞扫描|完整扫描)\b/i.test(text)
-
-      if (isStandaloneUrl && !hasModeKeyword) {
-        showModeSelect.value = true
-        pendingModeSelect.value = { target: text }
-        scanActive.value = true
-        addBlock('agent_mode_select', {
-          target: text,
-          description: '请选择扫描模式以继续：',
-          modes: [
-            { key: 'info', label: '信息收集', desc: 'WHOIS、DNS、子域名、端口扫描等', badge: '轻量·快速', icon: 'target' },
-            { key: 'vuln', label: '漏洞扫描', desc: 'XSS、SQL注入、CSRF等Web漏洞检测', badge: '中等·3-5分钟', icon: 'shield' },
-            { key: 'full', label: '完整扫描', desc: '信息收集+漏洞扫描+AI决策', badge: '深度·5-10分钟', icon: 'layers' }
-          ],
-          resolved: false
+      try {
+        const intentResult = await API.parseIntent(text)
+        const intentData = intentResult?.data
+        
+        if (intentData?.should_start_scan && intentData?.target) {
+          const target = intentData.target
+          const mode = intentData.mode || 'full'
+          const confidence = intentData.confidence || 0.8
+          const explanation = intentData.explanation || ''
+          
+          pendingScanConfirm.value = { target, mode, confidence, explanation }
+          showScanConfirm.value = true
+          
+          addBlock('agent_scan_confirm', {
+            target,
+            mode,
+            confidence,
+            explanation,
+            modes: [
+              { key: 'info', label: '信息收集', desc: '端口扫描、子域名发现等', icon: 'target' },
+              { key: 'vuln', label: '漏洞扫描', desc: 'XSS、SQL注入检测等', icon: 'shield' },
+              { key: 'full', label: '完整扫描', desc: '信息收集+漏洞扫描', icon: 'layers' }
+            ],
+            resolved: false
+          })
+          
+          isTyping.value = false
+          return
+        }
+        
+        if (intentData?.action === 'help') {
+          addBlock('agent_text', { 
+            content: `**帮助信息**\n\n您可以输入以下类型的指令：\n\n1. **扫描目标**：输入URL或域名，如 \`http://example.com\` 或 \`example.com\`\n2. **指定模式**：\n   - \`信息收集\` 或 \`info\` - 端口扫描、子域名发现等\n   - \`漏洞扫描\` 或 \`vuln\` - XSS、SQL注入检测等\n   - \`完整扫描\` 或 \`full\` - 全面安全检测\n3. **组合指令**：\`扫描 example.com 进行漏洞检测\`\n4. **其他操作**：\`停止\`、\`状态\`、\`帮助\`\n\n**示例**：\n- \`扫描 http://testphp.vulnweb.com\`\n- \`对 example.com 进行完整扫描\`\n- \`检测 target.com 的漏洞\`` 
+          })
+          isTyping.value = false
+          return
+        }
+        
+        if (intentData?.action === 'status') {
+          if (scanActive.value) {
+            addBlock('agent_text', { content: `**当前状态**\n\n扫描状态: 进行中\n目标: ${globalState.currentTarget || '未知'}\n已完成: ${scanProgress.value.current}/${scanProgress.value.total}\n当前工具: ${scanProgress.value.activeTool || '无'}` })
+          } else {
+            addBlock('agent_text', { content: `**当前状态**\n\n扫描状态: 空闲\n等待新的扫描指令...` })
+          }
+          isTyping.value = false
+          return
+        }
+        
+        if (intentData?.action === 'stop') {
+          if (scanActive.value) {
+            ws.sendConfirm('2')
+            scanActive.value = false
+            addBlock('agent_text', { content: '扫描已停止' })
+          } else {
+            addBlock('agent_text', { content: '当前没有正在进行的扫描' })
+          }
+          isTyping.value = false
+          return
+        }
+        
+        ws.sendChat(text)
+        
+      } catch (error) {
+        console.error('Intent parsing failed:', error)
+        addBlock('agent_text', { 
+          content: `**解析失败**\n\n无法理解您的指令，请尝试以下格式：\n\n- \`扫描 http://example.com\`\n- \`对 target.com 进行漏洞扫描\`\n- \`帮助\` 查看更多指令` 
         })
-        return
+        isTyping.value = false
       }
-
-      if (isStandaloneUrl) ws.startScan(text, 'full')
-      else ws.sendChat(text)
     } else {
       isTyping.value = false
       addBlock('agent_text', { content: '实时连接未就绪，无法发送指令。请检查网络或后端状态。' })
     }
+  }
+  
+  const handleScanConfirm = async (block, selectedMode) => {
+    console.log('[handleScanConfirm] 开始执行', { block, selectedMode })
+    
+    block.resolved = true
+    showScanConfirm.value = false
+    
+    const { target, mode } = pendingScanConfirm.value || {}
+    if (!target) {
+      showToast('扫描目标丢失', 'error')
+      isTyping.value = false
+      return
+    }
+    
+    const finalMode = selectedMode || mode || 'full'
+    
+    console.log('[handleScanConfirm] 确认扫描:', { target, finalMode, selectedMode, mode })
+    
+    addBlock('user_command', { content: `[确认执行] 目标: ${target} | 模式: ${finalMode === 'info' ? '信息收集' : finalMode === 'vuln' ? '漏洞扫描' : '完整扫描'}` })
+    
+    if (!ws.isConnected()) {
+      console.log('[handleScanConfirm] WebSocket 未连接，尝试重新连接...')
+      addBlock('agent_text', { content: '正在重新建立连接...' })
+      
+      try {
+        await ws.connect()
+        console.log('[handleScanConfirm] WebSocket 重新连接成功')
+      } catch (connError) {
+        console.error('[handleScanConfirm] WebSocket 连接失败:', connError)
+        addBlock('agent_error', { content: '无法建立连接，请刷新页面重试' })
+        isTyping.value = false
+        return
+      }
+    }
+    
+    scanActive.value = true
+    isTyping.value = true
+    currentThinking.value = ''
+    isThinking.value = true
+    
+    const payload = { target, scan_mode: finalMode }
+    console.log('[handleScanConfirm] 准备发送 start_scan:', payload)
+    
+    const sent = ws.startScan(target, finalMode)
+    console.log('[handleScanConfirm] startScan 发送结果:', sent)
+    
+    if (!sent) {
+      console.error('[handleScanConfirm] startScan 发送失败')
+      addBlock('agent_error', { content: '发送扫描请求失败，请重试' })
+      isTyping.value = false
+      scanActive.value = false
+      return
+    }
+    
+    addBlock('agent_text', { content: `正在启动扫描...` })
+    pendingScanConfirm.value = null
+  }
+  
+  const handleScanCancel = (block) => {
+    block.resolved = true
+    showScanConfirm.value = false
+    pendingScanConfirm.value = null
+    addBlock('agent_text', { content: '已取消扫描' })
+    isTyping.value = false
   }
 
   const handleQuickAction = (mode) => {
@@ -730,21 +916,72 @@ export function useAgentChat() {
 
       case 'script_registered':
         const regToolName = data.payload?.tool_name || ''
+        scriptUploadProgress.value = { stage: 'completed', progress: 100, message: '脚本注册成功' }
         addInfoBlock(`脚本已注册: ${regToolName} | ${data.payload?.message || ''}`)
+        saveScriptHistory({
+          tool_name: regToolName,
+          description: data.payload?.description || '',
+          source: 'upload',
+          script_content: data.payload?.script_content || ''
+        })
         if (pendingUploadScript.value) {
           const target = scriptQueue.value[currentScriptIndex.value]?.target || ''
           scriptQueue.value.splice(currentScriptIndex.value + 1, 0, { tool_name: regToolName, status: 'pending', target })
           addInfoBlock(`新脚本 "${regToolName}" 已加入执行队列`)
         }
         break
+      
+      case 'script_upload_progress':
+        scriptUploadProgress.value = {
+          stage: data.payload?.stage || '',
+          progress: data.payload?.progress || 0,
+          message: data.payload?.message || ''
+        }
+        if (data.payload?.stage === 'validating') {
+          addInfoBlock(`验证脚本中...`)
+        } else if (data.payload?.stage === 'analyzing') {
+          addInfoBlock(`分析脚本中...`)
+        } else if (data.payload?.stage === 'registering') {
+          addInfoBlock(`注册工具中...`)
+        } else if (data.payload?.stage === 'failed') {
+          addErrorBlock(`脚本上传失败: ${data.payload?.message || '未知错误'}`, { source: 'backend' })
+        }
+        break
 
       case 'script_generating':
+        scriptGenerationProgress.value = { stage: 'generating', progress: 30, message: data.payload?.message || '' }
         addInfoBlock(`AI 生成脚本中: ${data.payload?.message || ''}`)
+        break
+      
+      case 'script_generation_progress':
+        scriptGenerationProgress.value = {
+          stage: data.payload?.stage || '',
+          progress: data.payload?.progress || 0,
+          message: data.payload?.message || ''
+        }
+        if (data.payload?.stage === 'analyzing') {
+          addInfoBlock(`分析需求中...`)
+        } else if (data.payload?.stage === 'generating') {
+          addInfoBlock(`AI 生成代码中...`)
+        } else if (data.payload?.stage === 'validating') {
+          addInfoBlock(`安全审查中...`)
+        } else if (data.payload?.stage === 'registering') {
+          addInfoBlock(`注册工具中...`)
+        } else if (data.payload?.stage === 'failed') {
+          addErrorBlock(`脚本生成失败: ${data.payload?.message || '未知错误'}`, { source: 'backend' })
+        }
         break
 
       case 'script_generated':
         const genToolName = data.payload?.tool_name || ''
+        scriptGenerationProgress.value = { stage: 'completed', progress: 100, message: '脚本生成成功' }
         addInfoBlock(`脚本生成完成: ${genToolName} | ${data.payload?.message || ''}`)
+        saveScriptHistory({
+          tool_name: genToolName,
+          description: data.payload?.description || '',
+          source: 'generate',
+          script_content: data.payload?.script_code || ''
+        })
         isTyping.value = false
         if (pendingGenerateScript.value) {
           const target = scriptQueue.value[currentScriptIndex.value]?.target || ''
@@ -845,6 +1082,14 @@ export function useAgentChat() {
         addInfoBlock(`执行计划: ${JSON.stringify(data.payload || {})}`)
         break
 
+      case 'workflow_log':
+        addLog({
+          level: data.payload?.level || 'INFO',
+          message: data.payload?.message || '',
+          timestamp: data.payload?.timestamp || data.timestamp || null
+        })
+        break
+
       default:
         break
     }
@@ -899,8 +1144,17 @@ export function useAgentChat() {
     handleInputResponse,
     handleStop,
     handleModeSelect,
+    handleScanConfirm,
+    handleScanCancel,
     showUploadScriptForm,
     showGenerateScriptForm,
-    submitBlockInput
+    submitBlockInput,
+    scriptUploadProgress,
+    scriptGenerationProgress,
+    scriptHistory,
+    validateScriptFile,
+    handleScriptFileSelect,
+    loadScriptHistory,
+    saveScriptHistory
   }
 }

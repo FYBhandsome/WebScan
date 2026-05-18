@@ -8,12 +8,12 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 from uuid import uuid4
 
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from .state import ScanState, create_initial_state, update_state
 from .graph import get_agent_orchestrator, memory_store, safe_ws_send
 from .tools import get_tool_by_name, get_all_tool_names, clean_target, TOOL_MAP
+from .llm_client import get_llm
 from ..config import settings
 
 logger = logging.getLogger(__name__)
@@ -24,14 +24,7 @@ CHAT_SYSTEM_PROMPT = """你是WebScan AI，一个专业的Web安全顾问。
 
 
 def _get_llm():
-    return ChatOpenAI(
-        model=settings.MODEL_ID,
-        temperature=settings.LLM_TEMPERATURE,
-        api_key=settings.OPENAI_API_KEY,
-        base_url=settings.OPENAI_BASE_URL,
-        max_retries=0, 
-        timeout=60.0
-    )
+    return get_llm()
 
 
 def create_session(target: str = "", mode: str = "full_scan") -> str:

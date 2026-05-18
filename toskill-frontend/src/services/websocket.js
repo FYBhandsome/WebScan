@@ -206,7 +206,13 @@ class WSManager {
     isConnected() { return this.connected && this.ws && this.ws.readyState === WebSocket.OPEN; }
     getSessionId() { return this.sessionId; }
 
-    startScan(target, scanMode = 'info') { return this.send('start_scan', { target, scan_mode: scanMode }); }
+    startScan(target, scanMode = 'info') {
+        const payload = { target, scan_mode: scanMode };
+        console.log('[WS] startScan 发送:', { type: 'start_scan', payload });
+        const result = this.send('start_scan', payload);
+        console.log('[WS] startScan 发送结果:', result);
+        return result;
+    }
     sendConfirm(choice = 'confirm') { return this.send('user_choice', { choice }); }
     sendToolConfirm(confirmed = true) {
         if (confirmed) { return this.send('tool_confirmed', { confirmed: true }); } 

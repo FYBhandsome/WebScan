@@ -6,10 +6,14 @@ RAG 引擎 - LlamaIndex 高级检索实现
 import os
 import logging
 import hashlib
+import threading
+import functools
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
+# 移除离线模式，允许首次从HuggingFace下载模型
+# os.environ.setdefault("HF_HUB_OFFLINE", "1")
+# os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from llama_index.core import (
     VectorStoreIndex,
@@ -72,6 +76,12 @@ class TOSKillRAGEngine:
     """LlamaIndex RAG 引擎 - 高级检索模式"""
 
     _instance: Optional["TOSKillRAGEngine"] = None
+    MODEL_LOAD_TIMEOUT = 30
+    FALLBACK_MODELS = [
+        "BAAI/bge-small-zh-v1.5",
+        "sentence-transformers/all-MiniLM-L6-v2",
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    ]
 
     def __init__(self):
         self.index: Optional[VectorStoreIndex] = None
@@ -81,6 +91,8 @@ class TOSKillRAGEngine:
         self._cache_hits = 0
         self._total_queries = 0
         self._document_count = 0
+        self._embed_model = None
+        self._model_load_error: Optional[str] = None
         self._initialize_rag()
 
     @classmethod
@@ -89,20 +101,96 @@ class TOSKillRAGEngine:
             cls._instance = cls()
         return cls._instance
 
+    def _load_embed_model_with_timeout(self, model_name: str, cache_folder: str, timeout: int = None) -> Optional[HuggingFaceEmbedding]:
+        """带超时的模型加载"""
+        if timeout is None:
+            timeout = self.MODEL_LOAD_TIMEOUT
+        
+        result = [None]
+        exception = [None]
+        
+        def _load():
+            try:
+                logger.info(f"正在加载嵌入模型: {model_name}")
+                embed_model = HuggingFaceEmbedding(
+                    model_name=model_name,
+                    cache_folder=cache_folder
+                )
+                result[0] = embed_model
+                logger.info(f"嵌入模型加载成功: {model_name}")
+            except Exception as e:
+                exception[0] = e
+        
+        thread = threading.Thread(target=_load, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout)
+        
+        if thread.is_alive():
+            logger.warning(f"模型加载超时 ({timeout}s): {model_name}")
+            return None
+        
+        if exception[0]:
+            logger.warning(f"模型加载失败: {model_name}, 错误: {exception[0]}")
+            return None
+        
+        return result[0]
+
+    def _check_model_cached(self, model_name: str, cache_folder: str) -> bool:
+        """检查模型是否已在本地缓存"""
+        model_dir_name = model_name.replace("/", "_")
+        model_cache_path = Path(cache_folder) / "hub" / f"models--{model_dir_name}"
+        if model_cache_path.exists():
+            snapshots_path = model_cache_path / "snapshots"
+            if snapshots_path.exists():
+                snapshots = list(snapshots_path.iterdir())
+                if snapshots:
+                    logger.info(f"模型已在本地缓存: {model_name}")
+                    return True
+        logger.debug(f"模型未缓存: {model_name}")
+        return False
+
+    def _try_load_embed_model(self) -> Optional[HuggingFaceEmbedding]:
+        """尝试加载嵌入模型，只使用本地缓存，不下载"""
+        cache_folder = str(Path.home() / ".cache" / "huggingface")
+        
+        if not os.path.exists(cache_folder):
+            os.makedirs(cache_folder, exist_ok=True)
+            logger.info(f"创建模型缓存目录: {cache_folder}")
+        
+        for model_name in self.FALLBACK_MODELS:
+            if not self._check_model_cached(model_name, cache_folder):
+                logger.info(f"跳过未缓存模型: {model_name}")
+                continue
+            
+            logger.info(f"尝试加载本地缓存模型: {model_name}")
+            embed_model = self._load_embed_model_with_timeout(
+                model_name=model_name,
+                cache_folder=cache_folder,
+                timeout=self.MODEL_LOAD_TIMEOUT
+            )
+            if embed_model:
+                logger.info(f"模型加载成功: {model_name}")
+                return embed_model
+            else:
+                logger.warning(f"模型加载失败: {model_name}")
+                continue
+        
+        logger.error("没有可用的本地缓存模型，RAG功能不可用")
+        return None
+
     def _initialize_rag(self):
         if self._initialized:
             return
         try:
-            from TOSKill.config import settings
-            if not settings.RAG_ENABLED:
-                logger.info("RAG 功能已在配置中禁用，跳过初始化")
-                self._initialized = True
+            self._embed_model = self._try_load_embed_model()
+            
+            if self._embed_model is None:
+                self._model_load_error = "所有嵌入模型加载失败，RAG功能不可用"
+                logger.warning(self._model_load_error)
+                logger.warning("服务将在无RAG模式下启动，工作流将跳过RAG增强步骤")
                 return
-
-            Settings.embed_model = HuggingFaceEmbedding(
-                model_name="BAAI/bge-small-zh-v1.5",
-                cache_folder=str(Path.home() / ".cache" / "huggingface")
-            )
+            
+            Settings.embed_model = self._embed_model
 
             _STORAGE_DIR.mkdir(parents=True, exist_ok=True)
             _KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -127,9 +215,9 @@ class TOSKillRAGEngine:
             logger.info(f"TOSKillRAGEngine 初始化完成 (文档数: {self._document_count})")
 
         except Exception as e:
-            logger.warning(f"RAG 初始化失败: {e}")
-            self._initialized = True
-            self.retriever = None
+            logger.error(f"RAG 初始化失败: {e}", exc_info=True)
+            self._model_load_error = f"RAG初始化失败: {e}"
+            logger.warning("服务将在无RAG模式下启动，工作流将跳过RAG增强步骤")
 
     def _build_index(self):
         """从知识库文件构建向量索引"""
@@ -332,6 +420,8 @@ class TOSKillRAGEngine:
             "hit_rate": f"{self._cache_hits / max(1, self._total_queries) * 100:.1f}%",
             "knowledge_dir": str(_KNOWLEDGE_DIR),
             "storage_dir": str(_STORAGE_DIR),
+            "embed_model_loaded": self._embed_model is not None,
+            "model_load_error": self._model_load_error,
         }
 
     @property

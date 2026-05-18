@@ -16,6 +16,20 @@ export const useAIChatStore = defineStore('aiChat', () => {
   const maxReconnectAttempts = 5
   const reconnectDelay = 3000
   
+  const lastErrorMessage = ref('')
+  const lastErrorTime = ref(0)
+  
+  const showUniqueMessage = (msg) => {
+    const now = Date.now()
+    const timeDiff = now - lastErrorTime.value
+    if (msg === lastErrorMessage.value && timeDiff < 5000) {
+      return 
+    }
+    lastErrorMessage.value = msg
+    lastErrorTime.value = now
+    ElMessage.error(msg)
+  }
+  
   const wsUrl = computed(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
@@ -59,14 +73,14 @@ export const useAIChatStore = defineStore('aiChat', () => {
       }
       
       ws.value.onerror = (error) => {
-        console.error('AI Chat WebSocket 错误:', error)
-        ElMessage.error('AI助手连接失败')
-      }
-      
-    } catch (error) {
-      console.error('创建WebSocket连接失败:', error)
-      ElMessage.error('无法连接AI助手')
+      console.error('AI Chat WebSocket 错误:', error)
+      showUniqueMessage('AI助手连接失败')
     }
+    
+  } catch (error) {
+    console.error('创建WebSocket连接失败:', error)
+    showUniqueMessage('无法连接AI助手')
+  }
   }
   
   const disconnect = () => {
@@ -136,7 +150,7 @@ export const useAIChatStore = defineStore('aiChat', () => {
         break
         
       case 'error':
-        ElMessage.error(payload.error)
+        showUniqueMessage(payload.error)
         addMessage('system', `错误: ${payload.error}`, { type: 'error' })
         isScanning.value = false
         break

@@ -279,7 +279,7 @@ def clean_target(target: str) -> str:
     
     target = target.strip()
     
-    url_pattern = r'(https?://[\w\.-]+(?::\d+)?(?:/[\w\./-]*)?)'
+    url_pattern = r'(https?://[a-zA-Z0-9\.-]+(?::\d+)?(?:/[a-zA-Z0-9\./_-]*)?)'
     match = re.search(url_pattern, target)
     if match:
         target = match.group(1)
@@ -289,7 +289,7 @@ def clean_target(target: str) -> str:
     if match:
         return match.group(1)
     
-    domain_pattern = r'([\w-]+\.[\w.-]+(?::\d+)?)'
+    domain_pattern = r'([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.[a-zA-Z0-9.-]+(?::\d+)?)'
     match = re.search(domain_pattern, target)
     if match:
         return match.group(1)
@@ -1453,15 +1453,9 @@ class ScriptManager:
         return cls._instance
     
     def _get_llm(self):
-        """获取LLM实例"""
-        from langchain_openai import ChatOpenAI
-        from TOSKill.config import settings
-        return ChatOpenAI(
-            model=settings.MODEL_ID,
-            temperature=settings.LLM_TEMPERATURE,
-            api_key=settings.OPENAI_API_KEY,
-            base_url=settings.OPENAI_BASE_URL
-        )
+        """获取LLM实例 - 使用统一客户端"""
+        from TOSKill.AI.llm_client import get_llm
+        return get_llm()
     
     async def analyze_script_with_ai(self, script_content: str) -> Dict:
         """使用AI分析脚本，生成工具描述"""

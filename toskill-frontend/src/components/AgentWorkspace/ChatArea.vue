@@ -74,6 +74,52 @@
           </div>
         </template>
 
+        <template v-else-if="block.type === 'agent_scan_confirm'">
+          <div :class="['scan-confirm-card', { resolved: block.resolved }]">
+            <div class="confirm-header">
+              <span class="confirm-icon">🔍</span>
+              <h4>AI 解析结果</h4>
+            </div>
+            <div class="confirm-body">
+              <div class="confirm-info">
+                <div class="info-row">
+                  <span class="info-label">目标地址</span>
+                  <span class="info-value target-url">{{ block.target }}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">推荐模式</span>
+                  <span class="info-value">{{ block.mode === 'info' ? '信息收集' : block.mode === 'vuln' ? '漏洞扫描' : '完整扫描' }}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">置信度</span>
+                  <span class="info-value confidence">{{ (block.confidence * 100).toFixed(0) }}%</span>
+                </div>
+                <div class="info-row" v-if="block.explanation">
+                  <span class="info-label">解析说明</span>
+                  <span class="info-value explanation">{{ block.explanation }}</span>
+                </div>
+              </div>
+              <div class="mode-select-section">
+                <p class="mode-select-label">请选择扫描模式：</p>
+                <div class="mode-buttons">
+                  <button
+                    v-for="mode in block.modes" :key="mode.key"
+                    :class="['mode-btn', { active: block.mode === mode.key }]"
+                    @click="$emit('scan-confirm', block, mode.key)"
+                  >
+                    <span class="mode-icon">{{ mode.icon === 'target' ? '🎯' : mode.icon === 'shield' ? '🛡️' : '📚' }}</span>
+                    <span class="mode-name">{{ mode.label }}</span>
+                    <span class="mode-desc">{{ mode.desc }}</span>
+                  </button>
+                </div>
+              </div>
+              <div class="confirm-actions">
+                <button class="btn-cancel" @click="$emit('scan-cancel', block)">取消</button>
+              </div>
+            </div>
+          </div>
+        </template>
+
         <template v-else-if="block.type === 'agent_script_result'">
           <div class="script-result-card">
             <div class="result-header">
@@ -196,7 +242,7 @@ const props = defineProps({
   scanProgress: Object
 })
 
-defineEmits(['action', 'submit-input', 'select-mode'])
+defineEmits(['action', 'submit-input', 'select-mode', 'scan-confirm', 'scan-cancel'])
 
 const progressPercent = computed(() => {
   if (!props.scanProgress || props.scanProgress.total === 0) return 0
@@ -293,6 +339,129 @@ watch(() => [props.blocks.length, props.isTyping], async () => {
   margin-top: 8px;
 }
 .proposal-card.resolved { opacity: 0.6; pointer-events: none; filter: grayscale(100%); }
+
+/* === Scan Confirm Card === */
+.scan-confirm-card {
+  background: #FFFFFF;
+  border-radius: 12px;
+  border: 1px solid #E4E4E7;
+  overflow: hidden;
+  width: 450px;
+  max-width: 100%;
+  color: #3F3F46;
+  margin-top: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+.scan-confirm-card.resolved { opacity: 0.6; pointer-events: none; filter: grayscale(100%); }
+
+.confirm-header {
+  padding: 14px 18px;
+  border-bottom: 1px solid #E4E4E7;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 100%);
+}
+.confirm-icon { font-size: 20px; }
+.confirm-header h4 { margin: 0; font-size: 15px; color: #166534; font-weight: 600; }
+
+.confirm-body { padding: 18px; }
+
+.confirm-info {
+  background: #FAFAFA;
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 16px;
+}
+.info-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #F0F0F0;
+}
+.info-row:last-child { border-bottom: none; }
+.info-label {
+  min-width: 80px;
+  font-size: 12px;
+  color: #71717A;
+  font-weight: 500;
+}
+.info-value {
+  font-size: 14px;
+  color: #18181B;
+  flex: 1;
+}
+.info-value.target-url {
+  font-family: monospace;
+  color: #2563EB;
+  word-break: break-all;
+}
+.info-value.confidence {
+  color: #16A34A;
+  font-weight: 600;
+}
+.info-value.explanation {
+  font-size: 13px;
+  color: #52525B;
+  line-height: 1.5;
+}
+
+.mode-select-section { margin-bottom: 16px; }
+.mode-select-label {
+  font-size: 13px;
+  color: #52525B;
+  margin-bottom: 10px;
+}
+
+.mode-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #FAFAFA;
+  border: 1px solid #E4E4E7;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+.mode-btn:hover {
+  background: #F4F4F5;
+  border-color: #D4D4D8;
+}
+.mode-btn.active {
+  background: #F0FDF4;
+  border-color: #22C55E;
+}
+.mode-icon { font-size: 18px; }
+.mode-name { font-weight: 600; font-size: 14px; color: #18181B; }
+.mode-desc { font-size: 12px; color: #71717A; flex: 1; }
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 8px;
+}
+.btn-cancel {
+  padding: 8px 20px;
+  background: #F4F4F5;
+  border: 1px solid #E4E4E7;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #52525B;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-cancel:hover {
+  background: #E4E4E7;
+}
 
 .card-header {
   padding: 10px 14px;

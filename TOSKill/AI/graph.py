@@ -22,11 +22,13 @@ import sqlite3
 
 from langgraph.graph import StateGraph, END
 from langgraph.types import interrupt, Command
-from langgraph.checkpoint.sqlite import SqliteSaver
-from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.messages import SystemMessage, HumanMessage
 
 from .state import ScanState, create_initial_state, append_chat, update_state
 from .tools import get_tool_by_name, get_tool_sequence, is_auth_expired, get_auth_remaining_time
+from .llm_client import get_llm, is_llm_available
+from .log_collector import log_collector
 from ..config import settings
 from ..RAG.retriever import get_scan_strategy
 
@@ -257,14 +259,70 @@ class AuthRetryManager:
 auth_retry_manager = AuthRetryManager()
 
 
-def get_llm():
-    """获取LLM实例"""
-    return ChatOpenAI(
-        model=settings.MODEL_ID,
-        temperature=settings.LLM_TEMPERATURE,
-        api_key=settings.OPENAI_API_KEY,
-        base_url=settings.OPENAI_BASE_URL
-    )
+def _match_tool_via_llm(prompt: str, tools_list: list) -> str:
+    """统一工具匹配函数，消除重复代码
+    使用LLM选择最匹配的工具
+    返回: 工具名称，如果匹配失败返回空字符串
+    """
+    from langchain_core.messages import SystemMessage, HumanMessage
+    
+    try:
+        llm_with_tools = get_llm().bind_tools(tools_list)
+        messages = [
+            SystemMessage(content=prompt),
+            HumanMessage(content=prompt)
+        ]
+        response_with_tc = llm_with_tools.invoke(messages, timeout=30)
+        llm_tool_calls = getattr(response_with_tc, 'tool_calls', [])
+        
+        tool_name = ""
+        if llm_tool_calls:
+            for tool_call in llm_tool_calls:
+                tool_name = tool_call.get("name", "") or tool_call.name
+                if tool_name:
+                    break
+        return tool_name
+    except Exception as e:
+        logger.warning(f"LLM工具匹配失败: {e}，使用第一个工具")
+        if tools_list:
+            first_tool = tools_list[0]
+            if hasattr(first_tool, 'name'):
+                return first_tool.name
+            return str(first_tool)
+        return ""
+
+
+def safe_llm_invoke(llm, prompt, timeout=None, system_prompt=None):
+    if isinstance(prompt, list):
+        messages = prompt
+    else:
+        messages = []
+        if system_prompt:
+            messages.append(SystemMessage(content=system_prompt))
+        messages.append(HumanMessage(content=str(prompt)))
+    try:
+        if timeout:
+            return llm.invoke(messages, timeout=timeout)
+        return llm.invoke(messages)
+    except Exception as e:
+        logger.error(f"LLM call failed: {e}")
+        raise
+
+
+async def safe_llm_astream(llm, prompt, system_prompt=None):
+    if isinstance(prompt, list):
+        messages = prompt
+    else:
+        messages = []
+        if system_prompt:
+            messages.append(SystemMessage(content=system_prompt))
+        messages.append(HumanMessage(content=str(prompt)))
+    try:
+        async for chunk in llm.astream(messages):
+            yield chunk
+    except Exception as e:
+        logger.error(f"LLM stream call failed: {e}")
+        raise
 
 
 def with_node_retry(max_retries=3, base_delay=1.0):
@@ -292,6 +350,9 @@ def with_node_retry(max_retries=3, base_delay=1.0):
                 try:
                     return await node_func(state, *args, **kwargs)
                 except Exception as e:
+                    from langgraph.errors import GraphInterrupt
+                    if isinstance(e, GraphInterrupt) or type(e).__name__ == 'GraphInterrupt':
+                        raise e
                     last_exception = e
                     if attempt < max_retries:
                         delay = base_delay * (2 ** attempt)
@@ -369,8 +430,39 @@ class MemoryStore:
         self._stop_cleanup: bool = False
         self._lock: threading.Lock = threading.Lock()
         self._db_path = None
-        self._db_conn = None
+        self._db_connections: Dict[int, sqlite3.Connection] = {}
         self._init_sqlite()
+    
+    def _get_db_conn(self) -> Optional[sqlite3.Connection]:
+        """获取当前线程的数据库连接（线程安全）"""
+        if not self._db_path:
+            return None
+        
+        thread_id = threading.get_ident()
+        
+        if thread_id not in self._db_connections:
+            try:
+                conn = sqlite3.connect(self._db_path, check_same_thread=False)
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA foreign_keys=ON")
+                conn.execute("PRAGMA busy_timeout=30000")
+                self._db_connections[thread_id] = conn
+            except Exception as e:
+                logger.error(f"创建数据库连接失败: {e}")
+                return None
+        
+        return self._db_connections[thread_id]
+    
+    def _close_all_db_connections(self):
+        """关闭所有数据库连接"""
+        for thread_id, conn in list(self._db_connections.items()):
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._db_connections.clear()
+        logger.info("所有数据库连接已关闭")
     
     def _init_sqlite(self):
         try:
@@ -381,11 +473,12 @@ class MemoryStore:
                 os.makedirs(db_dir, exist_ok=True)
             
             self._db_path = db_path
-            import sqlite3
-            self._db_conn = sqlite3.connect(db_path, check_same_thread=False)
-            self._db_conn.execute("PRAGMA journal_mode=WAL")
-            self._db_conn.execute("PRAGMA synchronous=NORMAL")
-            self._db_conn.execute("""
+            
+            conn = self._get_db_conn()
+            if not conn:
+                raise Exception("无法创建数据库连接")
+            
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id TEXT PRIMARY KEY,
                     state_json TEXT NOT NULL,
@@ -394,7 +487,7 @@ class MemoryStore:
                     version INTEGER DEFAULT 1
                 )
             """)
-            self._db_conn.execute("""
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS chat_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL,
@@ -404,7 +497,7 @@ class MemoryStore:
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
                 )
             """)
-            self._db_conn.execute("""
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS decision_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL,
@@ -413,20 +506,40 @@ class MemoryStore:
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
                 )
             """)
-            self._db_conn.execute("""
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS script_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tool_name TEXT NOT NULL,
+                    script_content TEXT NOT NULL,
+                    description TEXT,
+                    source TEXT DEFAULT 'upload',
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_history(session_id, timestamp)
             """)
-            self._db_conn.execute("""
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_decision_session ON decision_history(session_id, timestamp)
             """)
-            self._db_conn.commit()
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_script_history ON script_history(tool_name, created_at)
+            """)
+            conn.commit()
             
             self._load_from_sqlite()
             
             logger.info(f"SQLite 持久化已初始化: {db_path}")
         except Exception as e:
             logger.warning(f"SQLite 初始化失败（将使用纯内存模式）: {e}")
-            self._db_conn = None
+            self._db_path = None
     
     @classmethod
     def get_instance(cls):
@@ -475,17 +588,18 @@ class MemoryStore:
                 logger.error(f"定时清理任务异常: {e}")
     
     def stop_cleanup_task(self):
-        """停止定时清理任务"""
+        """停止定时清理任务并关闭数据库连接"""
         self._stop_cleanup = True
         if self._cleanup_task:
             self._cleanup_task.cancel()
+        self._close_all_db_connections()
         logger.info("定时清理任务已停止")
     
     def save_session(self, session_id: str, state: ScanState) -> int:
         """保存会话状态（带时间戳和版本号）
         
         Returns:
-            新的版本号
+            新的版本号，失败返回0
         """
         with self._lock:
             now = datetime.now()
@@ -504,21 +618,31 @@ class MemoryStore:
                 )
                 self._session_metadata[session_id] = metadata
             
-            self._sessions[session_id] = state
-            self._session_timestamps[session_id] = now
+            old_state = self._sessions.get(session_id)
+            old_metadata = self._session_metadata.get(session_id)
             
-            if self._db_conn:
+            try:
+                state_json = json.dumps(state, ensure_ascii=False, default=str)
+            except Exception as e:
+                logger.error(f"JSON序列化失败: {e}")
+                return 0
+            
+            conn = self._get_db_conn()
+            if conn:
                 try:
-                    state_json = json.dumps(self._sessions[session_id], ensure_ascii=False, default=str)
-                    self._db_conn.execute(
-                        """INSERT OR REPLACE INTO sessions (session_id, state_json, created_at, updated_at, version)
-                           VALUES (?, ?, ?, ?, ?)""",
-                        (session_id, state_json, metadata.created_at.isoformat(), 
-                         metadata.updated_at.isoformat(), metadata.version)
-                    )
-                    self._db_conn.commit()
+                    with conn:
+                        conn.execute(
+                            """INSERT OR REPLACE INTO sessions (session_id, state_json, created_at, updated_at, version)
+                               VALUES (?, ?, ?, ?, ?)""",
+                            (session_id, state_json, metadata.created_at.isoformat(), 
+                             metadata.updated_at.isoformat(), metadata.version)
+                        )
                 except Exception as e:
                     logger.error(f"SQLite 保存会话失败: {e}")
+                    return 0
+            
+            self._sessions[session_id] = state
+            self._session_timestamps[session_id] = now
             
             logger.debug(f"保存会话状态: {session_id}, 版本: {metadata.version}")
             return metadata.version
@@ -554,21 +678,20 @@ class MemoryStore:
     def delete_session(self, session_id: str):
         """删除会话"""
         with self._lock:
+            conn = self._get_db_conn()
+            if conn:
+                try:
+                    with conn:
+                        conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+                except Exception as e:
+                    logger.error(f"SQLite 删除会话失败: {e}")
+            
             self._sessions.pop(session_id, None)
             self._chat_histories.pop(session_id, None)
             self._pending_interactions.pop(session_id, None)
             self._websocket_callbacks.pop(session_id, None)
             self._session_timestamps.pop(session_id, None)
             self._session_metadata.pop(session_id, None)
-            
-            if self._db_conn:
-                try:
-                    self._db_conn.execute("DELETE FROM chat_history WHERE session_id = ?", (session_id,))
-                    self._db_conn.execute("DELETE FROM decision_history WHERE session_id = ?", (session_id,))
-                    self._db_conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
-                    self._db_conn.commit()
-                except Exception as e:
-                    logger.error(f"SQLite 删除会话失败: {e}")
             
             logger.info(f"删除会话: {session_id}")
     
@@ -611,38 +734,85 @@ class MemoryStore:
         if cleaned_count > 0:
             logger.info(f"[清理] 本次清理聊天记录数: {cleaned_count}")
     
-    def _load_from_sqlite(self):
-        if not self._db_conn:
+    def _cleanup_expired_data_on_startup(self, max_age_hours: float = 2.0):
+        """启动时清理超过指定时间的数据
+        
+        Args:
+            max_age_hours: 最大保留时间（小时），默认2小时
+        """
+        conn = self._get_db_conn()
+        if not conn:
             return
         
         try:
-            cursor = self._db_conn.execute(
-                "SELECT session_id, state_json FROM sessions"
+            now = datetime.now()
+            cutoff_time = now - timedelta(hours=max_age_hours)
+            
+            cursor = conn.execute(
+                "SELECT session_id, updated_at FROM sessions"
+            )
+            expired_sessions = []
+            
+            for row in cursor.fetchall():
+                session_id, updated_at_str = row
+                try:
+                    updated_at = datetime.fromisoformat(updated_at_str)
+                    if updated_at < cutoff_time:
+                        expired_sessions.append(session_id)
+                except Exception:
+                    expired_sessions.append(session_id)
+            
+            if expired_sessions:
+                with conn:
+                    for sid in expired_sessions:
+                        conn.execute("DELETE FROM sessions WHERE session_id = ?", (sid,))
+                logger.info(f"[启动清理] 清理了 {len(expired_sessions)} 个超过 {max_age_hours} 小时的过期会话")
+            else:
+                logger.info(f"[启动清理] 没有发现超过 {max_age_hours} 小时的过期会话")
+                
+        except Exception as e:
+            logger.error(f"启动时清理过期数据失败: {e}")
+    
+    def _load_from_sqlite(self):
+        conn = self._get_db_conn()
+        if not conn:
+            return
+        
+        try:
+            self._cleanup_expired_data_on_startup(max_age_hours=2.0)
+            
+            cursor = conn.execute(
+                "SELECT session_id, state_json, updated_at FROM sessions"
             )
             loaded_count = 0
             now = datetime.now()
             
             for row in cursor.fetchall():
-                session_id, state_json = row
+                session_id, state_json, updated_at_str = row
                 try:
                     state = json.loads(state_json)
                     
                     if session_id in self._session_metadata:
                         continue
                     
+                    try:
+                        updated_at = datetime.fromisoformat(updated_at_str)
+                    except Exception:
+                        updated_at = now
+                    
                     self._sessions[session_id] = state
-                    self._session_timestamps[session_id] = now
+                    self._session_timestamps[session_id] = updated_at
                     self._session_metadata[session_id] = SessionMetadata(
                         version=state.get("_version", 1),
-                        created_at=datetime.now(),
-                        updated_at=datetime.now(),
-                        last_activity=datetime.now()
+                        created_at=updated_at,
+                        updated_at=updated_at,
+                        last_activity=updated_at
                     )
                     loaded_count += 1
                 except Exception as e:
                     logger.warning(f"恢复会话 {session_id} 失败: {e}")
             
-            chat_cursor = self._db_conn.execute(
+            chat_cursor = conn.execute(
                 "SELECT session_id, role, content, timestamp FROM chat_history ORDER BY timestamp"
             )
             for row in chat_cursor.fetchall():
@@ -664,30 +834,151 @@ class MemoryStore:
             if session_id not in self._chat_histories:
                 self._chat_histories[session_id] = []
             
+            timestamp = datetime.now().isoformat()
+            
+            conn = self._get_db_conn()
+            if conn:
+                try:
+                    with conn:
+                        conn.execute(
+                            "INSERT INTO chat_history (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+                            (session_id, role, content, timestamp)
+                        )
+                except Exception as e:
+                    logger.error(f"SQLite 保存聊天历史失败: {e}")
+            
             self._chat_histories[session_id].append({
                 "role": role,
                 "content": content,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": timestamp
             })
             
             if len(self._chat_histories[session_id]) > self._max_chat_history:
                 removed = len(self._chat_histories[session_id]) - self._max_chat_history
                 self._chat_histories[session_id] = self._chat_histories[session_id][-self._max_chat_history:]
                 logger.debug(f"聊天历史自动清理: 移除 {removed} 条旧记录")
-            
-            if self._db_conn:
-                try:
-                    self._db_conn.execute(
-                        "INSERT INTO chat_history (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
-                        (session_id, role, content, datetime.now().isoformat())
-                    )
-                    self._db_conn.commit()
-                except Exception as e:
-                    logger.error(f"SQLite 保存聊天历史失败: {e}")
     
     def get_chat_history(self, session_id: str) -> List[Dict]:
         """获取聊天历史"""
         return self._chat_histories.get(session_id, [])
+    
+    def save_script_history(self, tool_name: str, script_content: str, description: str = "", source: str = "upload"):
+        """保存脚本历史"""
+        conn = self._get_db_conn()
+        if not conn:
+            return False
+        
+        try:
+            with conn:
+                conn.execute(
+                    """INSERT INTO script_history (tool_name, script_content, description, source, created_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (tool_name, script_content, description, source, datetime.now().isoformat())
+                )
+            logger.info(f"保存脚本历史: {tool_name}")
+            return True
+        except Exception as e:
+            logger.error(f"保存脚本历史失败: {e}")
+            return False
+    
+    def get_script_history(self, limit: int = 50) -> List[Dict]:
+        """获取脚本历史"""
+        conn = self._get_db_conn()
+        if not conn:
+            return []
+        
+        try:
+            cursor = conn.execute(
+                """SELECT tool_name, script_content, description, source, created_at 
+                   FROM script_history ORDER BY created_at DESC LIMIT ?""",
+                (limit,)
+            )
+            return [
+                {
+                    "tool_name": row[0],
+                    "script_content": row[1],
+                    "description": row[2],
+                    "source": row[3],
+                    "created_at": row[4]
+                }
+                for row in cursor.fetchall()
+            ]
+        except Exception as e:
+            logger.error(f"获取脚本历史失败: {e}")
+            return []
+    
+    def get_script_by_name(self, tool_name: str) -> Optional[Dict]:
+        """根据工具名获取脚本"""
+        conn = self._get_db_conn()
+        if not conn:
+            return None
+        
+        try:
+            cursor = conn.execute(
+                """SELECT tool_name, script_content, description, source, created_at 
+                   FROM script_history WHERE tool_name = ? ORDER BY created_at DESC LIMIT 1""",
+                (tool_name,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "tool_name": row[0],
+                    "script_content": row[1],
+                    "description": row[2],
+                    "source": row[3],
+                    "created_at": row[4]
+                }
+            return None
+        except Exception as e:
+            logger.error(f"获取脚本失败: {e}")
+            return None
+    
+    def delete_script_history(self, tool_name: str):
+        """删除脚本历史"""
+        conn = self._get_db_conn()
+        if not conn:
+            return False
+        
+        try:
+            with conn:
+                conn.execute("DELETE FROM script_history WHERE tool_name = ?", (tool_name,))
+            logger.info(f"删除脚本历史: {tool_name}")
+            return True
+        except Exception as e:
+            logger.error(f"删除脚本历史失败: {e}")
+            return False
+    
+    def get_preference(self, key: str, default: str = None) -> Optional[str]:
+        """获取用户偏好"""
+        conn = self._get_db_conn()
+        if not conn:
+            return default
+        
+        try:
+            cursor = conn.execute("SELECT value FROM user_preferences WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row[0] if row else default
+        except Exception as e:
+            logger.error(f"获取用户偏好失败: {e}")
+            return default
+    
+    def set_preference(self, key: str, value: str):
+        """设置用户偏好"""
+        conn = self._get_db_conn()
+        if not conn:
+            return False
+        
+        try:
+            with conn:
+                conn.execute(
+                    """INSERT OR REPLACE INTO user_preferences (key, value, updated_at)
+                       VALUES (?, ?, ?)""",
+                    (key, value, datetime.now().isoformat())
+                )
+            return True
+        except Exception as e:
+            logger.error(f"设置用户偏好失败: {e}")
+            return False
     
     def sync_chat_history_from_state(self, session_id: str, state: ScanState) -> ScanState:
         """从状态同步聊天历史到 memory_store（带冗余检测与合并）
@@ -1230,6 +1521,9 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
     
     if isinstance(confirm_result, dict):
         confirmed = confirm_result.get("confirmed", False)
+        if not confirmed:
+            choice = confirm_result.get("choice", "")
+            confirmed = str(choice) in ("1", "confirm", "true", "yes")
     else:
         confirmed = str(confirm_result).lower() in ("true", "yes", "1", "confirm")
     
@@ -1274,19 +1568,12 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
             logger.error(f"WebSocket推送失败: {e}")
     
     from .tools import ALL_TOOLS
-    from langchain_core.messages import SystemMessage, HumanMessage
     
-    llm_with_tools = get_llm().bind_tools(ALL_TOOLS)
-    messages = [
-        SystemMessage(content=f"用户想执行工具: {tool_name}。请从可用工具中选择最匹配的工具。"),
-        HumanMessage(content=f"目标: {target}\n工具名: {tool_name}")
-    ]
-    response_with_tc = llm_with_tools.invoke(messages, timeout=30)
-    llm_tool_calls = getattr(response_with_tc, 'tool_calls', [])
-    
+    prompt = f"用户想执行工具: {tool_name}。请从可用工具中选择最匹配的工具。目标: {target}\n工具名: {tool_name}"
+    matched_name = _match_tool_via_llm(prompt, ALL_TOOLS)
     tool = None
-    if llm_tool_calls:
-        matched_name = llm_tool_calls[0]['name']
+    
+    if matched_name:
         tool = get_tool_by_name(matched_name)
         if tool:
             logger.info(f"LLM工具匹配: '{tool_name}' -> '{matched_name}'")
@@ -1745,9 +2032,9 @@ async def ai_decision(state: ScanState) -> ScanState:
     remaining_tasks = [t for t in tool_sequence if t not in done]
     next_candidate = remaining_tasks[0] if remaining_tasks else ""
     
-    # =================== RAG 知识库检索 ===================
+    # =================== RAG 知识库检索（强制） ===================
     target = state.get("target", "")
-    last_result = state.get("task_result", {})
+    last_result = state.get("tool_result", {}) or state.get("task_result", {})
     rag_strategy = ""
     rag_sources = []
     try:
@@ -1762,8 +2049,10 @@ async def ai_decision(state: ScanState) -> ScanState:
             source_matches = re.findall(r'来源: ([^\|]+)', rag_strategy)
             rag_sources = source_matches[:3]
             logger.info(f"RAG 策略检索成功: 来源={rag_sources}, 内容长度={len(rag_strategy)}")
+        else:
+            logger.warning(f"[{session_id}] RAG检索返回空结果，使用默认策略")
     except Exception as e:
-        logger.warning(f"RAG 检索异常（不影响主流程）: {e}")
+        logger.warning(f"[{session_id}] RAG 检索异常: {e}，使用默认策略")
     # =====================================================
     
     # =================== ReACT 推理决策 ===================
@@ -1771,7 +2060,7 @@ async def ai_decision(state: ScanState) -> ScanState:
     try:
         llm = get_llm()
         react_prompt = build_react_prompt(state, rag_strategy)
-        react_response = llm.invoke(react_prompt, timeout=30)
+        react_response = safe_llm_invoke(llm, react_prompt, timeout=30)
         react_text = react_response.content if hasattr(react_response, 'content') else str(react_response)
         react_decision = parse_react_response(react_text)
         logger.info(f"ReACT 决策: Action={react_decision.get('action')} Reason={react_decision.get('reason', '')[:50]}")
@@ -1914,17 +2203,19 @@ async def user_interact(state: ScanState) -> ScanState:
     interaction_data = {
         "type": "interaction_required",
         "session_id": session_id,
-        "next_task": next_task,
-        "target": target,
-        "mode": mode,
-        "completed_tasks": state.get("completed_tasks", []),
-        "options": [
-            {"key": "1", "label": "执行", "description": f"执行任务: {next_task}"},
-            {"key": "2", "label": "停止", "description": "停止扫描并生成报告"},
-            {"key": "3", "label": "聊天", "description": "与 AI 助手对话"},
-            {"key": "4", "label": "上传脚本", "description": "上传自定义扫描脚本"},
-            {"key": "5", "label": "生成脚本", "description": "AI生成专属扫描脚本"}
-        ]
+        "payload": {
+            "next_task": next_task,
+            "target": target,
+            "mode": mode,
+            "completed_tasks": state.get("completed_tasks", []),
+            "options": [
+                {"key": "1", "label": "执行", "description": f"执行任务: {next_task}"},
+                {"key": "2", "label": "停止", "description": "停止扫描并生成报告"},
+                {"key": "3", "label": "聊天", "description": "与 AI 助手对话"},
+                {"key": "4", "label": "上传脚本", "description": "上传自定义扫描脚本"},
+                {"key": "5", "label": "生成脚本", "description": "AI生成专属扫描脚本"}
+            ]
+        }
     }
     
     logger.info(f"🎯 目标：{target} | 模式：{mode} | 下一个任务：{next_task}")
@@ -1967,6 +2258,7 @@ async def execute_task(state: ScanState) -> ScanState:
     
     target = state.get("target", "")
     session_id = state.get("websocket_session_id") or state.get("task_id")
+    log_collector.add_log(session_id, "execute_task", "info", f"任务开始: {task}, 目标={target}")
     ws_callback = memory_store.get_websocket_callback(session_id)
     
     if task not in ("end", ""):
@@ -1996,6 +2288,9 @@ async def execute_task(state: ScanState) -> ScanState:
         
         if isinstance(confirm_result, dict):
             confirmed = confirm_result.get("confirmed", False)
+            if not confirmed:
+                choice = confirm_result.get("choice", "")
+                confirmed = str(choice) in ("1", "confirm", "true", "yes")
         else:
             confirmed = str(confirm_result).lower() in ("true", "yes", "1", "confirm")
         
@@ -2041,31 +2336,25 @@ async def execute_task(state: ScanState) -> ScanState:
             logger.error(f"WebSocket推送失败: {e}")
     
     from .tools import get_tools_by_mode
-    from langchain_core.messages import SystemMessage, HumanMessage
     
-    scan_mode = state.get("scan_mode", "info_collection")
+    scan_mode = state.get("mode", "info_collection")
     tools_list = get_tools_by_mode(scan_mode)
     
-    llm_with_tools = get_llm().bind_tools(tools_list)
-    messages = [
-        SystemMessage(content=f"当前需要执行的安全任务: {task}。请从可用工具中选择最匹配的工具来执行此任务。"),
-        HumanMessage(content=f"任务名称: {task}\n目标: {target}")
-    ]
-    response_with_tc = llm_with_tools.invoke(messages, timeout=30)
-    llm_tool_calls = getattr(response_with_tc, 'tool_calls', [])
+    prompt = f"当前需要执行的安全任务: {task}。请从可用工具中选择最匹配的工具来执行此任务。任务名称: {task}\n目标: {target}"
+    matched_name = _match_tool_via_llm(prompt, tools_list)
     
     tool = None
-    if llm_tool_calls:
-        matched_name = llm_tool_calls[0]['name']
+    if matched_name:
         tool = get_tool_by_name(matched_name)
         if tool:
             logger.info(f"LLM工具匹配: '{task}' -> '{matched_name}'")
     
     if not tool:
         tool = get_tool_by_name(task)
-    
+
     if not tool:
         logger.warning(f"工具 {task} 不存在，跳过并继续下一个任务")
+
         if ws_callback:
             try:
                 await ws_callback({
@@ -2158,7 +2447,7 @@ async def execute_task(state: ScanState) -> ScanState:
                     logger.error(f"WebSocket推送认证通知失败: {e}")
         
         llm = get_llm()
-        analysis = llm.invoke(f"用1-2句话简要分析这个扫描结果的关键发现：{str(res)[:500]}").content
+        analysis = safe_llm_invoke(llm, f"用1-2句话简要分析这个扫描结果的关键发现：{str(res)[:500]}").content
         logger.info(f"🧾 分析：{analysis}")
         
         if ws_callback:
@@ -2178,12 +2467,25 @@ async def execute_task(state: ScanState) -> ScanState:
             except Exception as e:
                 logger.error(f"WebSocket推送失败: {e}")
         
+        log_collector.add_log(session_id, "execute_task", "info", f"任务完成: {task}")
+        
         new_state = append_chat(state, "system", f"任务：{task}\n结果：{res}\n分析：{analysis}")
         tool_results = state.get("tool_results", {}).copy()
         tool_results[task] = res
         
         completed_tasks = state.get("completed_tasks", []).copy()
         completed_tasks.append(task)
+        
+        all_vulns = state.get("vulnerabilities", []).copy()
+        current_mode = state.get("mode", "")
+        if current_mode in ("vuln_scan", "full_scan") and isinstance(res, dict):
+            vuln_data = res.get("data", {}).get("vulnerabilities", [])
+            if vuln_data:
+                for v in vuln_data:
+                    if isinstance(v, dict):
+                        v = {**v, "source_tool": task}
+                    all_vulns.append(v)
+                logger.info(f"[{session_id}] 从工具 {task} 提取到 {len(vuln_data)} 个漏洞")
         
         task_history = state.get("task_history", []).copy()
         task_history.append(f"{task}: {str(res)[:100]}")
@@ -2201,6 +2503,7 @@ async def execute_task(state: ScanState) -> ScanState:
         update_kwargs = dict(
             tool_results=tool_results, 
             completed_tasks=completed_tasks,
+            vulnerabilities=all_vulns,
             task_history=task_history,
             stage_status=stage_status,
             task_result={"tool": task, "result": res},
@@ -2214,9 +2517,21 @@ async def execute_task(state: ScanState) -> ScanState:
         
     except Exception as e:
         logger.error(f"执行任务失败: {e}")
+        log_collector.add_log(session_id, "execute_task", "error", f"任务失败: {task}, 错误: {str(e)}")
         
         from TOSKill.utils.error_handler import format_tool_error
         error_response = format_tool_error(task, e)
+        
+        ai_analysis = None
+        try:
+            llm = get_llm()
+            analysis_prompt = f"A security scanning tool failed. Analyze the following error and provide diagnostic suggestions in Chinese. Error: {str(e)}"
+            analysis_result = safe_llm_invoke(llm, analysis_prompt, timeout=30)
+            ai_analysis = analysis_result.content if hasattr(analysis_result, 'content') else str(analysis_result)
+            logger.info(f"[{session_id}] AI错误分析完成")
+        except Exception as llm_e:
+            logger.warning(f"[{session_id}] LLM错误分析失败，回退到原始错误: {llm_e}")
+            ai_analysis = str(e)
         
         if ws_callback:
             try:
@@ -2229,7 +2544,8 @@ async def execute_task(state: ScanState) -> ScanState:
                         "code": error_response.get("payload", {}).get("code"),
                         "source": error_response.get("payload", {}).get("source"),
                         "suggestion": error_response.get("payload", {}).get("suggestion"),
-                        "details": error_response.get("payload", {}).get("details", {})
+                        "details": error_response.get("payload", {}).get("details", {}),
+                        "ai_analysis": ai_analysis
                     }
                 })
             except Exception as we:
@@ -2281,7 +2597,7 @@ async def chat(state: ScanState) -> ScanState:
     })
     
     full_response = ""
-    async for chunk in llm.astream(prompt):
+    async for chunk in safe_llm_astream(llm, prompt):
         token = chunk.content if hasattr(chunk, 'content') else str(chunk)
         if token:
             full_response += token
@@ -2384,9 +2700,11 @@ async def report_generation(state: ScanState) -> ScanState:
     vulnerabilities = state.get("vulnerabilities", [])
     target = state.get("target", "")
     session_id = state.get("websocket_session_id") or state.get("task_id", "unknown")
+    log_collector.add_log(session_id, "report_generation", "info", "报告生成开始")
     ws_callback = memory_store.get_websocket_callback(session_id)
     
     if not tool_results:
+        log_collector.add_log(session_id, "report_generation", "warning", "无扫描结果，报告生成跳过")
         if ws_callback:
             await ws_callback({
                 "type": "report_error",
@@ -2483,6 +2801,8 @@ async def report_generation(state: ScanState) -> ScanState:
             except Exception as e:
                 logger.error(f"WebSocket推送失败: {e}")
         
+        log_collector.add_log(session_id, "report_generation", "info", "报告生成完成")
+        
         return update_state(
             state, 
             is_complete=True, 
@@ -2494,6 +2814,7 @@ async def report_generation(state: ScanState) -> ScanState:
         )
     except Exception as e:
         logger.error(f"保存报告失败: {e}")
+        log_collector.add_log(session_id, "report_generation", "error", f"报告生成失败: {str(e)}")
         if ws_callback:
             try:
                 await ws_callback({
@@ -2580,8 +2901,8 @@ async def rejection_handler(state: ScanState) -> ScanState:
 3. 至少一个方案是从剩余任务中顺序选择下一个
 4. 如果剩余任务为0，建议 "skip" 跳过或 "report" 生成报告
 """
-        
-        alt_response = llm.invoke(alt_prompt, timeout=30)
+
+        alt_response = safe_llm_invoke(llm, alt_prompt, timeout=30)
         alt_text = alt_response.content if hasattr(alt_response, 'content') else str(alt_response)
         
         import re
@@ -2715,19 +3036,16 @@ def router(state: ScanState) -> str:
     return "user_interact"
 
 
-def create_checkpointer(db_path: str = "data/langgraph_checkpoints.db") -> SqliteSaver:
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    checkpointer = SqliteSaver(conn)
-    checkpointer.setup()
-    return checkpointer
+def create_checkpointer(db_path: str = "data/langgraph_checkpoints.db") -> MemorySaver:
+    """创建内存检查点器"""
+    return MemorySaver()
 
 
 class IntentRecognitionGraph:
     """用户意图识别子图 - 系统总入口"""
     
     @staticmethod
-    def build(checkpointer: SqliteSaver = None) -> StateGraph:
+    def build(checkpointer: MemorySaver = None) -> StateGraph:
         workflow = StateGraph(ScanState)
         
         workflow.add_node("intent_recognition", intent_recognition)
@@ -2759,7 +3077,7 @@ class InfoCollectionGraph:
     """信息收集子图"""
     
     @staticmethod
-    def build(checkpointer: SqliteSaver = None) -> StateGraph:
+    def build(checkpointer: MemorySaver = None) -> StateGraph:
         workflow = StateGraph(ScanState)
         
         workflow.add_node("ai_decision", ai_decision)
@@ -2794,7 +3112,7 @@ class VulnScanGraph:
     """漏洞扫描子图"""
     
     @staticmethod
-    def build(checkpointer: SqliteSaver = None) -> StateGraph:
+    def build(checkpointer: MemorySaver = None) -> StateGraph:
         workflow = StateGraph(ScanState)
         
         workflow.add_node("ai_decision", ai_decision)
@@ -2829,7 +3147,7 @@ class ReportGraph:
     """报告生成子图"""
     
     @staticmethod
-    def build(checkpointer: SqliteSaver = None) -> StateGraph:
+    def build(checkpointer: MemorySaver = None) -> StateGraph:
         workflow = StateGraph(ScanState)
         
         workflow.add_node("report_generation", report_generation)
@@ -2842,23 +3160,37 @@ class ReportGraph:
         return workflow.compile(checkpointer=checkpointer)
 
 class AgentOrchestrator:
-    """Agent编排器 - 管理多个子图的执行，支持暂停/恢复"""
+    """Agent 编排器 - 管理多个子图的执行，支持暂停/恢复"""
     
     def __init__(self):
-        self._checkpointer = create_checkpointer()
-        self.intent_graph = IntentRecognitionGraph.build(checkpointer=self._checkpointer)
-        self.info_graph = InfoCollectionGraph.build(checkpointer=self._checkpointer)
-        self.vuln_graph = VulnScanGraph.build(checkpointer=self._checkpointer)
-        self.report_graph = ReportGraph.build(checkpointer=self._checkpointer)
+        self._checkpointer = None  # 延迟初始化
+        self.intent_graph = None
+        self.info_graph = None
+        self.vuln_graph = None
+        self.report_graph = None
         self._running_tasks: Dict[str, asyncio.Task] = {}
-        logger.info("Agent编排器初始化完成")
+        self._initialized = False
+        logger.info("Agent 编排器初始化完成")
+    
+    async def _ensure_initialized(self):
+        """确保异步初始化完成"""
+        if not self._initialized:
+            self._checkpointer = create_checkpointer()
+            self.intent_graph = IntentRecognitionGraph.build(checkpointer=self._checkpointer)
+            self.info_graph = InfoCollectionGraph.build(checkpointer=self._checkpointer)
+            self.vuln_graph = VulnScanGraph.build(checkpointer=self._checkpointer)
+            self.report_graph = ReportGraph.build(checkpointer=self._checkpointer)
+            self._initialized = True
+            logger.info("Agent 编排器异步初始化完成")
     
     def set_websocket_callback(self, session_id: str, callback: Callable):
         """设置 WebSocket 回调"""
         memory_store.set_websocket_callback(session_id, callback)
     
     async def resume_workflow(self, session_id: str, user_choice: str) -> Optional[ScanState]:
-        """恢复暂停的工作流 - 使用 Command(resume=...) 恢复 interrupt"""
+        """恢复暂停的工作流 - 使用 Command(resume=...) 恢复 interrupt
+        添加状态校验和超时保护：超过30分钟未响应自动结束
+        """
         config = {"configurable": {"thread_id": session_id}}
         
         if isinstance(user_choice, dict):
@@ -2874,7 +3206,34 @@ class AgentOrchestrator:
                 checkpoint = await self.intent_graph.aget_state(config)
             mode = "full_scan"
             if checkpoint and checkpoint.values:
-                mode = checkpoint.values.get("mode", "full_scan")
+                state_data = checkpoint.values
+                mode = state_data.get("mode", "full_scan")
+                
+                updated_at = state_data.get("updated_at")
+                if updated_at:
+                    if isinstance(updated_at, str):
+                        updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00").replace("+00:00", ""))
+                    elapsed = (datetime.now() - updated_at.replace(tzinfo=None)).total_seconds()
+                    if elapsed > 1800:
+                        logger.warning(f"[{session_id}] 工作流超时({elapsed}s > 1800s)，自动终止")
+                        ws_callback = memory_store.get_websocket_callback(session_id)
+                        if ws_callback:
+                            try:
+                                await ws_callback({
+                                    "type": "workflow_timeout",
+                                    "payload": {
+                                        "session_id": session_id,
+                                        "elapsed_seconds": elapsed,
+                                        "message": "工作流已超过30分钟未响应，自动结束"
+                                    }
+                                })
+                            except Exception:
+                                pass
+                        return update_state(
+                            checkpoint.values or {},
+                            is_complete=True,
+                            errors=checkpoint.values.get("errors", []) + ["工作流超时自动终止"]
+                        )
         except Exception:
             state = memory_store.get_session(session_id)
             mode = state.get("mode", "full_scan") if state else "full_scan"
@@ -2908,7 +3267,21 @@ class AgentOrchestrator:
             return result
             
         except Exception as e:
-            logger.error(f"恢复工作流失败: {e}")
+            logger.error(f"恢复工作流失败: {e}", exc_info=True)
+            ws_callback = memory_store.get_websocket_callback(session_id)
+            if ws_callback:
+                try:
+                    await ws_callback({
+                        "type": "workflow_error",
+                        "payload": {
+                            "error": f"恢复工作流失败: {str(e)}",
+                            "suggestion": "请尝试重新发起扫描或刷新页面",
+                            "code": "RESUME_FAILED",
+                            "session_id": session_id
+                        }
+                    })
+                except Exception:
+                    pass
             state = memory_store.get_session(session_id)
             if state:
                 state = update_state(state, user_choice=user_choice)

@@ -244,6 +244,8 @@ const unreadCount = ref(0)
 const aiConnectionStatus = ref(null)
 const chatInstanceId = ref(null)
 const isTestingConnection = ref(false)
+const lastErrorMessage = ref('')
+const lastErrorTime = ref(0)
 
 const isDragging = ref(false)
 const dragStartPos = ref({ x: 0, y: 0 })
@@ -269,6 +271,18 @@ const isPanelDragging = ref(false)
 const panelDragStart = ref({ x: 0, y: 0 })
 const panelPos = ref({ x: 0, y: 0 })
 const chatPanel = ref(null)
+
+//消息去重原理机制
+const showUniqueMessage = (msg) => {
+  const now = Date.now()
+  const timeDiff = now - lastErrorTime.value
+  if (msg === lastErrorMessage.value && timeDiff < 10000) {
+    return 
+  }
+  lastErrorMessage.value = msg
+  lastErrorTime.value = now
+  ElMessage.error(msg)
+}
 
 const quickActions = [
   { text: '漏洞分析', icon: Warning },
@@ -619,7 +633,7 @@ const connectWebSocket = () => {
       isLoading.value = false
       isSending.value = false
       isTyping.value = false
-      ElMessage.error('连接失败，请检查网络')
+      showUniqueMessage('连接失败，请检查网络')
     }
 
     ws.value.onclose = () => {
@@ -631,7 +645,7 @@ const connectWebSocket = () => {
   } catch (error) {
     console.error('创建WebSocket连接失败:', error)
     isLoading.value = false
-    ElMessage.error('无法建立连接')
+    showUniqueMessage('无法建立连接')
   }
 }
 

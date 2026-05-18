@@ -86,6 +86,10 @@ class ChatSendRequest(BaseModel):
     message: str = Field(..., description="消息内容")
 
 
+class ParseIntentRequest(BaseModel):
+    message: str = Field(..., description="用户输入的自然语言消息")
+
+
 class SessionRequest(BaseModel):
     target: Optional[str] = Field(default="", description="扫描目标")
     mode: str = Field(default="info_collection", description="扫描模式")
@@ -502,6 +506,140 @@ async def api_health_check():
     )
 
 
+# ==================== 自然语言解析接口 ====================
+
+@router.post("/parse-intent", response_model=APIResponse)
+async def api_parse_intent(request: ParseIntentRequest):
+    """使用AI解析用户自然语言输入，提取扫描目标和意图"""
+    import re
+    import json
+    
+    message = request.message.strip()
+    if not message:
+        return APIResponse(code=400, message="消息不能为空", data=None)
+    
+    url_pattern = r'(https?://[a-zA-Z0-9\.-]+(?::\d+)?(?:/[a-zA-Z0-9\./_-]*)?)'
+    domain_pattern = r'([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.[a-zA-Z0-9.-]{2,})'
+    ip_pattern = r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
+    
+    extracted_target = None
+    url_match = re.search(url_pattern, message)
+    if url_match:
+        extracted_target = url_match.group(1)
+    else:
+        domain_match = re.search(domain_pattern, message)
+        if domain_match:
+            extracted_target = f"http://{domain_match.group(1)}"
+        else:
+            ip_match = re.search(ip_pattern, message)
+            if ip_match:
+                extracted_target = f"http://{ip_match.group(1)}"
+    
+    mode_keywords = {
+        "info": ["信息收集", "信息", "收集", "资产", "端口扫描", "子域名", "info", "端口"],
+        "vuln": ["漏洞扫描", "漏洞", "安全检测", "渗透", "vuln", "漏洞检测", "注入", "xss", "sql"],
+        "full": ["完整扫描", "全面扫描", "深度扫描", "full", "全部", "完整"]
+    }
+    
+    detected_mode = None
+    message_lower = message.lower()
+    for mode, keywords in mode_keywords.items():
+        for kw in keywords:
+            if kw in message_lower:
+                detected_mode = mode
+                break
+        if detected_mode:
+            break
+    
+    action_keywords = {
+        "scan": ["扫描", "检测", "测试", "分析", "scan", "check", "test", "进行"],
+        "help": ["帮助", "help", "怎么", "如何", "用法", "指令"],
+        "status": ["状态", "进度", "status", "当前"],
+        "stop": ["停止", "取消", "stop", "cancel", "终止"]
+    }
+    
+    detected_action = None
+    for action, keywords in action_keywords.items():
+        for kw in keywords:
+            if kw in message_lower:
+                detected_action = action
+                break
+        if detected_action:
+            break
+    
+    if extracted_target and not detected_action:
+        detected_action = "scan"
+    
+    try:
+        llm = get_llm()
+        prompt = f"""分析用户输入，提取关键信息。用户输入："{message}"
+
+请以JSON格式输出以下信息：
+1. target: 提取的扫描目标URL（如果有的话，确保以http://或https://开头，不要包含其他文字）
+2. mode: 扫描模式（info/vuln/full，根据用户意图判断，默认full）
+3. action: 用户意图（scan/help/status/stop/chat）
+4. confidence: 置信度（0.0-1.0）
+5. explanation: 简要解释用户意图
+
+注意：target字段只提取纯URL，不要包含任何中文或其他文字。
+
+只输出JSON，不要其他内容：
+{{"target": "...", "mode": "...", "action": "...", "confidence": 0.0, "explanation": "..."}}"""
+        
+        response = llm.invoke(prompt, timeout=10)
+        response_text = response.content if hasattr(response, 'content') else str(response)
+        
+        json_match = re.search(r'\{[^{}]*\}', response_text)
+        if json_match:
+            ai_result = json.loads(json_match.group())
+            
+            if ai_result.get("target"):
+                ai_target = ai_result["target"].strip()
+                if not ai_target.startswith(("http://", "https://")):
+                    ai_target = f"http://{ai_target}"
+                if extracted_target:
+                    pass
+                else:
+                    extracted_target = ai_target
+            
+            if ai_result.get("mode") and not detected_mode:
+                detected_mode = ai_result["mode"]
+            
+            if ai_result.get("action") and not detected_action:
+                detected_action = ai_result["action"]
+            
+            confidence = ai_result.get("confidence", 0.8)
+            explanation = ai_result.get("explanation", "")
+        else:
+            confidence = 0.6
+            explanation = "基于规则解析"
+            
+    except Exception as e:
+        logger.warning(f"AI解析失败，使用规则解析: {e}")
+        confidence = 0.5
+        explanation = "AI解析失败，使用规则解析"
+    
+    if not detected_action:
+        detected_action = "chat"
+    
+    if not detected_mode:
+        detected_mode = "full"
+    
+    return APIResponse(
+        message="意图解析完成",
+        data={
+            "original_message": message,
+            "target": extracted_target,
+            "mode": detected_mode,
+            "action": detected_action,
+            "confidence": confidence,
+            "explanation": explanation,
+            "should_start_scan": extracted_target is not None and detected_action == "scan",
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+
+
 # ==================== 决策测试接口 ====================
 
 class DecisionTestRequest(BaseModel):
@@ -579,3 +717,44 @@ async def api_chat_send(request: ChatSendRequest):
 async def api_chat_history(session_id: str, limit: int = 20):
     history = memory_store.get_chat_history(session_id)
     return APIResponse(data={"history": history[-limit:] if history else []})
+
+
+script_router = APIRouter(prefix="/scripts", tags=["脚本管理"])
+
+@script_router.get("/history", response_model=APIResponse)
+async def get_script_history(limit: int = 50):
+    """获取脚本历史"""
+    history = memory_store.get_script_history(limit)
+    return APIResponse(data={"scripts": history, "total": len(history)})
+
+@script_router.get("/{tool_name}/source", response_model=APIResponse)
+async def get_script_source(tool_name: str):
+    """获取脚本源码"""
+    script = memory_store.get_script_by_name(tool_name)
+    if not script:
+        raise HTTPException(status_code=404, detail=f"脚本 '{tool_name}' 不存在")
+    return APIResponse(data={"script": script})
+
+@script_router.delete("/{tool_name}", response_model=APIResponse)
+async def delete_script(tool_name: str):
+    """删除脚本"""
+    success = memory_store.delete_script_history(tool_name)
+    if not success:
+        raise HTTPException(status_code=500, detail="删除脚本失败")
+    return APIResponse(message=f"脚本 '{tool_name}' 已删除")
+
+@script_router.post("/save", response_model=APIResponse)
+async def save_script(request: dict):
+    """保存脚本"""
+    tool_name = request.get("tool_name")
+    script_content = request.get("script_content")
+    description = request.get("description", "")
+    source = request.get("source", "upload")
+    
+    if not tool_name or not script_content:
+        raise HTTPException(status_code=400, detail="tool_name 和 script_content 不能为空")
+    
+    success = memory_store.save_script_history(tool_name, script_content, description, source)
+    if not success:
+        raise HTTPException(status_code=500, detail="保存脚本失败")
+    return APIResponse(message=f"脚本 '{tool_name}' 已保存")
