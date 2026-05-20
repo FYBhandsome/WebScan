@@ -23,6 +23,7 @@ from TOSKill.config import settings
 
 Path("logs").mkdir(exist_ok=True)
 Path("reports").mkdir(exist_ok=True)
+Path(settings.RUNTIME_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
@@ -37,18 +38,25 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
     logger.info(f"启动 {settings.APP_NAME} v{settings.APP_VERSION}")
     logger.info(f"服务地址: http://{settings.HOST}:{settings.PORT}")
+    
+    from TOSKill.AI.log_collector import log_collector
+    log_collector.initialize()
+    log_collector.add_system_log("info", f"服务启动: {settings.APP_NAME} v{settings.APP_VERSION}", "system")
     
     from TOSKill.AI.model_check import verify_model_connectivity
     result = verify_model_connectivity()
     if result["success"]:
         logger.info(f"AI模型已连接: {result['message']} ({result['latency_ms']}ms)")
+        log_collector.add_system_log("success", f"AI模型已连接: {result['message']}", "system")
     else:
         logger.warning(f"AI模型未连接: {result['message']}，扫描功能仍可用但AI决策将使用回退策略")
+        log_collector.add_system_log("warning", f"AI模型未连接: {result['message']}", "system")
     
     yield
+    
+    log_collector.add_system_log("info", "服务关闭", "system")
     logger.info("服务关闭")
 
 
@@ -82,6 +90,10 @@ async def cors_preflight_middleware(request: Request, call_next):
                 "Access-Control-Expose-Headers": "*",
             }
         )
+    
+    if request.url.path.startswith("/api/ws") or "upgrade" in request.headers.get("connection", "").lower():
+        return await call_next(request)
+    
     response = await call_next(request)
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response

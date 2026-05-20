@@ -298,6 +298,13 @@ import { useWebSocket } from '@/utils/websocket'
 import { useTaskStore } from '@/store/tasks'
 import toast from '@/utils/toast'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8888/api'
+const getWsBaseUrl = () => {
+  let baseUrl = API_BASE_URL.replace(/^http/, 'ws')
+  baseUrl = baseUrl.replace(/\/api$/, '')
+  return baseUrl
+}
+
 export default {
   name: 'AgentScan',
   components: {
@@ -341,7 +348,7 @@ export default {
       { type: 'report', name: '报告生成' }
     ]
 
-    const { connect, on, disconnect } = useWebSocket('ws://localhost:8888/api/ws')
+    const { connect, on, disconnect } = useWebSocket(`${getWsBaseUrl()}/api/ai-chat/ws`)
     
     let progressWatcher = null
 
@@ -865,7 +872,7 @@ export default {
         updateToolExecution(payload)
       })
       
-      progressWatcher = new ProgressWatcher('ws://localhost:8888/api/ws/progress')
+      progressWatcher = new ProgressWatcher(`${getWsBaseUrl()}/api/logs/ws`)
       progressWatcher.connect()
     })
     

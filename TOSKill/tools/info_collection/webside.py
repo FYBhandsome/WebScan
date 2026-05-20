@@ -4,11 +4,9 @@
 使用@tool装饰器封装backend.plugins.webside模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def webside_query(ip: str) -> Dict[str, Any]:
     """旁站查询工具，查询指定IP地址的旁站信息
     

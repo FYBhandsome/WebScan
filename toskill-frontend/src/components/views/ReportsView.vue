@@ -51,7 +51,7 @@
           v-else-if="isHtmlReport" 
           :srcdoc="viewer.content" 
           class="html-report-frame"
-          sandbox="allow-same-origin"
+          sandbox="allow-same-origin allow-scripts"
         ></iframe>
         <div v-else class="markdown-body" v-html="renderedContent"></div>
       </div>

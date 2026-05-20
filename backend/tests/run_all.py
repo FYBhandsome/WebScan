@@ -34,7 +34,7 @@ SLOW_MODULES = {"ai_agents"}
 async def check_server():
     import httpx
     try:
-        r = httpx.get("http://127.0.0.1:8899/health", timeout=5)
+        r = httpx.get("http://127.0.0.1:8888/health", timeout=5)
         return r.status_code == 200
     except Exception:
         return False
@@ -66,8 +66,8 @@ def main():
         return
 
     if not asyncio.run(check_server()):
-        print("ERROR: 后端服务未启动 (http://127.0.0.1:8899)")
-        print("请先启动: python -m uvicorn backend.main:app --host 127.0.0.1 --port 8899")
+        print("ERROR: 后端服务未启动 (http://127.0.0.1:8888)")
+        print("请先启动: python -m uvicorn backend.main:app --host 127.0.0.1 --port 8888")
         sys.exit(1)
 
     modules_to_run = list(TEST_MODULES.keys())

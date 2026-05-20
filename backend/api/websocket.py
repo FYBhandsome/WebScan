@@ -315,3 +315,45 @@ async def websocket_progress_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket progress error: {e}")
         await manager.disconnect(websocket)
+
+
+@router.websocket("/logs/ws")
+async def websocket_logs_endpoint(websocket: WebSocket):
+    """
+    WebSocket日志流端点
+    
+    用于实时推送系统日志和任务日志。
+    """
+    client_host = websocket.client.host if websocket.client else None
+    
+    connected = await manager.connect(websocket, client_host)
+    if not connected:
+        return
+    
+    try:
+        await websocket.send_json({
+            "type": "connected",
+            "message": "日志流已连接",
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        while True:
+            data = await websocket.receive_text()
+            try:
+                message = json.loads(data)
+                if message.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+                elif message.get("type") == "subscribe":
+                    task_id = message.get("task_id")
+                    await websocket.send_json({
+                        "type": "subscribed",
+                        "message": f"已订阅任务 {task_id} 的日志" if task_id else "已订阅系统日志"
+                    })
+            except json.JSONDecodeError:
+                if data == "ping":
+                    await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        await manager.disconnect(websocket)
+    except Exception as e:
+        logger.error(f"WebSocket logs error: {e}")
+        await manager.disconnect(websocket)

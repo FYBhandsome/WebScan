@@ -5,7 +5,7 @@
 **执行时间**: 2026-05-20
 **测试框架**: 独立 Python 脚本 (模拟前端交互)
 **Python版本**: 3.12.3
-**服务器端口**: http://127.0.0.1:8899
+**服务器端口**: http://127.0.0.1:8888
 **测试入口**: `tests/run_all.py`
 
 ## 全量测试结果 (11个模块)
@@ -54,7 +54,7 @@
 ### 5. 服务器端口冲突
 **问题**: `.env` 文件 PORT=8888 被旧进程占用
 
-**修复**: PORT 改为 8899，清理旧进程
+**修复**: PORT 改为 8888，清理旧进程
 
 ### 6. 任务恢复导致服务器崩溃
 **问题**: `task_states.json` 持久化了过期任务，启动时恢复导致 Worker 冲突
@@ -69,7 +69,7 @@
 | `backend/api/notifications.py` | 添加 `except HTTPException: raise` 避免 500 包装 |
 | `backend/api/awvs.py` | `delete_target` 添加 AWVS 配置检查和异常处理 |
 | `backend/ai_agents/api/routes.py` | `POCSearchRequest` 新增 `keyword` 参数 |
-| `backend/.env` | PORT 8888 → 8899 |
+| `backend/.env` | PORT 8888 → 8888 |
 | `backend/tests/run_all.py` | 修复脚本路径 |
 
 ## 容忍通过 (Tolerable)

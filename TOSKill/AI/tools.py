@@ -29,6 +29,9 @@ from urllib.parse import urlparse
 from datetime import datetime, timedelta
 import logging
 import re
+import json
+import socket
+from tld import get_tld
 
 # 预先导入所有工具模块，避免并发执行时的模块导入死锁
 from TOSKill.tools.info_collection.baseinfo import baseinfo
@@ -273,33 +276,52 @@ def wrap_tool_result(
     )
 
 
+def validate_ip(ip: str) -> bool:
+    """验证IP格式合法性"""
+    try:
+        socket.inet_aton(ip)
+        return True
+    except:
+        return False
+
+def domain2ip(domain: str) -> Optional[str]:
+    """域名自动解析为IP"""
+    try:
+        return socket.gethostbyname(domain)
+    except:
+        return None
+
+def get_root_domain(domain: str) -> str:
+    """提取根域名（修复权重查询BUG）"""
+    try:
+        return get_tld(f"http://{domain}", as_object=True).fld
+    except:
+        return domain
+
 def clean_target(target: str) -> str:
-    """URL 自动清洗 - 类比 demo.py"""
-    import re
+    """URL/IP/域名 自动清洗（修复格式非法+协议头缺失）"""
+    if isinstance(target, dict):
+        target = target.get("target") or target.get("url") or target.get("host") or ""
+    
+    if not isinstance(target, str):
+        target = str(target) if target is not None else ""
     
     target = target.strip()
-    
-    url_pattern = r'(https?://[a-zA-Z0-9\.-]+(?::\d+)?(?:/[a-zA-Z0-9\./_-]*)?)'
-    match = re.search(url_pattern, target)
-    if match:
-        target = match.group(1)
-    
-    ip_pattern = r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?)'
-    match = re.search(ip_pattern, target)
-    if match:
-        return match.group(1)
-    
-    domain_pattern = r'([a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\.[a-zA-Z0-9.-]+(?::\d+)?)'
-    match = re.search(domain_pattern, target)
-    if match:
-        return match.group(1)
-    
-    parsed = urlparse(target)
-    if parsed.netloc:
-        return parsed.netloc.strip()
-    
-    return target
+    if not target:
+        return ""
 
+    # 自动补全协议头
+    parsed = urlparse(target)
+    if not parsed.scheme:
+        target = f"http://{target}"
+    
+    # 提取主机地址
+    parsed = urlparse(target)
+    host = parsed.netloc or parsed.path
+    # 去除端口
+    host = host.split(':')[0]
+    
+    return host
 
 def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None, llm_params: Dict[str, Any] = None) -> Any:
     """带认证信息的工具调用辅助函数（非强制性）
@@ -323,6 +345,8 @@ def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None, 
     Returns:
         工具执行结果（无论是否有认证信息都会返回）
     """
+    tool_name = getattr(tool, 'name', str(tool))
+    
     if isinstance(params_or_target, str):
         params = {"target": params_or_target}
     else:
@@ -332,6 +356,31 @@ def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None, 
         for key, value in llm_params.items():
             if key not in ("target",) and value is not None:
                 params[key] = value
+    
+    log_msg = f"[LLM参数提取] 工具: {tool_name} | 参数: {json.dumps(params, ensure_ascii=False, default=str)[:200]}"
+    logger.info(log_msg)
+    
+    if state:
+        session_id = state.get("websocket_session_id") or state.get("task_id")
+        if session_id:
+            try:
+                import asyncio
+                from .graph import safe_ws_send
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(safe_ws_send(session_id, {
+                        "type": "workflow_log",
+                        "payload": {
+                            "level": "INFO",
+                            "message": log_msg,
+                            "source": "llm_params",
+                            "tool": tool_name,
+                            "params": {k: str(v)[:100] for k, v in params.items()},
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    }))
+            except Exception as e:
+                logger.debug(f"发送LLM参数日志失败: {e}")
     
     if state:
         unified_auth = state.get("auth_info", {})
@@ -735,6 +784,10 @@ def ip_locate_scan(target: str) -> ToolResult:
             - timestamp: 执行时间戳
     """
     t = clean_target(target)
+    # 修复：域名自动转IP
+    if not validate_ip(t):
+        t = domain2ip(t) or t
+    
     logger.info(f"[+] 执行IP定位：{t}")
     try:
         raw_result = ip_locate(t)
@@ -745,8 +798,6 @@ def ip_locate_scan(target: str) -> ToolResult:
     except Exception as e:
         logger.error(f"IP定位失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
-
-
 @tool
 def webside_query_scan(target: str) -> ToolResult:
     """
@@ -800,6 +851,9 @@ def web_weight_scan(target: str) -> ToolResult:
             - timestamp: 执行时间戳
     """
     t = clean_target(target)
+    # 修复：提取根域名
+    t = get_root_domain(t)
+    
     logger.info(f"[+] 执行权重查询：{t}")
     try:
         raw_result = web_weight(t)
@@ -810,7 +864,6 @@ def web_weight_scan(target: str) -> ToolResult:
     except Exception as e:
         logger.error(f"权重查询失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
-
 
 # ==================== 漏洞扫描工具 ====================
 
@@ -856,7 +909,7 @@ def sqli_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = sqli(params)
+        raw_result = sqli(**params)
         auth_extracted = extract_auth_from_result(raw_result) if isinstance(raw_result, dict) else None
         return wrap_tool_result(
             success=True,
@@ -909,7 +962,7 @@ def xss_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = xss(params)
+        raw_result = xss(**params)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -959,7 +1012,7 @@ def csrf_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = csrf(params)
+        raw_result = csrf(**params)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -1010,7 +1063,7 @@ def fileupload_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = fileupload(params)
+        raw_result = fileupload(**params)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -1061,7 +1114,7 @@ def cmdi_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = cmdi(params)
+        raw_result = cmdi(**params)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -1112,7 +1165,7 @@ def ssrf_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = ssrf(params)
+        raw_result = ssrf(**params)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -1163,7 +1216,7 @@ def lfi_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = lfi(params)
+        raw_result = lfi(**params)
         return wrap_tool_result(
             success=True,
             data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
@@ -1218,7 +1271,7 @@ def weakpass_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = weakpass(params)
+        raw_result = weakpass(**params)
         auth_extracted = extract_auth_from_result(raw_result) if isinstance(raw_result, dict) else None
         return wrap_tool_result(
             success=True,
@@ -1472,27 +1525,51 @@ class ScriptManager:
         """使用AI分析脚本，生成工具描述"""
         from langchain_core.messages import SystemMessage, HumanMessage
         
-        llm = self._get_llm().bind_tools([_script_analysis_result])
-        messages = [
-            SystemMessage(content="请分析以下安全扫描脚本，调用script_analysis_result工具上报分析结果。"),
-            HumanMessage(content=f"```python\n{script_content[:2000]}\n```")
-        ]
+        prompt = f"""请分析以下Python安全扫描脚本，并以JSON格式返回分析结果。
+
+脚本内容:
+```python
+{script_content[:2000]}
+```
+
+请返回以下JSON格式（只返回JSON，不要其他内容）:
+{{
+    "tool_name": "英文下划线分隔的工具名称，如custom_port_check",
+    "description": "工具功能描述（一句话）",
+    "category": "工具类别：info_collection、vuln_scan、poc 或 custom",
+    "input_type": "输入类型：url、ip 或 domain",
+    "output_type": "输出类型描述"
+}}"""
+        
         try:
+            llm = self._get_llm()
+            messages = [
+                SystemMessage(content="你是一个安全工具分析专家，请分析脚本并返回JSON格式的结果。"),
+                HumanMessage(content=prompt)
+            ]
             response = llm.invoke(messages)
-            tool_calls = getattr(response, 'tool_calls', [])
             
-            if tool_calls:
-                args = tool_calls[0].get('args', {})
-                tool_name = args.get("tool_name", f"custom_{hash(script_content) % 10000}")
-                if not tool_name.startswith("custom_") and not tool_name.startswith("ai_gen_"):
-                    tool_name = f"custom_{tool_name}"
-                return {
-                    "tool_name": tool_name,
-                    "description": args.get("description", "自定义扫描脚本"),
-                    "category": args.get("category", "custom"),
-                    "input_type": args.get("input_type", "url"),
-                    "output_type": args.get("output_type", "其他"),
-                }
+            content = response.content if hasattr(response, 'content') else str(response)
+            
+            import json
+            import re
+            
+            json_match = re.search(r'\{[^{}]*\}', content, re.DOTALL)
+            if json_match:
+                try:
+                    args = json.loads(json_match.group())
+                    tool_name = args.get("tool_name", f"custom_{hash(script_content) % 10000}")
+                    if not tool_name.startswith("custom_") and not tool_name.startswith("ai_gen_"):
+                        tool_name = f"custom_{tool_name}"
+                    return {
+                        "tool_name": tool_name,
+                        "description": args.get("description", "自定义扫描脚本"),
+                        "category": args.get("category", "custom"),
+                        "input_type": args.get("input_type", "url"),
+                        "output_type": args.get("output_type", "其他"),
+                    }
+                except json.JSONDecodeError:
+                    pass
         except Exception as e:
             logger.error(f"AI分析脚本失败: {e}")
         
@@ -1509,7 +1586,10 @@ class ScriptManager:
         """将脚本注册为LangChain工具"""
         from pathlib import Path
         from datetime import datetime
-        from langchain.tools import Tool
+        try:
+            from langchain_core.tools import Tool
+        except ImportError:
+            from langchain.tools import Tool
         import importlib.util
         
         try:

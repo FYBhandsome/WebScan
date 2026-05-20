@@ -2,6 +2,7 @@ import asyncio
 import sys
 import os
 import json
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -14,7 +15,11 @@ except ImportError:
     WEBSOCKETS_AVAILABLE = False
 
 
-async def test_ws_connection(uri, label):
+pytestmark = pytest.mark.skip(reason="WebSocket测试需要后端服务运行，手动执行: python tests/api/test_websocket.py")
+
+
+async def _ws_connection_test(uri, label):
+    """WebSocket连接测试内部函数"""
     print(f"\n--- 测试连接: {label} ---")
     print(f"  URL: {uri}")
     try:
@@ -69,11 +74,9 @@ async def run_websocket_tests():
 
     results = {}
 
-    # 1. 尝试连接 ws://127.0.0.1:8899/ws
-    results["/ws"] = await test_ws_connection(ws_url_1, "端点: /ws")
+    results["/ws"] = await _ws_connection_test(ws_url_1, "端点: /ws")
 
-    # 2. 尝试连接 ws://127.0.0.1:8899/api/ws
-    results["/api/ws"] = await test_ws_connection(ws_url_2, "端点: /api/ws")
+    results["/api/ws"] = await _ws_connection_test(ws_url_2, "端点: /api/ws")
 
     # 3. 总结
     print("\n" + "=" * 70)

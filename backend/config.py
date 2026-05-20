@@ -19,11 +19,11 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     
     HOST: str = "127.0.0.1"
-    PORT: int = 8899
+    PORT: int = 8888
     
     CORS_ORIGINS: list = ["http://localhost:5173", "http://127.0.0.1:5173"]
     
-    DATABASE_URL: str = "sqlite://data/webscan.db"
+    DATABASE_URL: str = "sqlite://backend/data/webscan.db"
     
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/app.log"
@@ -62,6 +62,18 @@ class Settings(BaseSettings):
     POC_CACHE_ENABLED: bool = True
     POC_CACHE_TTL: int = 3600
     POC_REPORT_FORMAT: str = "html"
+    
+    REPORTS_DIR: str = "reports"
+    
+    @property
+    def REPORTS_PATH(self) -> Path:
+        """获取报告目录的绝对路径"""
+        return PROJECT_ROOT / "backend" / self.REPORTS_DIR
+    
+    @property
+    def DATABASE_PATH(self) -> Path:
+        """获取数据库文件的绝对路径"""
+        return PROJECT_ROOT / "backend" / "data" / "webscan.db"
 
     @field_validator('AWVS_API_KEY', 'OPENAI_API_KEY', 'QWEN_API_KEY', 'SEEBUG_API_KEY', mode='before')
     @classmethod

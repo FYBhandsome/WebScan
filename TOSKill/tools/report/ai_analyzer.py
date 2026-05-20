@@ -139,45 +139,92 @@ def _build_analysis_prompt(
     tool_results: Dict[str, Any],
     target_context: Dict[str, Any]
 ) -> str:
-    """构建精简分析提示词"""
+    """构建详细分析提示词"""
     vulns_summary = [
         {
             "id": v.get("id"),
             "type": v.get("vuln_type", v.get("type")),
             "severity": v.get("severity"),
-            "url": str(v.get("url", ""))[:100]
+            "url": str(v.get("url", ""))[:100],
+            "title": v.get("title", ""),
+            "description": v.get("description", "")[:200]
         }
-        for v in vulnerabilities[:5]
+        for v in vulnerabilities[:10]
     ]
     
-    prompt = f"""分析以下安全扫描结果，输出简洁的JSON报告。
+    tool_summary = {}
+    for tool_name, result in list(tool_results.items())[:10]:
+        if isinstance(result, dict):
+            tool_summary[tool_name] = {
+                "success": result.get("success", False),
+                "key_findings": result.get("key_findings", [])[:3] if result.get("key_findings") else []
+            }
+    
+    prompt = f"""作为专业安全分析师，请对以下扫描结果进行全面深入分析。
 
-目标: {target_context.get('target', 'Unknown')}
-漏洞数量: {len(vulnerabilities)}
-主要漏洞:
+## 扫描目标信息
+- 目标: {target_context.get('target', 'Unknown')}
+- 扫描时间: {target_context.get('scan_time', 'Unknown')}
+- 扫描策略: {target_context.get('strategy', 'standard')}
+
+## 发现的漏洞 ({len(vulnerabilities)}个)
 {json.dumps(vulns_summary, ensure_ascii=False, indent=2)}
 
-输出格式(必须严格遵循):
+## 工具执行结果摘要
+{json.dumps(tool_summary, ensure_ascii=False, indent=2)}
+
+请输出以下JSON格式的详细分析报告（只输出JSON，不要其他内容）:
 {{
-  "summary": "一句话风险总结(不超过50字)",
+  "summary": "整体安全状况总结（100-200字）",
   "risk_level": "critical/high/medium/low/info",
-  "top_vulnerabilities": [
-    {{"id": "漏洞ID", "type": "类型", "severity": "严重程度", "fix_priority": 1-5}}
+  "vulnerability_analysis": [
+    {{
+      "id": "漏洞ID",
+      "type": "漏洞类型",
+      "root_cause": "漏洞根本原因分析",
+      "attack_vector": "攻击向量描述",
+      "potential_impact": "潜在影响"
+    }}
   ],
-  "recommendations": ["修复建议1", "修复建议2"]
+  "exploitation_scenarios": [
+    {{
+      "scenario": "攻击场景描述",
+      "likelihood": "高/中/低",
+      "impact": "影响描述",
+      "affected_assets": ["受影响资产"]
+    }}
+  ],
+  "remediation_plan": [
+    {{
+      "priority": 1,
+      "vulnerability_id": "漏洞ID",
+      "action": "修复措施",
+      "effort": "高/中/低",
+      "timeline": "建议修复时间"
+    }}
+  ],
+  "security_recommendations": [
+    "安全建议1",
+    "安全建议2",
+    "安全建议3"
+  ],
+  "compliance_notes": "合规性说明",
+  "next_steps": ["下一步行动建议"]
 }}
 
-要求:
-1. summary不超过50字
-2. top_vulnerabilities最多3条
-3. recommendations最多3条
-4. 只输出JSON，不要其他内容
+分析要求:
+1. summary要全面概括安全状况，包含风险等级和主要问题
+2. vulnerability_analysis要对每个重要漏洞进行深入分析
+3. exploitation_scenarios要描述可能的攻击路径
+4. remediation_plan要给出具体可操作的修复方案
+5. security_recommendations要给出中长期安全建议
+6. 所有分析要基于实际扫描数据，避免泛泛而谈
 """
     return prompt
 
 
 def _parse_llm_response(response_text: str) -> AIAnalysisResult:
-    """解析精简后的LLM响应"""
+    """解析详细LLM响应"""
     result = AIAnalysisResult()
     result.summary = "分析结果解析失败"
     result.risk_level = "info"
@@ -195,49 +242,61 @@ def _parse_llm_response(response_text: str) -> AIAnalysisResult:
             
             if "summary" in data:
                 result.summary = data["summary"]
-                logger.info(f"风险总结: {result.summary}")
+                logger.info(f"风险总结: {result.summary[:100]}...")
             
             if "risk_level" in data:
                 result.risk_level = data["risk_level"]
                 logger.info(f"风险等级: {result.risk_level}")
             
-            top_vulnerabilities = data.get("top_vulnerabilities", [])
-            for vuln in top_vulnerabilities[:3]:
-                result.remediation_priorities.append(RemediationPriority(
-                    vulnerability_id=str(vuln.get("id", "")),
-                    vulnerability_name=vuln.get("type", ""),
-                    priority=vuln.get("fix_priority", 5),
-                    reason=vuln.get("severity", ""),
-                    estimated_effort="中"
+            vuln_analysis = data.get("vulnerability_analysis", [])
+            for va in vuln_analysis[:10]:
+                result.vulnerability_causes.append(VulnerabilityCause(
+                    description=va.get("root_cause", ""),
+                    confidence=0.8,
+                    evidence=[
+                        va.get("attack_vector", ""),
+                        va.get("potential_impact", "")
+                    ]
                 ))
-                logger.info(f"添加优先级漏洞: {vuln.get('type', 'Unknown')}")
             
-            recommendations = data.get("recommendations", [])
-            for rec in recommendations[:3]:
+            exploitation_scenarios = data.get("exploitation_scenarios", [])
+            for es in exploitation_scenarios[:5]:
+                likelihood_map = {"高": 0.9, "中": 0.6, "低": 0.3}
+                result.exploitation_risks.append(ExploitationRisk(
+                    risk_level=es.get("likelihood", "低"),
+                    description=es.get("scenario", ""),
+                    likelihood=likelihood_map.get(es.get("likelihood", "低"), 0.3),
+                    impact=es.get("impact", "")
+                ))
+            
+            remediation_plan = data.get("remediation_plan", [])
+            for rp in remediation_plan[:10]:
+                result.remediation_priorities.append(RemediationPriority(
+                    vulnerability_id=str(rp.get("vulnerability_id", "")),
+                    vulnerability_name="",
+                    priority=rp.get("priority", 5),
+                    reason=rp.get("action", ""),
+                    estimated_effort=rp.get("effort", "中")
+                ))
+            
+            recommendations = data.get("security_recommendations", [])
+            for rec in recommendations[:5]:
                 result.remediation_priorities.append(RemediationPriority(
                     vulnerability_id="",
-                    vulnerability_name="通用建议",
+                    vulnerability_name="安全建议",
                     priority=3,
                     reason=rec,
                     estimated_effort="低"
                 ))
-                logger.info(f"添加修复建议: {rec[:50]}...")
             
-            if result.summary:
-                result.vulnerability_causes.append(VulnerabilityCause(
-                    description=result.summary,
-                    confidence=0.8,
-                    evidence=["基于AI分析的总结"]
-                ))
+            if data.get("compliance_notes"):
+                result.business_impact.compliance_risk = data["compliance_notes"]
             
-            result.exploitation_risks.append(ExploitationRisk(
-                risk_level=result.risk_level,
-                description=f"风险等级为{result.risk_level}的安全问题",
-                likelihood=0.7,
-                impact=result.risk_level
-            ))
+            next_steps = data.get("next_steps", [])
+            if next_steps:
+                result.analysis_evidence.extend(next_steps)
             
-            result.analysis_evidence.append("基于AI的分析")
+            result.analysis_evidence.append("基于AI的深度分析")
             logger.info("LLM响应解析完成")
             
         else:

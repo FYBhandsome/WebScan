@@ -10,6 +10,9 @@ from typing import Optional
 from pathlib import Path
 
 
+PROJECT_ROOT = Path(__file__).parent.resolve()
+
+
 class TOSKillSettings(BaseSettings):
     APP_NAME: str = "TOSKill Security Scanner"
     APP_VERSION: str = "1.0.0"
@@ -37,22 +40,30 @@ class TOSKillSettings(BaseSettings):
     SCRIPTS_DIR: str = "scripts"
     CUSTOM_SCRIPTS_DIR: str = "scripts/custom"
     UPLOAD_DIR: str = "uploads"
-    DB_PATH: str = "data/toskill.db"
+    DB_PATH: str = "TOSKill/data/toskill.db"
+    RUNTIME_LOG_FILE: str = "logs/runtime.log"
+    MAX_LOG_FILE_SIZE: int = 10 * 1024 * 1024
+    MAX_LOG_BACKUP_FILES: int = 5
     
     @property
     def REPORTS_PATH(self) -> Path:
-        """获取报告目录的绝对路径"""
         return PROJECT_ROOT / self.REPORTS_DIR
     
     @property
     def SCRIPTS_PATH(self) -> Path:
-        """获取脚本目录的绝对路径"""
         return PROJECT_ROOT / self.SCRIPTS_DIR
     
     @property
     def CUSTOM_SCRIPTS_PATH(self) -> Path:
-        """获取自定义脚本目录的绝对路径"""
         return PROJECT_ROOT / self.CUSTOM_SCRIPTS_DIR
+    
+    @property
+    def DATABASE_PATH(self) -> Path:
+        return PROJECT_ROOT / "data" / "toskill.db"
+    
+    @property
+    def RUNTIME_LOG_PATH(self) -> Path:
+        return PROJECT_ROOT / self.RUNTIME_LOG_FILE
 
     @field_validator('OPENAI_API_KEY', mode='before')
     @classmethod
@@ -66,5 +77,4 @@ class TOSKillSettings(BaseSettings):
     )
 
 
-PROJECT_ROOT = Path(__file__).parent.resolve()
 settings = TOSKillSettings()

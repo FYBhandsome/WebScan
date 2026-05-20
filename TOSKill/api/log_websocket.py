@@ -1,8 +1,18 @@
+"""
+日志WebSocket处理器
+
+支持：
+1. 实时日志推送
+2. 历史日志读取
+3. 会话订阅
+4. 日志文件实时监控
+"""
 import logging
 import asyncio
 import json
 from typing import Dict, Any, Set
 from uuid import uuid4
+from datetime import datetime
 
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 
@@ -24,6 +34,8 @@ class LogWebSocketManager:
         self.connections: Dict[str, WebSocket] = {}
         self.subscriptions: Dict[str, Set[str]] = {}
         self._heartbeat_tasks: Dict[str, asyncio.Task] = {}
+        self._file_monitor_task = None
+        self._last_file_position = 0
 
     async def connect(self, websocket: WebSocket) -> str:
         await websocket.accept()
@@ -33,12 +45,37 @@ class LogWebSocketManager:
 
         await self._send(client_id, {
             "type": "connected",
-            "payload": {"client_id": client_id, "message": "日志服务已连接"}
+            "payload": {
+                "client_id": client_id,
+                "message": "日志服务已连接",
+                "timestamp": datetime.now().isoformat()
+            }
         })
 
         self._start_heartbeat(client_id)
         logger.info(f"日志客户端连接: {client_id} (当前连接数: {len(self.connections)})")
+        
+        await self._send_initial_logs(client_id)
+        
         return client_id
+
+    async def _send_initial_logs(self, client_id: str):
+        try:
+            from TOSKill.AI.log_collector import log_collector as _lc
+            _lc.initialize()
+            
+            file_logs = _lc.get_file_logs(50)
+            if file_logs:
+                await self._send(client_id, {
+                    "type": MSG_LOGS_BATCH,
+                    "payload": {
+                        "logs": file_logs,
+                        "batch_size": len(file_logs),
+                        "source": "history"
+                    }
+                })
+        except Exception as e:
+            logger.warning(f"发送初始日志失败: {e}")
 
     def disconnect(self, client_id: str):
         self.connections.pop(client_id, None)
@@ -131,12 +168,49 @@ async def log_websocket_endpoint(websocket: WebSocket):
                     })
             elif msg_type == "get_history":
                 session_id = data.get("session_id", "")
+                count = data.get("count", 200)
                 try:
                     from TOSKill.AI.log_collector import log_collector as _lc
-                    logs = _lc.get_logs(session_id) if session_id else _lc.get_all_logs()
-                    await log_ws_manager.push_batch(logs[-200:], client_id)
+                    _lc.initialize()
+                    
+                    if session_id:
+                        logs = _lc.get_logs(session_id)
+                    else:
+                        logs = _lc.get_file_logs(count)
+                    
+                    await log_ws_manager.push_batch(logs[-count:], client_id)
                 except Exception as e:
                     logger.warning(f"获取历史日志失败: {e}")
+            elif msg_type == "get_file_logs":
+                count = data.get("count", 200)
+                try:
+                    from TOSKill.AI.log_collector import log_collector as _lc
+                    _lc.initialize()
+                    logs = _lc.get_file_logs(count)
+                    await log_ws_manager.push_batch(logs, client_id)
+                except Exception as e:
+                    logger.warning(f"获取文件日志失败: {e}")
+            elif msg_type == "get_stats":
+                session_id = data.get("session_id", "")
+                try:
+                    from TOSKill.AI.log_collector import log_collector as _lc
+                    stats = _lc.get_stats(session_id)
+                    await log_ws_manager._send(client_id, {
+                        "type": "stats",
+                        "payload": stats
+                    })
+                except Exception as e:
+                    logger.warning(f"获取日志统计失败: {e}")
+            elif msg_type == "clear_logs":
+                try:
+                    from TOSKill.AI.log_collector import log_collector as _lc
+                    _lc.clear_logs()
+                    await log_ws_manager._send(client_id, {
+                        "type": "logs_cleared",
+                        "payload": {"message": "日志已清空"}
+                    })
+                except Exception as e:
+                    logger.warning(f"清空日志失败: {e}")
             elif msg_type == "ping":
                 await log_ws_manager._send(client_id, {"type": "pong"})
     except WebSocketDisconnect:
@@ -145,3 +219,45 @@ async def log_websocket_endpoint(websocket: WebSocket):
         logger.error(f"日志 WebSocket 异常: {e}")
     finally:
         log_ws_manager.disconnect(client_id)
+
+
+@router.get("/history")
+async def get_log_history(count: int = 200, session_id: str = None):
+    from TOSKill.AI.log_collector import log_collector as _lc
+    _lc.initialize()
+    
+    if session_id:
+        logs = _lc.get_logs(session_id)
+    else:
+        logs = _lc.get_file_logs(count)
+    
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "logs": logs[-count:],
+            "total": len(logs)
+        }
+    }
+
+
+@router.get("/stats")
+async def get_log_stats(session_id: str = None):
+    from TOSKill.AI.log_collector import log_collector as _lc
+    _lc.initialize()
+    stats = _lc.get_stats(session_id)
+    return {
+        "code": 200,
+        "message": "success",
+        "data": stats
+    }
+
+
+@router.delete("/clear")
+async def clear_logs():
+    from TOSKill.AI.log_collector import log_collector as _lc
+    _lc.clear_logs()
+    return {
+        "code": 200,
+        "message": "日志已清空"
+    }

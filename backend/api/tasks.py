@@ -509,27 +509,42 @@ async def get_statistics_overview():
 
 
 @router.get("/{task_id}", response_model=APIResponse)
-async def get_task(task_id: int):
+async def get_task(task_id: str):
     """
     获取任务详情(使用数据库)
     
     根据任务 ID 获取单个任务的详细信息。
+    支持整数ID和UUID格式的ID。
     
     Args:
-        task_id: 任务 ID
+        task_id: 任务 ID (整数或UUID字符串)
         
     Returns:
         APIResponse: 包含任务详细信息的响应
         
     Raises:
         HTTPException: 当任务不存在时抛出 404 错误
-        
-    Examples:
-        >>> 获取 ID 为 1 的任务详情
-        >>> GET /tasks/1
     """
     try:
-        task = await Task.get_or_none(id=task_id)
+        actual_id = task_id
+        if '-' in task_id:
+            try:
+                import uuid
+                uuid.UUID(task_id)
+                tasks = await Task.filter(task_name__contains=task_id[:8]).first()
+                if tasks:
+                    actual_id = tasks.id
+                else:
+                    raise HTTPException(status_code=404, detail="任务不存在")
+            except ValueError:
+                pass
+        
+        try:
+            actual_id = int(actual_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="无效的任务ID格式")
+        
+        task = await Task.get_or_none(id=actual_id)
         
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
@@ -887,32 +902,48 @@ async def cancel_task(task_id: int):
 
 @router.get("/{task_id}/logs", response_model=APIResponse)
 async def get_task_logs(
-    task_id: int,
+    task_id: str,
     skip: int = 0,
-    limit: int = 100
+    limit: int = 100,
+    keyword: str = "",
+    tail: int = 1000
 ):
     """
     获取任务日志
     
     获取指定任务的执行日志记录。
+    支持整数ID和UUID格式的ID。
     
     Args:
-        task_id: 任务 ID
+        task_id: 任务 ID (整数或UUID字符串)
         skip: 跳过的记录数,用于分页
         limit: 返回的最大记录数
+        keyword: 关键词过滤
+        tail: 返回最后N条记录
         
     Returns:
         APIResponse: 包含日志列表的响应
-        
-    Raises:
-        HTTPException: 当任务不存在时抛出 404 错误
-        
-    Examples:
-        >>> 获取任务 1 的日志
-        >>> GET /tasks/1/logs
     """
     try:
-        task = await Task.get_or_none(id=task_id)
+        actual_id = task_id
+        if '-' in task_id:
+            try:
+                import uuid
+                uuid.UUID(task_id)
+                tasks = await Task.filter(task_name__contains=task_id[:8]).first()
+                if tasks:
+                    actual_id = tasks.id
+                else:
+                    return APIResponse(code=200, message="获取成功", data={"logs": [], "total": 0})
+            except ValueError:
+                pass
+        
+        try:
+            actual_id = int(actual_id)
+        except (ValueError, TypeError):
+            return APIResponse(code=200, message="获取成功", data={"logs": [], "total": 0})
+        
+        task = await Task.get_or_none(id=actual_id)
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
         

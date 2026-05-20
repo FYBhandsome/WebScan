@@ -179,7 +179,8 @@ async def lifespan(app: FastAPI):
         task_executor.start_worker()
         logger.info("任务执行器 Worker 已启动")
         
-        await task_executor.recover_pending_tasks()
+        # TODO: 恢复未完成任务需要在生产环境中启用
+        # await task_executor.recover_pending_tasks()
         
     except Exception as e:
         logger.error(f"启动任务执行器失败: {str(e)}")

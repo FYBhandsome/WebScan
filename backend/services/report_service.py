@@ -1147,4 +1147,6 @@ class ReportService:
         return str(filepath)
 
 
-report_service = ReportService()
+from backend.config import settings
+
+report_service = ReportService(output_dir=str(settings.REPORTS_PATH))

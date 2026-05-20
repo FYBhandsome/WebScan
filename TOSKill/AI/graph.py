@@ -486,7 +486,7 @@ class MemoryStore:
     def _init_sqlite(self):
         try:
             from ..config import settings
-            db_path = getattr(settings, 'DB_PATH', 'data/toskill.db')
+            db_path = getattr(settings, 'DB_PATH', 'TOSKill/data/toskill.db')
             db_dir = os.path.dirname(db_path)
             if db_dir:
                 os.makedirs(db_dir, exist_ok=True)

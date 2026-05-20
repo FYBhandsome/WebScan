@@ -1,9 +1,9 @@
 import requests
 
-BASE = "http://127.0.0.1:8899/api"
+BASE = "http://127.0.0.1:8888/api"
 
 print("=" * 60)
-print("    FIX VERIFICATION TESTS (against :8899)")
+print("    FIX VERIFICATION TESTS (against :8888)")
 print("=" * 60)
 
 passed = 0

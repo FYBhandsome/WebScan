@@ -1,6 +1,6 @@
 import sqlite3
 
-db_path = 'D:/AI_WebSecurity/data/webscan.db'
+db_path = 'D:/AI_WebSecurity/backend/data/webscan.db'
 conn = sqlite3.connect(db_path)
 cur = conn.cursor()
 

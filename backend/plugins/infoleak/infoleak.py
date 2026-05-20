@@ -1,5 +1,4 @@
 # -*- coding:utf-8 -*-
-
 """
 信息泄露扫描模块
 功能:
@@ -33,7 +32,7 @@ import json
 import logging
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from threading import Lock
 
@@ -44,6 +43,15 @@ from requests.exceptions import (
     ConnectionError,
     RequestException
 )
+
+# === 修复：URL自动补全协议头函数 ===
+def fix_url(url: str) -> str:
+    """自动修复URL，补全http/https协议头，解决无效URL问题"""
+    url = url.strip()
+    parsed = urlparse(url)
+    if not parsed.scheme:
+        return f"http://{url}"
+    return url
 
 # === 配置项(集中管理,便于修改) ===
 # 判定风险链接的HTTP状态码
@@ -193,6 +201,9 @@ def get_infoleak(target_url: Optional[str]) -> List[Tuple[str, str]]:
         logger.error("输入URL为空字符串")
         return []
 
+    # === 修复核心：自动修复URL协议头 ===
+    target_url = fix_url(target_url)
+
     # 2. 初始化结果存储
     result_store = ThreadSafeResult()
     result_store.clear()
@@ -251,7 +262,8 @@ def get_infoleak(target_url: Optional[str]) -> List[Tuple[str, str]]:
 
 # === 测试入口 ===
 if __name__ == '__main__':
-    test_url = "https://jwt1399.top/"
+    # 测试：直接传域名（无协议头）也能正常运行
+    test_url = "jwt1399.top"
     risk_links = get_infoleak(test_url)
     print("\n=== 扫描结果 ===")
     for key, url in risk_links:

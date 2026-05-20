@@ -4,8 +4,8 @@ API 路由总入口
 统一管理所有 API 路由,包括扫描、任务、报告、POC、AWVS、AI 对话、AI Agents 等模块。
 
 """
-from fastapi import APIRouter, HTTPException
-from . import tasks, reports, poc, awvs, settings, ai, kb, user, notifications, websocket, seebug
+from fastapi import APIRouter, HTTPException, Query
+from . import tasks, reports, poc, awvs, settings, ai, kb, user, notifications, websocket, seebug, vulnerabilities
 from backend.ai_agents.api import router as ai_agents_router
 from TOSKill.api import ai_chat_router, report_router, scan_router, chat_router
 from backend.models import Vulnerability
@@ -29,6 +29,7 @@ api_router.include_router(report_router, tags=["报告下载"])
 api_router.include_router(ai_chat_router, tags=["AI对话WebSocket"])
 api_router.include_router(scan_router, tags=["TOSKill扫描API"])
 api_router.include_router(chat_router, tags=["TOSKill聊天API"])
+api_router.include_router(vulnerabilities.router, tags=["漏洞管理"])
 
 api_router.include_router(poc.router, tags=["POC扫描"])
 

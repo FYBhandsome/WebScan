@@ -4,11 +4,9 @@ CMS识别工具
 使用@tool装饰器封装backend.plugins.whatcms模块
 """
 
-from langchain.tools import tool
 from typing import Dict, Any
 
 
-@tool
 def cms_detect(target: str) -> Dict[str, Any]:
     """CMS(内容管理系统)识别工具，识别目标网站使用的CMS类型和版本
     

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-BASE_URL = "http://127.0.0.1:8899"
+BASE_URL = "http://127.0.0.1:8888"
 API_PREFIX = "/api"
 
 @dataclass

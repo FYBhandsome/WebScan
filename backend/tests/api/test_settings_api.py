@@ -1,6 +1,34 @@
 import pytest
 from unittest.mock import Mock, patch
 
+
+@pytest.fixture
+def mock_settings_response():
+    """模拟设置API响应"""
+    return {
+        "code": 200,
+        "message": "获取成功",
+        "data": {
+            "general": {
+                "systemName": "WebScan Security Platform",
+                "language": "zh-CN",
+                "theme": "dark",
+                "timezone": "Asia/Shanghai"
+            },
+            "scan": {
+                "defaultStrategy": "standard",
+                "maxConcurrent": 5,
+                "timeout": 300
+            },
+            "notification": {
+                "enabled": True,
+                "email": "",
+                "webhook": ""
+            }
+        }
+    }
+
+
 class TestSettingsApi:
     """设置API测试"""
     

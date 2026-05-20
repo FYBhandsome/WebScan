@@ -2,6 +2,34 @@ import pytest
 from unittest.mock import Mock, patch, AsyncMock
 import json
 
+
+@pytest.fixture
+def mock_kb_response():
+    """模拟知识库API响应"""
+    return {
+        "code": 200,
+        "message": "获取成功",
+        "data": [
+            {
+                "id": "vuln-001",
+                "name": "SQL注入漏洞",
+                "severity": "high",
+                "description": "存在SQL注入漏洞，攻击者可获取数据库敏感信息",
+                "cve_id": "CVE-2024-1234",
+                "solution": "使用参数化查询"
+            },
+            {
+                "id": "vuln-002",
+                "name": "XSS漏洞",
+                "severity": "medium",
+                "description": "存在反射型XSS漏洞",
+                "cve_id": "CVE-2024-5678",
+                "solution": "对输出进行HTML编码"
+            }
+        ]
+    }
+
+
 class TestKBApi:
     """知识库API测试"""
     

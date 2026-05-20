@@ -14,12 +14,12 @@ _DB_INITIALIZED = False
 
 
 def get_db_url() -> str:
-    db_url = getattr(settings, "DATABASE_URL", "sqlite://./data/db.sqlite3")
+    db_url = getattr(settings, "DATABASE_URL", "sqlite://backend/data/webscan.db")
     
     if db_url.startswith("sqlite://"):
         db_path_str = db_url[9:]
         if not db_path_str:
-            db_path = PROJECT_ROOT / "data" / "db.sqlite3"
+            db_path = settings.DATABASE_PATH
         else:
             db_path = Path(db_path_str) if os.path.isabs(db_path_str) else PROJECT_ROOT / db_path_str
         

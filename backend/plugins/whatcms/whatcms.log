@@ -1,0 +1,3 @@
+2026-05-20 12:45:11,035 - WhatCMSDetector - INFO - 开始识别CMS | URL:https://www.baidu.com
+2026-05-20 12:45:12,567 - WhatCMSDetector - INFO - 成功加载Wappalyzer规则,共1104个应用
+2026-05-20 12:45:13,786 - WhatCMSDetector - INFO - 识别完成 | URL:https://www.baidu.com | 结果:识别成功:jenkins,IlohaMail,drupal,outlook,Vue.js,jQuery,Server【BWS/1.1】

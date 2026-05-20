@@ -33,7 +33,8 @@ export const useAIChatStore = defineStore('aiChat', () => {
   }
   
   const wsUrl = computed(() => {
-    const baseUrl = API_BASE_URL.replace(/^http/, 'ws')
+    let baseUrl = API_BASE_URL.replace(/^http/, 'ws')
+    baseUrl = baseUrl.replace(/\/api$/, '')
     return `${baseUrl}/api/ai-chat/ws`
   })
   

@@ -36,11 +36,15 @@
     <div
       v-if="logPanelVisible"
       class="log-panel-wrapper"
-      :style="{ height: logPanelHeight + 'px' }"
+      :style="logPanelStyle"
     >
       <div
-        class="log-resize-handle"
-        @mousedown.prevent="startResize"
+        class="log-resize-handle-top"
+        @mousedown.prevent="startResizeVertical"
+      ></div>
+      <div
+        class="log-resize-handle-left"
+        @mousedown.prevent="startResizeHorizontal"
       ></div>
 
       <div class="log-panel">
@@ -54,6 +58,12 @@
             <span v-if="logEntries.length > 0" class="log-count">{{ logEntries.length }}</span>
           </div>
           <div class="log-panel-actions">
+            <select v-model="logFilter" class="log-filter-select" title="过滤日志级别">
+              <option value="all">全部</option>
+              <option value="info">INFO</option>
+              <option value="warn">WARN</option>
+              <option value="error">ERROR</option>
+            </select>
             <button class="log-action-btn" @click="toggleAutoScroll" :title="autoScroll ? '暂停自动滚动' : '开启自动滚动'">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path v-if="autoScroll" d="M13 17l5-5-5-5M6 17l5-5-5-5"></path>
@@ -76,9 +86,9 @@
         </div>
 
         <div class="log-panel-body" ref="logBodyRef">
-          <div v-if="logEntries.length === 0" class="log-empty">暂无日志输出</div>
+          <div v-if="filteredLogEntries.length === 0" class="log-empty">暂无日志输出</div>
           <div
-            v-for="(entry, idx) in logEntries"
+            v-for="(entry, idx) in filteredLogEntries"
             :key="idx"
             class="log-entry"
             :class="'log-level-' + entry.level"
@@ -122,7 +132,7 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted, computed } from 'vue'
 import { useAgentChat } from '../../composables/useAgentChat.js'
 import ChatArea from '../../components/AgentWorkspace/ChatArea.vue'
 import CommandInput from '../../components/AgentWorkspace/CommandInput.vue'
@@ -132,12 +142,37 @@ import { ws } from '../../services/websocket.js'
 const inputCollapsed = ref(false)
 const logPanelVisible = ref(false)
 const logPanelHeight = ref(220)
+const logPanelWidth = ref(0)
+const logFilter = ref('all')
 const autoScroll = ref(true)
 const logEntries = ref([])
 const logBodyRef = ref(null)
 
 const MIN_PANEL_HEIGHT = 100
 const MAX_PANEL_HEIGHT = 600
+const MIN_PANEL_WIDTH = 300
+const MAX_PANEL_WIDTH = 800
+
+const logPanelStyle = computed(() => {
+  const style = { height: logPanelHeight.value + 'px' }
+  if (logPanelWidth.value > 0) {
+    style.width = logPanelWidth.value + 'px'
+    style.position = 'fixed'
+    style.bottom = '60px'
+    style.right = '20px'
+    style.zIndex = '100'
+    style.borderRadius = '8px'
+    style.boxShadow = '0 4px 20px rgba(0,0,0,0.1)'
+  }
+  return style
+})
+
+const filteredLogEntries = computed(() => {
+  if (logFilter.value === 'all') {
+    return logEntries.value
+  }
+  return logEntries.value.filter(entry => entry.level === logFilter.value)
+})
 
 const onPageClick = () => {
   if (!inputCollapsed.value) {
@@ -192,34 +227,87 @@ const wsLogHandler = (data) => {
     addLog('info', `扫描完成 | 目标: ${data.payload?.target || '-'} | 漏洞: ${data.payload?.vulnerabilities_count ?? 0}`, 'scan')
   } else if (data.type === 'scan_cancelled') {
     addLog('warn', '扫描已取消', 'scan')
+  } else if (data.type === 'scan_terminated') {
+    addLog('warn', '扫描已终止', 'scan')
+  } else if (data.type === 'scan_flow_started') {
+    addLog('info', `扫描流程启动 | 目标: ${data.payload?.target || '-'}`, 'scan')
   } else if (data.type === 'task_started') {
     addLog('info', `执行工具: ${data.payload?.tool || '-'} → ${data.payload?.target || '-'}`, 'tool')
   } else if (data.type === 'task_completed') {
-    addLog('info', `工具完成: ${data.payload?.tool || '-'}`, 'tool')
+    const vuln = data.payload?.vulnerable ? ' [发现漏洞!]' : ''
+    addLog('info', `工具完成: ${data.payload?.tool || '-'}${vuln}`, 'tool')
   } else if (data.type === 'task_error') {
     addLog('error', `工具错误 | ${data.payload?.tool || '-'}: ${data.payload?.error || '-'}`, 'tool')
+  } else if (data.type === 'task_skipped') {
+    addLog('warn', `工具跳过: ${data.payload?.tool || '-'} - ${data.payload?.reason || ''}`, 'tool')
+  } else if (data.type === 'task_executing') {
+    addLog('info', `正在执行: ${data.payload?.task || '-'}`, 'tool')
   } else if (data.type === 'tool_execution_started') {
     addLog('info', `工具执行开始: ${data.payload?.tool_name || '-'}`, 'tool')
   } else if (data.type === 'tool_execution_completed') {
     addLog('info', `工具执行完成: ${data.payload?.tool_name || '-'}`, 'tool')
+  } else if (data.type === 'tool_confirm_required') {
+    addLog('warn', `需要确认工具: ${data.payload?.tool_name || '-'}`, 'tool')
+  } else if (data.type === 'direct_tool_started') {
+    addLog('info', `直接执行工具: ${data.payload?.tool || '-'}`, 'tool')
+  } else if (data.type === 'direct_tool_completed') {
+    addLog('info', `直接执行完成: ${data.payload?.tool || '-'}`, 'tool')
+  } else if (data.type === 'direct_tool_error') {
+    addLog('error', `直接执行错误: ${data.payload?.tool || '-'} - ${data.payload?.error || ''}`, 'tool')
   } else if (data.type === 'script_registered') {
     addLog('info', `脚本注册成功: ${data.payload?.tool_name || '-'}`, 'script')
   } else if (data.type === 'script_generated') {
     addLog('info', `脚本生成完成: ${data.payload?.tool_name || '-'}`, 'script')
   } else if (data.type === 'script_generating') {
     addLog('info', `AI 生成脚本中...`, 'script')
+  } else if (data.type === 'script_error') {
+    addLog('error', `脚本错误: ${data.payload?.error || '-'}`, 'script')
+  } else if (data.type === 'script_analyzing') {
+    addLog('info', `分析脚本中...`, 'script')
   } else if (data.type === 'ai_message') {
     addLog('info', `AI 响应: ${(data.payload?.content || '').slice(0, 120)}`, 'ai')
+  } else if (data.type === 'ai_thinking') {
+    addLog('info', `AI 思考中...`, 'ai')
+  } else if (data.type === 'ai_thinking_start') {
+    addLog('info', `AI 开始思考`, 'ai')
+  } else if (data.type === 'ai_decision') {
+    addLog('info', `AI 决策: ${data.payload?.next_task || '-'}`, 'ai')
+  } else if (data.type === 'ai_decision_complete') {
+    addLog('info', `AI 决策完成`, 'ai')
+  } else if (data.type === 'ai_chat') {
+    addLog('info', `AI: ${(data.payload?.content || '').slice(0, 100)}`, 'ai')
+  } else if (data.type === 'intent_recognized') {
+    addLog('info', `意图识别: ${data.payload?.intent || '-'}`, 'ai')
+  } else if (data.type === 'user_directive_extracted') {
+    addLog('info', `用户指令: ${data.payload?.next_task || '-'} 参数: ${JSON.stringify(data.payload?.params || {})}`, 'user')
   } else if (data.type === 'workflow_resumed') {
     addLog('info', `工作流已恢复`, 'workflow')
   } else if (data.type === 'workflow_progress') {
     addLog('info', `进度: ${data.payload?.stage || '...'} (${data.payload?.completed || 0}/${data.payload?.total || 0})`, 'workflow')
-  } else if (data.type === 'ai_decision') {
-    addLog('info', `AI 决策: ${data.payload?.next_task || '-'}`, 'ai')
+  } else if (data.type === 'workflow_error') {
+    addLog('error', `工作流错误: ${data.payload?.error || '-'}`, 'workflow')
+  } else if (data.type === 'workflow_timeout') {
+    addLog('error', `工作流超时`, 'workflow')
   } else if (data.type === 'high_risk_vulnerability_detected') {
     addLog('error', `高危漏洞! ${data.payload?.message || ''}`, 'scan')
   } else if (data.type === 'report_generated') {
     addLog('info', `报告已生成: ${data.payload?.report_id || '-'}`, 'report')
+  } else if (data.type === 'report_generation_started') {
+    addLog('info', `正在生成报告...`, 'report')
+  } else if (data.type === 'report_error') {
+    addLog('error', `报告生成错误: ${data.payload?.error || '-'}`, 'report')
+  } else if (data.type === 'auth_unavailable') {
+    addLog('warn', `认证不可用: ${data.payload?.message || '-'}`, 'auth')
+  } else if (data.type === 'auth_refresh_required') {
+    addLog('info', `需要刷新认证`, 'auth')
+  } else if (data.type === 'auth_info_obtained') {
+    addLog('info', `获取认证信息成功`, 'auth')
+  } else if (data.type === 'auth_retry_exhausted') {
+    addLog('error', `认证重试次数耗尽`, 'auth')
+  } else if (data.type === 'interaction_required') {
+    addLog('warn', `需要用户交互: ${data.payload?.message || '-'}`, 'system')
+  } else if (data.type === 'alternative_options') {
+    addLog('info', `提供替代选项`, 'system')
   }
 }
 
@@ -232,24 +320,27 @@ onUnmounted(() => {
   ws.off('*', wsLogHandler)
 })
 
-let resizing = false
+let resizingVertical = false
+let resizingHorizontal = false
 let startY = 0
+let startX = 0
 let startHeight = 0
+let startWidth = 0
 
-const startResize = (e) => {
-  resizing = true
+const startResizeVertical = (e) => {
+  resizingVertical = true
   startY = e.clientY
   startHeight = logPanelHeight.value
 
   const onMouseMove = (e) => {
-    if (!resizing) return
+    if (!resizingVertical) return
     const delta = startY - e.clientY
     const newHeight = Math.min(MAX_PANEL_HEIGHT, Math.max(MIN_PANEL_HEIGHT, startHeight + delta))
     logPanelHeight.value = newHeight
   }
 
   const onMouseUp = () => {
-    resizing = false
+    resizingVertical = false
     document.removeEventListener('mousemove', onMouseMove)
     document.removeEventListener('mouseup', onMouseUp)
     document.body.style.cursor = ''
@@ -257,6 +348,32 @@ const startResize = (e) => {
   }
 
   document.body.style.cursor = 'ns-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+}
+
+const startResizeHorizontal = (e) => {
+  resizingHorizontal = true
+  startX = e.clientX
+  startWidth = logPanelWidth.value || window.innerWidth * 0.4
+
+  const onMouseMove = (e) => {
+    if (!resizingHorizontal) return
+    const delta = startX - e.clientX
+    const newWidth = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, startWidth + delta))
+    logPanelWidth.value = newWidth
+  }
+
+  const onMouseUp = () => {
+    resizingHorizontal = false
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
+  document.body.style.cursor = 'ew-resize'
   document.body.style.userSelect = 'none'
   document.addEventListener('mousemove', onMouseMove)
   document.addEventListener('mouseup', onMouseUp)
@@ -408,7 +525,7 @@ const {
   max-height: 600px;
 }
 
-.log-resize-handle {
+.log-resize-handle-top {
   height: 6px;
   cursor: ns-resize;
   background: transparent;
@@ -417,7 +534,7 @@ const {
   z-index: 10;
 }
 
-.log-resize-handle::after {
+.log-resize-handle-top::after {
   content: '';
   position: absolute;
   left: 50%;
@@ -430,8 +547,58 @@ const {
   transition: background 0.2s;
 }
 
-.log-resize-handle:hover::after {
+.log-resize-handle-top:hover::after {
   background: #10B981;
+}
+
+.log-resize-handle-left {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  background: transparent;
+  z-index: 10;
+}
+
+.log-resize-handle-left::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 32px;
+  border-radius: 2px;
+  background: #D4D4D8;
+  transition: background 0.2s;
+}
+
+.log-resize-handle-left:hover::after {
+  background: #10B981;
+}
+
+.log-filter-select {
+  padding: 4px 8px;
+  border: 1px solid #E4E4E7;
+  border-radius: 4px;
+  background: #ffffff;
+  font-size: 11px;
+  color: #71717A;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.log-filter-select:hover {
+  border-color: #10B981;
+  color: #10B981;
+}
+
+.log-filter-select:focus {
+  border-color: #10B981;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.1);
 }
 
 .log-panel {

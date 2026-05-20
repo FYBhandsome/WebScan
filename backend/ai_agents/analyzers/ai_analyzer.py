@@ -4,6 +4,8 @@ AI分析器
 实现AI驱动的扫描结果深度分析功能。
 """
 import logging
+import json
+import re
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
@@ -183,7 +185,7 @@ class AIAnalyzer:
             try:
                 prompt = self._build_analysis_prompt(vulnerabilities, tool_results, target_context)
                 
-                async def _call_llm():
+                def _call_llm():
                     return self.llm_client.chat.completions.create(
                         model=self.model_id,
                         messages=[
@@ -214,6 +216,8 @@ class AIAnalyzer:
                     raise ValueError("LLM返回空响应")
                 
                 analysis_text = response.choices[0].message.content
+                
+                logger.debug(f"📝 LLM原始响应: {analysis_text[:500]}...")
                 
                 if not analysis_text or len(analysis_text.strip()) < 10:
                     logger.warning(f"⚠️ LLM返回内容过短 (尝试 {attempt + 1}/{max_retries})")
