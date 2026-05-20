@@ -3,7 +3,7 @@ uvicorn[standard]
 websockets
 pydantic-settings
 tortoise-orm==0.21.6
-aiosqlite==0.17.0
+
 aerich
 requests
 openai
