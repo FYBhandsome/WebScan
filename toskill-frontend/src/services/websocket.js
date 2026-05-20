@@ -8,6 +8,9 @@ const LOG = {
     warn: (...args) => isDev && console.warn(...args),
 };
 
+const SESSION_KEY = 'toskill_ws_session_id';
+const MAX_OFFLINE_QUEUE = 200;
+
 class WSManager {
     constructor() {
         this.url = '';
@@ -28,11 +31,106 @@ class WSManager {
         this.sessionId = null;
         this._firstConnect = true;
         this._shouldReconnect = true;
+        this._offlineQueue = [];
+        this._heartbeatTimer = null;
+        this._heartbeatInterval = 30000;
+        this._missedHeartbeats = 0;
+        this._maxMissedHeartbeats = 3;
+
+        this._restoreSession();
     }
 
-    // 设置或者更新 WS 地址
+    _restoreSession() {
+        try {
+            const saved = sessionStorage.getItem(SESSION_KEY);
+            if (saved) {
+                this.sessionId = saved;
+                LOG.log('Restored session_id from sessionStorage:', saved);
+            }
+        } catch (e) {
+            LOG.warn('Failed to restore session:', e);
+        }
+    }
+
+    _saveSession() {
+        try {
+            if (this.sessionId) {
+                sessionStorage.setItem(SESSION_KEY, this.sessionId);
+            } else {
+                sessionStorage.removeItem(SESSION_KEY);
+            }
+        } catch (e) {
+            LOG.warn('Failed to save session:', e);
+        }
+    }
+
     setUrl(url) {
         this.url = url;
+    }
+
+    _buildConnectUrl() {
+        const rawUrl = this.url || API.getWebSocketUrl();
+        const baseUrl = rawUrl.includes(API.WS_PATH)
+            ? rawUrl
+            : rawUrl.replace(/\/$/, '') + API.WS_PATH;
+
+        if (this.sessionId && !this._firstConnect) {
+            const sep = baseUrl.includes('?') ? '&' : '?';
+            return `${baseUrl}${sep}session_id=${encodeURIComponent(this.sessionId)}`;
+        }
+        return baseUrl;
+    }
+
+    _startHeartbeat() {
+        this._stopHeartbeat();
+        this._missedHeartbeats = 0;
+        this._heartbeatTimer = setInterval(() => {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this._missedHeartbeats++;
+                if (this._missedHeartbeats > this._maxMissedHeartbeats) {
+                    LOG.warn('Heartbeat timeout, closing connection');
+                    this.ws.close();
+                    return;
+                }
+                try {
+                    this.ws.send(JSON.stringify({ type: 'ping' }));
+                } catch (e) {
+                    LOG.error('Heartbeat send failed:', e);
+                }
+            }
+        }, this._heartbeatInterval);
+    }
+
+    _stopHeartbeat() {
+        if (this._heartbeatTimer) {
+            clearInterval(this._heartbeatTimer);
+            this._heartbeatTimer = null;
+        }
+    }
+
+    _flushOfflineQueue() {
+        if (this._offlineQueue.length === 0) return;
+        const queue = [...this._offlineQueue];
+        this._offlineQueue = [];
+        let flushed = 0;
+        for (const msg of queue) {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                try {
+                    this.ws.send(JSON.stringify(msg));
+                    flushed++;
+                } catch (e) {
+                    LOG.error('Failed to flush message:', e);
+                    this._offlineQueue.unshift(msg, ...queue.slice(flushed + 1));
+                    break;
+                }
+            } else {
+                this._offlineQueue.unshift(msg, ...queue.slice(flushed + 1));
+                break;
+            }
+        }
+        if (flushed > 0) {
+            LOG.log(`Flushed ${flushed} offline messages`);
+        }
     }
 
     connect() {
@@ -61,10 +159,8 @@ class WSManager {
             this.connectReject = reject;
 
             try {
-                const rawUrl = this.url || API.getWebSocketUrl();
-                const targetUrl = rawUrl.includes(API.WS_PATH)
-                    ? rawUrl
-                    : rawUrl.replace(/\/$/, '') + API.WS_PATH;
+                const targetUrl = this._buildConnectUrl();
+                LOG.log('Connecting to:', targetUrl);
                 this.ws = new WebSocket(targetUrl);
 
                 this.ws.onopen = () => {
@@ -72,6 +168,8 @@ class WSManager {
                     this.connected = true;
                     this.reconnectAttempts = 0;
                     this._shouldReconnect = true;
+
+                    this._startHeartbeat();
 
                     if (this.onConnectCallback) {
                         this.onConnectCallback();
@@ -82,15 +180,24 @@ class WSManager {
                         this.sendGetStatus();
                     }
                     this._firstConnect = false;
+
+                    this._flushOfflineQueue();
                 };
 
                 this.ws.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
+
+                        if (data.type === 'pong') {
+                            this._missedHeartbeats = 0;
+                            return;
+                        }
+
                         this.handleMessage(data);
 
                         if (data.type === 'connected' && data.payload?.session_id) {
                             this.sessionId = data.payload.session_id;
+                            this._saveSession();
                             if (this.connectResolve) {
                                 this.connectResolve(this.sessionId);
                                 this.connectResolve = null;
@@ -105,6 +212,7 @@ class WSManager {
                 this.ws.onclose = (event) => {
                     LOG.log('WebSocket closed:', event.code, event.reason);
                     this.connected = false;
+                    this._stopHeartbeat();
 
                     if (this.onDisconnectCallback) {
                         this.onDisconnectCallback(event);
@@ -156,21 +264,31 @@ class WSManager {
             this.reconnectTimer = null;
         }
         this._shouldReconnect = false;
+        this._stopHeartbeat();
+        this._offlineQueue = [];
         this.cleanupConnectPromise(new Error('Disconnected'));
         if (this.ws) {
             this.ws.close();
             this.ws = null;
             this.connected = false;
-            this.sessionId = null;
         }
+        this.sessionId = null;
+        this._saveSession();
     }
 
     send(type, payload = {}) {
+        const message = { type, payload };
+
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            LOG.error('WebSocket is not connected');
+            if (this._shouldReconnect && type !== 'ping' && type !== 'pong') {
+                this._offlineQueue.push(message);
+                if (this._offlineQueue.length > MAX_OFFLINE_QUEUE) {
+                    this._offlineQueue = this._offlineQueue.slice(-MAX_OFFLINE_QUEUE);
+                }
+                LOG.warn(`WebSocket offline, queued message: ${type}`);
+            }
             return false;
         }
-        const message = { type, payload };
         this.ws.send(JSON.stringify(message));
         return true;
     }
@@ -189,8 +307,7 @@ class WSManager {
         }
         this.messageHandlers.get(messageType).push(callback);
     }
-    
-    // 移除监听器的方法（在 Vue 组件销毁时非常重要，防止内存泄漏）
+
     off(messageType, callback) {
         if (!this.messageHandlers.has(messageType)) return;
         const handlers = this.messageHandlers.get(messageType);
@@ -229,5 +346,4 @@ class WSManager {
     sendGetStatus() { return this.send('get_status', {}); }
 }
 
-// 导出单例，确保整个项目使用的是同一个 WebSocket 连接
 export const ws = new WSManager();

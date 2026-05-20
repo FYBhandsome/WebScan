@@ -42,7 +42,7 @@ def cms_detect(target: str) -> Dict[str, Any]:
                 "security": result.get("data", {}).get("security", []),
                 "url": result.get("data", {}).get("url", target)
             },
-            "error": None if result.get("success") else result.get("message"),
+            "error": "" if result.get("success") else str(result.get("message") or ""),
             "metadata": {
                 "tool": "cms_detect",
                 "target": target,
@@ -53,14 +53,14 @@ def cms_detect(target: str) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入whatcms模块失败: {str(e)}",
             "metadata": {"tool": "cms_detect", "target": target}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行cms_detect工具异常: {str(e)}",
             "metadata": {"tool": "cms_detect", "target": target}
         }

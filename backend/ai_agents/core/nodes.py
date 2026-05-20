@@ -453,19 +453,23 @@ class BaseToolExecutionNode(ABC):
         progress = ProgressCalculator.calculate_stage_progress(state.completed_tasks, state.planned_tasks, state.current_task)
         logger.debug(f"[{state.task_id}] 📊 当前进度: {progress}%")
         
+        input_params = {"target": state.target, "tool_name": task, "stage": self.stage.value}
+        
         node_index = state.start_node_recording(
             task,
             "tool_execution",
-            {"target": state.target, "tool_name": task, "stage": self.stage.value}
+            input_params
         )
         
         step_number = state.add_execution_step_start(
             task,
             step_type="tool_execution",
-            input_params={"target": state.target, "tool_name": task, "stage": self.stage.value},
+            input_params=input_params,
             processing_logic=f"执行{task}工具"
         )
         logger.debug(f"[{state.task_id}] 📝 创建执行步骤 | 步骤号: {step_number}")
+        
+        self._broadcast_tool_execution(state.task_id, task, "started", input_params)
         
         try:
             logger.debug(f"[{state.task_id}] 🔄 获取信号量锁，准备执行工具")
@@ -517,6 +521,44 @@ class BaseToolExecutionNode(ABC):
     async def _handle_failure(self, state: AgentState, tool_name: str, result, step_number: int):
         """处理执行失败（子类实现）"""
         pass
+    
+    def _broadcast_tool_execution(self, task_id: str, tool_name: str, status: str, input_params: dict = None, output_data: dict = None):
+        """
+        广播工具执行状态到WebSocket
+        
+        Args:
+            task_id: 任务ID
+            tool_name: 工具名称
+            status: 执行状态 (started, completed, failed)
+            input_params: 输入参数
+            output_data: 输出数据
+        """
+        import asyncio
+        try:
+            from backend.api.websocket import manager
+        except ImportError:
+            from api.websocket import manager
+        
+        message = {
+            "type": "tool_execution_update",
+            "payload": {
+                "task_id": task_id,
+                "tool_name": tool_name,
+                "status": status,
+                "input_params": input_params or {},
+                "output_data": output_data or {},
+                "timestamp": datetime.now().isoformat() if hasattr(datetime, 'now') else None
+            }
+        }
+        
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                asyncio.create_task(manager.broadcast(message))
+        except RuntimeError:
+            pass
+        except Exception as e:
+            logger.debug(f"广播工具执行状态失败: {e}")
     
     def _mark_task_completed(self, state: AgentState, task: str) -> None:
         """
@@ -784,72 +826,120 @@ class TaskPlanningNode(BasePlanningNode):
     
     async def _llm_planning(self, state: AgentState) -> List[str]:
         """
-        LLM增强任务规划（增强版）
-        
-        使用大语言模型智能规划扫描任务序列。
-        整合多种上下文信息，实现智能化的任务规划。
-        
+        LLM增强任务规划
+
         Args:
             state: Agent状态对象
-            
+
         Returns:
             List[str]: 任务列表
         """
         available_tools = registry.list_tools()
         tools_desc = self._format_tools_description(available_tools)
-        
+
         context_info = self._build_context_info(state)
-        
-        system_prompt = self._build_llm_prompt()
-        
+
+        strategy = state.target_context.get("strategy", "standard") if state.target_context else "standard"
+        system_prompt = self._build_llm_prompt(strategy)
+
         user_prompt_parts = [f"目标: {state.target}"]
-        
+
         if state.user_requirement:
             user_prompt_parts.append(f"\n用户需求: {state.user_requirement}")
-        
+
         if state.target_context:
             user_prompt_parts.append(f"\n目标特征: {json.dumps(state.target_context, ensure_ascii=False)}")
-        
+
         if state.completed_tasks:
             user_prompt_parts.append(f"\n已完成任务: {', '.join(state.completed_tasks)}")
-        
+
         if state.execution_history:
             recent_count = min(3, len(state.execution_history))
             user_prompt_parts.append(f"\n最近执行步骤数: {recent_count}")
-        
+
         if state.vulnerabilities:
             user_prompt_parts.append(f"\n已发现漏洞数: {len(state.vulnerabilities)}")
-        
+
         user_prompt = "\n".join(user_prompt_parts) + context_info
+
+        max_retries = 3
+        timeout_seconds = 30
         
-        try:
-            logger.info(f"[{state.task_id}] 📝 LLM规划输入 - 目标: {state.target}")
-            logger.debug(f"[{state.task_id}] 📝 上下文信息长度: {len(context_info)} 字符")
-            logger.debug(f"[{state.task_id}] 📝 用户需求: {state.user_requirement or '无'}")
-            logger.debug(f"[{state.task_id}] 📝 已完成任务: {state.completed_tasks}")
-            logger.debug(f"[{state.task_id}] 📝 执行历史条数: {len(state.execution_history)}")
-            logger.debug(f"[{state.task_id}] 📝 已发现漏洞数: {len(state.vulnerabilities)}")
-            
-            prompt = ChatPromptTemplate.from_messages([("system", system_prompt), ("human", user_prompt)])
-            chain = prompt | self.llm | JsonOutputParser(pydantic_object=PlanningResponse)
-            result = await chain.ainvoke({"tools": tools_desc, "target": state.target})
-            
-            logger.info(f"[{state.task_id}] 📝 LLM规划结果: {result}")
-            
-            tasks = self._extract_tasks_from_result(result)
-            
-            tasks = self._remove_completed_tasks(tasks, state.completed_tasks)
-            
-            if tasks:
-                if isinstance(result, dict) and 'reasoning' in result:
-                    logger.info(f"[{state.task_id}] 📝 规划理由: {result['reasoning']}")
-                return tasks
-            
-            raise ValueError("无法从LLM结果中提取有效任务列表")
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"[{state.task_id}] 📝 LLM规划输入 - 目标: {state.target}, 策略: {strategy}, 尝试: {attempt + 1}/{max_retries}")
+
+                prompt = ChatPromptTemplate.from_messages([("system", system_prompt), ("human", user_prompt)])
+                chain = prompt | self.llm | JsonOutputParser(pydantic_object=PlanningResponse)
                 
-        except Exception as e:
-            logger.error(f"[{state.task_id}] ❌ LLM规划失败: {str(e)}，切换到规则化规划")
-            return await self._rule_based_planning(state)
+                import asyncio
+                try:
+                    result = await asyncio.wait_for(
+                        chain.ainvoke({
+                            "tools": tools_desc,
+                            "target": state.target,
+                            "strategy": strategy,
+                            "strategy_guide": strategy_guide_text if (strategy_guide_text := self._get_strategy_guide_text(strategy)) else "",
+                        }),
+                        timeout=timeout_seconds
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"[{state.task_id}] ⚠️ LLM规划超时 (尝试 {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(1)
+                        continue
+                    raise TimeoutError("LLM规划超时")
+
+                logger.info(f"[{state.task_id}] 📝 LLM规划结果: {result}")
+
+                tasks = self._extract_tasks_from_result(result)
+
+                tasks = self._remove_completed_tasks(tasks, state.completed_tasks)
+
+                if tasks:
+                    if isinstance(result, dict) and 'reasoning' in result:
+                        logger.info(f"[{state.task_id}] 📝 规划理由: {result['reasoning']}")
+                    logger.info(f"[{state.task_id}] ✅ LLM规划成功 (第{attempt + 1}次尝试)")
+                    return tasks
+
+                logger.warning(f"[{state.task_id}] ⚠️ LLM返回空任务列表 (尝试 {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)
+                    continue
+                raise ValueError("无法从LLM结果中提取有效任务列表")
+
+            except TimeoutError as e:
+                logger.error(f"[{state.task_id}] ❌ LLM规划超时: {str(e)}")
+                if attempt == max_retries - 1:
+                    logger.warning(f"[{state.task_id}] ⚠️ 达到最大重试次数，切换到规则化规划")
+                    return await self._rule_based_planning(state)
+                    
+            except Exception as e:
+                logger.error(f"[{state.task_id}] ❌ LLM规划失败 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)
+                    continue
+                logger.warning(f"[{state.task_id}] ⚠️ 达到最大重试次数，切换到规则化规划")
+                return await self._rule_based_planning(state)
+        
+        return await self._rule_based_planning(state)
+
+    def _get_strategy_guide_text(self, strategy: str) -> str:
+        strategy_guide = {
+            "quick": (
+                "快速扫描策略：仅选择最关键的工具（3-5个），优先基础信息收集和高危漏洞检测，跳过耗时较长的扫描。"
+                "适用场景：快速评估、时间敏感。"
+            ),
+            "standard": (
+                "标准扫描策略：选择所有信息收集工具和常见漏洞扫描工具，按阶段顺序执行。"
+                "适用场景：常规安全评估。"
+            ),
+            "deep": (
+                "深度扫描策略：使用所有可用工具，包含全部信息收集、漏洞扫描和POC验证，对每个发现进行深度检测。"
+                "适用场景：全面安全审计、关键目标。"
+            ),
+        }
+        return strategy_guide.get(strategy, strategy_guide["standard"])
     
     def _remove_completed_tasks(self, tasks: List[str], completed_tasks: List[str]) -> List[str]:
         """
@@ -1083,111 +1173,94 @@ class TaskPlanningNode(BasePlanningNode):
 **规划建议**: 请根据已发现的漏洞类型，优先规划相关的深度检测任务。"""
         return ""
     
-    def _build_llm_prompt(self) -> str:
+    def _build_llm_prompt(self, strategy: str = "standard") -> str:
         """
-        构建LLM规划提示词（增强版）
-        
-        提示词包含：
-        - 角色定义
-        - 可用工具列表
-        - 执行规则和阶段划分
-        - 上下文信息处理指导
-        - 输出格式要求
-        
+        构建LLM规划提示词
+
+        Args:
+            strategy: 扫描策略 (quick/standard/deep)
+
         Returns:
             str: 提示词字符串
         """
-        return """你是Web安全扫描专家，负责为目标规划最优扫描任务序列。
+        strategy_guide = {
+            "quick": (
+                "快速扫描策略：仅选择最关键的工具（3-5个），优先基础信息收集和高危漏洞检测，跳过耗时较长的扫描。"
+                "适用场景：快速评估、时间敏感。"
+            ),
+            "standard": (
+                "标准扫描策略：选择所有信息收集工具和常见漏洞扫描工具，按阶段顺序执行。"
+                "适用场景：常规安全评估。"
+            ),
+            "deep": (
+                "深度扫描策略：使用所有可用工具，包含全部信息收集、漏洞扫描和POC验证，对每个发现进行深度检测。"
+                "适用场景：全面安全审计、关键目标。"
+            ),
+        }
 
-## 可用工具
+        return """# Role
+你是一位资深Web安全扫描专家，拥有丰富的渗透测试和漏洞评估经验。你的职责是根据目标特征和用户需求，规划最优的扫描任务序列。
+
+# Available Tools
 {tools}
 
-## 重要规则 - 必须遵守
+# Strategy
+当前策略: {strategy}
+{strategy_guide}
 
-### 1. 必须使用所有可用工具
-- 你**必须**在计划中包含所有可用的工具，不能遗漏任何工具
-- 每个工具都有其独特的安全检测价值，必须全部执行
-- 如果某个工具不适用，也应在计划中列出，执行时会自动跳过
+# Planning Rules
 
-### 2. 执行顺序原则
+## 1. 工具选择原则
+- 必须从上述可用工具列表中选择，严禁使用列表之外的工具名
+- 根据策略控制工具数量：quick(3-5个)、standard(8-12个)、deep(全部)
+- 优先选择与目标特征匹配的工具
 
-**第一阶段：基础信息收集（必须全部执行）**
-- baseinfo: 获取基础HTTP信息（必须）
-- portscan: 端口扫描（必须）
-- cms_identify: CMS识别（必须）
-- waf_detect: WAF检测（必须）
-- cdn_detect: CDN检测（必须）
-- iplocating: IP地址定位（必须）
+## 2. 执行顺序规则
+按照以下阶段顺序排列工具：
+- 第一阶段（信息收集）: baseinfo, portscan, cms_identify, waf_detect, cdn_detect, subdomain_scan
+- 第二阶段（漏洞扫描）: sqli_scan, xss_scan, csrf_scan, vuln_infoleak_scan, lfi_scan, ssrf_scan
+- 第三阶段（POC验证）: poc_* 系列工具
 
-**第二阶段：深度信息收集（必须全部执行）**
-- subdomain_scan: 子域名枚举（必须）
-- webside_scan: 站点信息收集（必须）
-- webweight_scan: 网站权重查询（必须）
-- infoleak_scan: 信息泄露检测（必须）
-- dirscan: 目录扫描（必须）
-- crawler: Web爬虫（必须）
+## 3. 上下文响应规则
+- 用户需求：优先满足用户关注的检测方向，调整对应工具的执行顺序
+- 目标特征：根据CMS类型(WordPress/Drupal/Joomla等)选择匹配的POC
+- 端口信息：发现7001端口优先weblogic_poc，发现8080端口优先tomcat_poc
+- 已完成任务：跳过已完成的工具，不重复规划
+- 执行历史：根据成功/失败情况调整后续规划
+- 已发现漏洞：优先规划相关深度检测任务
 
-**第三阶段：漏洞扫描（必须全部执行）**
-- sqli_scan: SQL注入扫描（必须）
-- xss_scan: XSS漏洞扫描（必须）
-- csrf_scan: CSRF漏洞扫描（必须）
-- vuln_infoleak_scan: 敏感信息泄露扫描（必须）
-- fileupload_scan: 文件上传漏洞扫描（必须）
-- cmdi_scan: 命令注入扫描（必须）
-- weakpass_scan: 弱口令扫描（必须）
-- lfi_scan: 文件包含漏洞扫描（必须）
-- ssrf_scan: SSRF漏洞扫描（必须）
+# Examples
 
-**第四阶段：POC验证（根据端口和CMS选择）**
-- 根据开放端口选择对应POC
-- 根据识别的CMS选择对应POC
+## Example 1: 标准扫描
+输入: 目标=https://example.com, 策略=standard, 无特殊上下文
+输出:
+{
+  "plan": ["baseinfo", "portscan", "cms_identify", "waf_detect", "sqli_scan", "xss_scan", "csrf_scan"],
+  "reasoning": "标准扫描流程：先进行基础信息收集，然后执行常见漏洞扫描"
+}
 
-### 3. 上下文信息处理（重要）
+## Example 2: 已发现CMS
+输入: 目标=https://drupal-site.com, CMS=Drupal, 策略=standard
+输出:
+{
+  "plan": ["baseinfo", "portscan", "sqli_scan", "xss_scan", "poc_cve_2018_7600"],
+  "reasoning": "目标为Drupal站点，优先执行SQL注入和XSS扫描，并添加Drupal已知漏洞POC验证"
+}
 
-你将收到以下上下文信息，请仔细分析并据此优化规划：
+## Example 3: 快速扫描
+输入: 目标=192.168.1.100, 策略=quick
+输出:
+{
+  "plan": ["portscan", "baseinfo", "sqli_scan"],
+  "reasoning": "快速扫描仅执行端口探测、基础信息收集和最关键的SQL注入检测"
+}
 
-**用户需求**: 
-- 如果用户有特定需求，优先满足用户需求
-- 根据需求调整任务优先级和执行顺序
-- 示例：用户关注SQL注入，则优先执行sqli_scan
-
-**目标上下文信息**:
-- CMS类型：根据CMS选择对应的漏洞扫描策略
-- 开放端口：根据端口选择对应的POC验证
-- WAF/CDN：调整扫描策略以绕过防护
-
-**已完成的任务**:
-- 避免重复规划已完成的任务
-- 如果某些任务已完成，跳过这些任务
-
-**执行历史**:
-- 分析历史中的成功/失败情况
-- 如果某些工具执行失败，考虑是否需要重试或调整策略
-- 根据历史结果优化后续任务
-
-**已发现的漏洞**:
-- 根据已发现的漏洞类型，优先规划相关的深度检测任务
-- 示例：发现SQL注入，优先执行数据库相关的深度扫描
-
-### 4. 输出格式
-返回JSON格式:
+# Output Format
+严格返回以下JSON格式，不要包含任何其他文字、markdown标记或代码块：
 {{
-  "plan": ["task1", "task2", ...],
-  "reasoning": "规划理由说明（必须包含：如何响应用户需求、如何利用上下文信息、为什么选择这个顺序）"
-}}
-
-### 5. 示例输出
-{{
-  "plan": ["baseinfo", "portscan", "cms_identify", "waf_detect", "cdn_detect", "iplocating", "subdomain_scan", "webside_scan", "webweight_scan", "infoleak_scan", "dirscan", "crawler", "sqli_scan", "xss_scan", "csrf_scan", "vuln_infoleak_scan", "fileupload_scan", "cmdi_scan", "weakpass_scan", "lfi_scan", "ssrf_scan"],
-  "reasoning": "执行完整的安全扫描流程，包含所有信息收集和漏洞检测工具。根据用户需求重点关注SQL注入检测，已识别目标为WordPress CMS，将优先执行相关漏洞扫描。"
-}}
-
-## 注意事项
-- 计划必须包含所有可用工具（排除已完成的任务）
-- 按照阶段顺序排列任务
-- 不要遗漏任何安全检测工具
-- 完整性比效率更重要
-- 必须在reasoning中说明如何利用上下文信息"""
+  "plan": ["tool_name_1", "tool_name_2", "tool_name_3"],
+  "reasoning": "简要说明工具选择依据和顺序逻辑（不超过100字）"
+}}"""
     
     def _extract_tasks_from_result(self, result: Any) -> List[str]:
         """

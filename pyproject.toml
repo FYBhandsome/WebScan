@@ -2,3 +2,12 @@
 tortoise_orm = "backend.config.TORTOISE_ORM"
 location = "./migrations"
 src_folder = "./."
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "ignore::DeprecationWarning:tortoise.*",
+    "ignore::DeprecationWarning:pytz.*",
+    "ignore:.*Blowfish.*",
+    "ignore::PendingDeprecationWarning:.*",
+]

@@ -595,7 +595,31 @@ export function useAgentChat() {
 
     switch (data.type) {
       case 'connected':
-        addBlock('agent_text', { content: `已连接到 AI Agent 引擎\nSession: ${data.payload?.session_id || 'Active'}\n可用工具: ${data.payload?.available_tools?.length || 0} 个` })
+        const reconnected = data.payload?.reconnected
+        const restoredState = data.payload?.state
+        const pendingInteraction = data.payload?.pending_interaction
+        if (reconnected && restoredState) {
+          addBlock('agent_text', { content: `已恢复会话 | 目标: ${restoredState.target || '-'} | 模式: ${restoredState.mode || '-'} | 已完成: ${restoredState.completed_tasks?.length || 0} 个任务` })
+          if (restoredState.is_complete) {
+            scanStatus.value = 'completed'
+            scanActive.value = false
+          } else if (restoredState.target) {
+            scanStatus.value = 'scanning'
+            scanActive.value = true
+          }
+        } else {
+          addBlock('agent_text', { content: `已连接到 AI Agent 引擎\nSession: ${data.payload?.session_id || 'Active'}\n可用工具: ${data.payload?.available_tools?.length || 0} 个` })
+        }
+        if (pendingInteraction) {
+          waitingForChoice.value = true
+          addBlock('agent_action_request', {
+            actionSource: pendingInteraction.type || 'restored',
+            title: pendingInteraction.payload?.message || '恢复待处理交互',
+            description: pendingInteraction.payload?.description || '',
+            options: pendingInteraction.payload?.options || pendingInteraction.payload?.alternatives || [],
+            resolved: false
+          })
+        }
         break
 
       case 'ai_thinking_start':
@@ -1114,6 +1138,9 @@ export function useAgentChat() {
         break
 
       default:
+        if (isDev) {
+          console.warn(`[WS] Unhandled message type: ${data.type}`, data.payload)
+        }
         break
     }
   }
@@ -1142,6 +1169,8 @@ export function useAgentChat() {
     
     ws.onReconnect((sessionId) => {
       addInfoBlock('🔄 WebSocket 重新连接成功')
+      currentThinking.value = ''
+      isThinking.value = false
     })
   })
 

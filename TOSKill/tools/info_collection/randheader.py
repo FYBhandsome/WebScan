@@ -39,7 +39,7 @@ def random_headers(conn_type: Optional[str] = "keep-alive") -> Dict[str, Any]:
                 "fake_ip": headers.get("X-Forwarded-For", ""),
                 "connection": headers.get("Connection", "")
             },
-            "error": None,
+            "error": "",
             "metadata": {
                 "tool": "random_headers",
                 "conn_type": conn_type
@@ -48,14 +48,14 @@ def random_headers(conn_type: Optional[str] = "keep-alive") -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入randheader模块失败: {str(e)}",
             "metadata": {"tool": "random_headers", "conn_type": conn_type}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行random_headers工具异常: {str(e)}",
             "metadata": {"tool": "random_headers", "conn_type": conn_type}
         }

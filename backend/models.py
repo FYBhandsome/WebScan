@@ -28,7 +28,7 @@ class Task(Model):
         updated_at: 任务最后更新时间
     """
     
-    id = fields.IntField(pk=True, description="任务ID")
+    id = fields.IntField(primary_key=True, description="任务ID")
     task_name = fields.CharField(max_length=255, description="任务名称")
     task_type = fields.CharField(max_length=50, description="任务类型：scan, vulnerability, poc, etc.")
     target = fields.CharField(max_length=500, description="扫描目标（域名/IP/URL）")
@@ -121,7 +121,7 @@ class Report(Model):
         updated_at: 报告最后更新时间
     """
     
-    id = fields.IntField(pk=True, description="报告ID")
+    id = fields.IntField(primary_key=True, description="报告ID")
     task: fields.ForeignKeyRelation[Task] = fields.ForeignKeyField(
         "models.Task", related_name="reports", description="关联任务"
     )
@@ -174,7 +174,7 @@ class Vulnerability(Model):
         updated_at: 漏洞最后更新时间
     """
     
-    id = fields.IntField(pk=True, description="漏洞ID")
+    id = fields.IntField(primary_key=True, description="漏洞ID")
     task: fields.ForeignKeyRelation[Task] = fields.ForeignKeyField(
         "models.Task", related_name="vulnerabilities", description="关联任务"
     )
@@ -189,6 +189,8 @@ class Vulnerability(Model):
     ai_analysis = fields.TextField(null=True, description="AI分析结果（JSON格式）")
     risk_score = fields.FloatField(null=True, description="AI评估风险分数")
     fix_priority = fields.IntField(null=True, description="修复优先级")
+    cvss_score = fields.FloatField(null=True, description="CVSS评分（0-10）")
+    affected_product = fields.CharField(max_length=500, null=True, description="受影响的产品/组件")
     status = fields.CharField(max_length=50, default="open", description="状态：open, fixed, ignored, false_positive")
     source_id = fields.CharField(max_length=100, null=True, description="来源ID (如AWVS vuln_id)")
     source = fields.CharField(max_length=20, default="awvs", description="来源：awvs, poc")
@@ -235,7 +237,7 @@ class ScanResult(Model):
         created_at: 扫描时间
     """
     
-    id = fields.IntField(pk=True, description="结果ID")
+    id = fields.IntField(primary_key=True, description="结果ID")
     task: fields.ForeignKeyRelation[Task] = fields.ForeignKeyField(
         "models.Task", related_name="scan_results", description="关联任务"
     )
@@ -277,7 +279,7 @@ class SystemSettings(Model):
         created_at: 创建时间
         updated_at: 更新时间
     """
-    id = fields.IntField(pk=True, description="设置ID")
+    id = fields.IntField(primary_key=True, description="设置ID")
     category = fields.CharField(max_length=50, description="设置分类")
     key = fields.CharField(max_length=100, description="设置键名")
     value = fields.TextField(description="设置值")
@@ -332,7 +334,7 @@ class SystemLog(Model):
         created_at: 日志记录时间
     """
     
-    id = fields.IntField(pk=True, description="日志ID")
+    id = fields.IntField(primary_key=True, description="日志ID")
     level = fields.CharField(max_length=20, description="日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL")
     module = fields.CharField(max_length=100, null=True, description="模块名称")
     message = fields.TextField(description="日志消息内容")
@@ -380,7 +382,7 @@ class POCScanResult(Model):
         created_at: 扫描时间
     """
     
-    id = fields.IntField(pk=True, description="结果ID")
+    id = fields.IntField(primary_key=True, description="结果ID")
     task: fields.ForeignKeyRelation[Task] = fields.ForeignKeyField(
         "models.Task", related_name="poc_results", description="关联任务"
     )
@@ -430,7 +432,7 @@ class AIChatInstance(Model):
         updated_at: 对话最后更新时间
     """
     
-    id = fields.UUIDField(pk=True, description="对话实例ID（UUID）")
+    id = fields.UUIDField(primary_key=True, description="对话实例ID（UUID）")
     user_id = fields.CharField(max_length=100, null=True, description="用户ID")
     chat_name = fields.CharField(max_length=255, default="新对话", description="对话名称")
     chat_type = fields.CharField(max_length=50, default="general", description="对话类型：general, security, code_analysis, etc.")
@@ -482,7 +484,7 @@ class AIChatMessage(Model):
         created_at: 消息创建时间
     """
     
-    id = fields.BigIntField(pk=True, description="消息ID（自增）")
+    id = fields.BigIntField(primary_key=True, description="消息ID（自增）")
     chat_instance: fields.ForeignKeyRelation[AIChatInstance] = fields.ForeignKeyField(
         "models.AIChatInstance", related_name="messages", description="关联对话实例"
     )
@@ -529,7 +531,7 @@ class AgentTask(Model):
         updated_at: 任务最后更新时间
     """
     
-    task_id = fields.UUIDField(pk=True, description="任务ID（UUID）")
+    task_id = fields.UUIDField(primary_key=True, description="任务ID（UUID）")
     user_id = fields.CharField(max_length=100, null=True, description="用户ID")
     input_json = fields.TextField(description="用户输入内容（JSON格式）")
     task_type = fields.CharField(max_length=50, null=True, description="任务类型：code_generation, vuln_analysis, report_generation, etc.")
@@ -582,7 +584,7 @@ class AgentResult(Model):
         created_at: 结果创建时间
     """
     
-    id = fields.UUIDField(pk=True, description="结果ID（UUID）")
+    id = fields.UUIDField(primary_key=True, description="结果ID（UUID）")
     task: fields.ForeignKeyRelation[AgentTask] = fields.ForeignKeyField(
         "models.AgentTask", related_name="result", description="关联任务"
     )
@@ -634,7 +636,7 @@ class VulnerabilityKB(Model):
         updated_at: 记录最后更新时间
     """
     
-    id = fields.IntField(pk=True, description="知识库ID")
+    id = fields.IntField(primary_key=True, description="知识库ID")
     cve_id = fields.CharField(max_length=50, unique=True, description="CVE编号（如CVE-2021-44228）")
     name = fields.CharField(max_length=255, description="漏洞名称")
     description = fields.TextField(null=True, description="漏洞详细描述")
@@ -684,7 +686,7 @@ class POCVerificationTask(Model):
         created_at: 创建时间
         updated_at: 更新时间
     """
-    id = fields.UUIDField(pk=True, description="任务ID")
+    id = fields.UUIDField(primary_key=True, description="任务ID")
     poc_id = fields.CharField(max_length=100, description="POC ID")
     target = fields.CharField(max_length=500, description="验证目标")
     status = fields.CharField(max_length=50, default="pending", description="状态")
@@ -722,7 +724,7 @@ class POCVerificationResult(Model):
         analysis: AI分析结果（JSON格式）
         created_at: 创建时间
     """
-    id = fields.UUIDField(pk=True, description="结果ID")
+    id = fields.UUIDField(primary_key=True, description="结果ID")
     verification_task: fields.ForeignKeyRelation[POCVerificationTask] = fields.ForeignKeyField(
         "models.POCVerificationTask", related_name="results", description="关联验证任务"
     )
@@ -755,7 +757,7 @@ class POCExecutionLog(Model):
         level: 日志级别
         created_at: 创建时间
     """
-    id = fields.IntField(pk=True, description="日志ID")
+    id = fields.IntField(primary_key=True, description="日志ID")
     task_id = fields.CharField(max_length=100, description="任务ID")
     message = fields.TextField(description="日志内容")
     level = fields.CharField(max_length=20, default="INFO", description="日志级别")
@@ -785,7 +787,7 @@ class User(Model):
         updated_at: 用户信息最后更新时间
     """
     
-    id = fields.IntField(pk=True, description="用户ID")
+    id = fields.IntField(primary_key=True, description="用户ID")
     username = fields.CharField(max_length=100, unique=True, description="用户名")
     email = fields.CharField(max_length=255, unique=True, description="邮箱地址")
     password_hash = fields.CharField(max_length=255, null=True, description="密码哈希值")
@@ -861,7 +863,7 @@ class Notification(Model):
         created_at: 通知创建时间
     """
     
-    id = fields.IntField(pk=True, description="通知ID")
+    id = fields.IntField(primary_key=True, description="通知ID")
     user: fields.ForeignKeyRelation[User] = fields.ForeignKeyField(
         "models.User", related_name="notifications", description="关联用户"
     )
@@ -919,7 +921,7 @@ class WorkflowExecution(Model):
         updated_at: 更新时间
     """
     
-    id = fields.UUIDField(pk=True, description="工作流ID")
+    id = fields.UUIDField(primary_key=True, description="工作流ID")
     task_id = fields.CharField(max_length=100, null=True, description="关联任务ID")
     workflow_name = fields.CharField(max_length=255, default="AI Security Scan", description="工作流名称")
     target = fields.CharField(max_length=500, description="执行目标")
@@ -994,7 +996,7 @@ class WorkflowNodeExecution(Model):
         created_at: 创建时间
     """
     
-    id = fields.BigIntField(pk=True, description="节点执行ID")
+    id = fields.BigIntField(primary_key=True, description="节点执行ID")
     workflow: fields.ForeignKeyRelation[WorkflowExecution] = fields.ForeignKeyField(
         "models.WorkflowExecution", related_name="node_executions", description="关联工作流"
     )
@@ -1062,7 +1064,7 @@ class WorkflowTaskPlan(Model):
         updated_at: 更新时间
     """
     
-    id = fields.BigIntField(pk=True, description="任务规划ID")
+    id = fields.BigIntField(primary_key=True, description="任务规划ID")
     workflow: fields.ForeignKeyRelation[WorkflowExecution] = fields.ForeignKeyField(
         "models.WorkflowExecution", related_name="task_plans", description="关联工作流"
     )

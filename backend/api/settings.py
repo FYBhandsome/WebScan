@@ -769,13 +769,14 @@ async def get_api_keys():
         for record in settings_records:
             try:
                 key_data = json.loads(record.value)
+                key_id = record.key.replace("key_", "")
                 api_keys.append({
-                    "id": record.id,
+                    "id": key_id,
                     "name": key_data.get("name", record.key),
                     "masked": mask_api_key(key_data.get("key", "")),
                     "created_at": record.created_at.strftime("%Y-%m-%d %H:%M:%S")
                 })
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError):
                 continue
         
         return APIResponse(

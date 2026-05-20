@@ -20,23 +20,113 @@ SEVERITY_ORDER: Dict[str, int] = {
     "info": 0
 }
 
+CVSS_SCORE_MAP: Dict[str, float] = {
+    "critical": 9.0,
+    "high": 7.0,
+    "medium": 5.0,
+    "low": 3.0,
+    "info": 1.0
+}
+
 ENABLE_KB_INTEGRATION: bool = True
 
 
+def estimate_cvss(vulnerability: Dict[str, Any]) -> Dict[str, Any]:
+    """估算CVSS评分
+
+    Args:
+        vulnerability: 漏洞数据
+
+    Returns:
+        Dict: 包含cvss_score, cvss_vector, cvss_severity的字典
+    """
+    severity = str(vulnerability.get("severity", "info")).lower()
+    base_score = CVSS_SCORE_MAP.get(severity, 1.0)
+
+    vuln_type = str(vulnerability.get("type") or vulnerability.get("vuln_type", "")).lower()
+    has_payload = bool(vulnerability.get("payload"))
+    has_evidence = bool(vulnerability.get("evidence"))
+    description = str(vulnerability.get("description", "")).lower()
+
+    if "rce" in vuln_type or "command" in vuln_type:
+        base_score = max(base_score, 9.8)
+    elif "sqli" in vuln_type or "sql" in vuln_type:
+        base_score = max(base_score, 8.5)
+    elif "xss" in vuln_type:
+        base_score = max(base_score, 6.1)
+    elif "lfi" in vuln_type or "file" in vuln_type:
+        base_score = max(base_score, 7.5)
+    elif "ssrf" in vuln_type:
+        base_score = max(base_score, 7.0)
+    elif "csrf" in vuln_type:
+        base_score = max(base_score, 6.5)
+    elif "upload" in vuln_type:
+        base_score = max(base_score, 8.0)
+    elif "weakpass" in vuln_type or "weak" in vuln_type:
+        base_score = max(base_score, 7.0)
+
+    if has_payload and has_evidence:
+        base_score = min(base_score + 0.5, 10.0)
+
+    if "public" in description or "exploit" in description:
+        base_score = min(base_score + 0.3, 10.0)
+
+    score = round(base_score, 1)
+
+    if score >= 9.0:
+        cvss_severity = "CRITICAL"
+    elif score >= 7.0:
+        cvss_severity = "HIGH"
+    elif score >= 4.0:
+        cvss_severity = "MEDIUM"
+    else:
+        cvss_severity = "LOW"
+
+    cvss_vector = f"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" if score >= 9.0 else \
+                  f"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N" if score >= 7.0 else \
+                  f"CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N" if score >= 4.0 else \
+                  f"CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:N/I:N/A:N"
+
+    return {
+        "cvss_score": score,
+        "cvss_vector": cvss_vector,
+        "cvss_severity": cvss_severity
+    }
+
+
 def deduplicate_vulnerabilities(vulnerabilities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """漏洞去重 (已禁用)
-    
-    根据CVE和目标组合去重。
-    当前配置：禁用去重，直接返回原列表。
-    
+    """漏洞去重
+
+    基于漏洞类型和目标URL的组合进行去重。
+    当同一URL存在不同类型漏洞时不合并，保留所有记录。
+
     Args:
         vulnerabilities: 漏洞列表
-        
+
     Returns:
-        List[Dict]: 原始漏洞列表
+        List[Dict]: 去重后的漏洞列表
     """
-    logger.info(f"漏洞去重已禁用: {len(vulnerabilities)} 个漏洞保持不变")
-    return vulnerabilities
+    if not vulnerabilities:
+        return []
+
+    seen = set()
+    deduped = []
+
+    for vuln in vulnerabilities:
+        vuln_type = str(vuln.get("type") or vuln.get("vuln_type", ""))
+        url = str(vuln.get("url", ""))
+        param = str(vuln.get("parameter", ""))
+        dedup_key = f"{vuln_type}|{url}|{param}"
+
+        if dedup_key not in seen:
+            seen.add(dedup_key)
+            deduped.append(vuln)
+
+    removed = len(vulnerabilities) - len(deduped)
+    if removed > 0:
+        logger.info(f"漏洞去重完成: {len(vulnerabilities)} -> {len(deduped)} (移除 {removed} 个重复)")
+
+    return deduped
 
 
 def sort_by_severity(vulnerabilities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -193,6 +283,13 @@ def vuln_analyzer(
             processed_vulns = sort_by_severity(processed_vulns)
             logger.info("已按严重度排序")
         
+        for vuln in processed_vulns:
+            if "cvss_score" not in vuln:
+                cvss_info = estimate_cvss(vuln)
+                vuln["cvss_score"] = cvss_info["cvss_score"]
+                vuln["cvss_vector"] = cvss_info["cvss_vector"]
+                vuln["cvss_severity"] = cvss_info["cvss_severity"]
+        
         stats = analyze_vulnerability_stats(processed_vulns)
         logger.info(f"统计结果: {stats['summary']}")
         
@@ -202,7 +299,7 @@ def vuln_analyzer(
                 "vulnerabilities": processed_vulns,
                 "statistics": stats
             },
-            "error": None,
+            "error": "",
             "metadata": {
                 "tool": "vuln_analyzer",
                 "total_count": len(processed_vulns),
@@ -217,7 +314,7 @@ def vuln_analyzer(
         logger.error(f"漏洞分析执行失败: {str(e)}")
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"漏洞分析执行异常: {str(e)}",
             "metadata": {
                 "tool": "vuln_analyzer",
@@ -268,6 +365,13 @@ async def vuln_analyzer_async(
             processed_vulns = sort_by_severity(processed_vulns)
             logger.info("已按严重度排序")
         
+        for vuln in processed_vulns:
+            if "cvss_score" not in vuln:
+                cvss_info = estimate_cvss(vuln)
+                vuln["cvss_score"] = cvss_info["cvss_score"]
+                vuln["cvss_vector"] = cvss_info["cvss_vector"]
+                vuln["cvss_severity"] = cvss_info["cvss_severity"]
+        
         if enable_kb and ENABLE_KB_INTEGRATION:
             processed_vulns = await enrich_with_kb(processed_vulns)
             logger.info("已完成知识库信息丰富")
@@ -281,7 +385,7 @@ async def vuln_analyzer_async(
                 "vulnerabilities": processed_vulns,
                 "statistics": stats
             },
-            "error": None,
+            "error": "",
             "metadata": {
                 "tool": "vuln_analyzer_async",
                 "total_count": len(processed_vulns),
@@ -296,7 +400,7 @@ async def vuln_analyzer_async(
         logger.error(f"异步漏洞分析执行失败: {str(e)}")
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"异步漏洞分析执行异常: {str(e)}",
             "metadata": {
                 "tool": "vuln_analyzer_async",

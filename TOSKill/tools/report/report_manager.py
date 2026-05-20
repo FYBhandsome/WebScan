@@ -296,19 +296,18 @@ class ReportManager:
             Markdown格式的报告内容
         """
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        self._generate_ai_report_sync,
-                        tool_results, vulnerabilities, target, chat_history, task_history
-                    )
-                    return future.result()
-            else:
-                return self._generate_ai_report_sync(
+            asyncio.get_running_loop()
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    self._generate_ai_report_sync,
                     tool_results, vulnerabilities, target, chat_history, task_history
                 )
+                return future.result()
+        except RuntimeError:
+            return self._generate_ai_report_sync(
+                tool_results, vulnerabilities, target, chat_history, task_history
+            )
         except Exception as e:
             logger.error(f"AI 生成报告失败: {e}")
             return self._generate_fallback_report(tool_results, vulnerabilities, target)
@@ -360,11 +359,11 @@ class ReportManager:
         
         severity_count = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         for v in vulnerabilities:
-            sev = v.get("severity", "info").lower()
+            sev = (v.get("severity") or "info").lower()
             if sev in severity_count:
                 severity_count[sev] += 1
         
-        prompt = f"""你是一位拥有15年以上经验的资深安全专家，精通渗透测试、漏洞分析、安全架构设计。请对以下安全扫描结果进行全面、专业的分析。
+        prompt = f"""你是一位拥有15年以上经验的资深安全专家，精通渗透测试、漏洞分析、安全架构设计、合规审计。请对以下安全扫描结果进行全面、专业的分析。
 
 ## 扫描目标信息
 - 目标地址: {target}
@@ -387,45 +386,56 @@ class ReportManager:
 
 ### 1. 执行摘要 (executive_summary)
 - 用简洁专业的语言概述整体安全状况
-- 突出最关键的安全风险
+- 突出最关键的安全风险和最紧迫的修复需求
 - 字数控制在 100-150 字
 
 ### 2. 风险评估 (risk_assessment)
 - overall_risk: 综合风险等级 (critical/high/medium/low/info)
 - risk_score: 风险评分 (0-100)
 - risk_justification: 风险评级依据
+- risk_matrix: 风险矩阵数据 {{likelihood: "高/中/低", impact: "严重/高/中/低", current_level: "当前风险等级"}}
 
 ### 3. 漏洞深度分析 (vulnerability_analysis)
 对每个重要漏洞提供：
 - vuln_id: 漏洞标识
 - vuln_name: 漏洞名称
-- technical_analysis: 技术原理分析（攻击向量、利用条件）
-- business_impact: 业务影响评估
+- cwe_id: CWE编号 (如 CWE-89)
+- technical_analysis: 技术原理深度分析（攻击向量、利用条件、底层代码缺陷原理）
+- root_cause: 根因分析（导致漏洞的代码/配置/架构层面根本原因）
+- business_impact: 业务影响评估（数据泄露范围、服务中断时间、经济损失估算）
 - exploitation_difficulty: 利用难度 (easy/medium/hard)
-- attack_scenario: 可能的攻击场景描述
-- cvss_estimate: CVSS 评分估算 (0.0-10.0)
+- attack_scenario: 详细的攻击场景描述（步骤化描述攻击者如何利用此漏洞）
+- cvss_estimate: CVSS 3.1 评分估算 (0.0-10.0)
+- cvss_vector: CVSS向量字符串 (如 AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H)
+- proof_of_concept: 漏洞验证思路（不包含完整exploit，仅验证方法描述）
 
 ### 4. 攻击链分析 (attack_chain_analysis)
-- description: 攻击链描述
-- attack_paths: 可能的攻击路径列表
-- lateral_movement_risk: 横向移动风险
+- description: 完整攻击链描述（从信息收集到最终目标达成的全路径）
+- attack_paths: 可能的多条攻击路径列表（每条路径为步骤化描述）
+- lateral_movement_risk: 横向移动风险详细分析
+- kill_chain_mapping: 网络杀伤链映射 {{reconnaissance: [...], weaponization: [...], delivery: [...], exploitation: [...], installation: [...], command_and_control: [...], actions_on_objectives: [...]}}
+- data_flow_risk: 数据流风险分析（敏感数据在攻击链中的暴露路径）
 
 ### 5. 合规性影响 (compliance_impact)
-- standards: 相关安全标准列表（等保2.0、OWASP Top 10等）
-- risk_points: 合规风险点列表
+- standards: 相关安全标准列表及具体条款（等保2.0条款、OWASP Top 10 2021编号、GDPR条款、PCI DSS条款、ISO 27001控制项）
+- risk_points: 合规风险点列表（每个风险点包含：标准名称、违反条款、风险描述、整改建议）
+- compliance_score: 合规评分 (0-100)
+- regulatory_penalties: 可能的监管处罚风险描述
 
 ### 6. 修复建议 (remediation_recommendations)
 按优先级排序的修复建议：
 - priority: 优先级 (1-5, 1最高)
 - vulnerability: 关联漏洞
-- recommendation: 具体修复措施
+- recommendation: 具体修复措施（包含代码示例或配置修改指令）
+- verification: 修复验证方法（如何确认漏洞已修复）
 - estimated_effort: 预估工作量
-- references: 参考链接或文档
+- references: 参考链接或文档（CWE、OWASP Cheat Sheet等）
 
 ### 7. 安全加固建议 (security_hardening)
-- short_term: 短期措施列表（立即执行）
-- mid_term: 中期措施列表（1-3个月）
-- long_term: 长期措施列表（持续改进）
+- short_term: 短期措施列表（24小时内执行，如WAF规则、临时补丁）
+- mid_term: 中期措施列表（1-3个月，如代码审计、架构优化）
+- long_term: 长期措施列表（持续改进，如SDL流程、安全培训、DevSecOps）
+- monitoring: 安全监控建议（SIEM规则、告警阈值、日志审计要点）
 
 ## 输出格式要求
 严格输出 JSON 格式，不要包含任何其他内容：
@@ -435,7 +445,8 @@ class ReportManager:
   "risk_assessment": {{
     "overall_risk": "high",
     "risk_score": 75,
-    "risk_justification": "评级依据..."
+    "risk_justification": "评级依据...",
+    "risk_matrix": {{"likelihood": "高", "impact": "严重", "current_level": "high"}}
   }},
   "vulnerability_analysis": [...],
   "attack_chain_analysis": {{...}},
@@ -445,7 +456,7 @@ class ReportManager:
 }}
 ```
 
-请确保分析专业、全面、可操作，体现资深安全专家的专业水准。"""
+请确保分析专业、全面、可操作，体现资深安全专家的专业水准。每个漏洞的分析都要深入到根因层面，攻击链分析要体现杀伤链思维，合规分析要引用具体条款，修复方案要包含验证方法。"""
         
         response = llm.invoke(prompt)
         return response.content
@@ -516,7 +527,7 @@ class ReportManager:
         """生成备用AI分析结果"""
         severity_count = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         for v in vulnerabilities:
-            sev = v.get("severity", "info").lower()
+            sev = (v.get("severity") or "info").lower()
             if sev in severity_count:
                 severity_count[sev] += 1
         
@@ -535,11 +546,15 @@ class ReportManager:
             vuln_analysis.append({
                 "vuln_id": f"VULN-{i+1:03d}",
                 "vuln_name": v.get("title") or v.get("type") or v.get("vuln_type", "Unknown"),
+                "cwe_id": v.get("cwe_id", "CWE-Unknown"),
                 "technical_analysis": v.get("description", "未提供详细技术分析"),
+                "root_cause": "需进一步代码审计确认根因",
                 "business_impact": "可能导致数据泄露或服务中断",
                 "exploitation_difficulty": "medium",
                 "attack_scenario": "攻击者可利用此漏洞获取敏感信息",
-                "cvss_estimate": 9.8 if v.get("severity") == "critical" else 7.5 if v.get("severity") == "high" else 5.0
+                "cvss_estimate": 9.8 if v.get("severity") == "critical" else 7.5 if v.get("severity") == "high" else 5.0,
+                "cvss_vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" if v.get("severity") in ("critical", "high") else "AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N",
+                "proof_of_concept": "建议通过专业渗透测试验证此漏洞"
             })
         
         return {
@@ -547,32 +562,50 @@ class ReportManager:
             "risk_assessment": {
                 "overall_risk": risk_level,
                 "risk_score": risk_score,
-                "risk_justification": "基于漏洞数量和严重程度评估"
+                "risk_justification": "基于漏洞数量和严重程度评估",
+                "risk_matrix": {"likelihood": "高" if risk_score > 70 else "中", "impact": "严重" if severity_count["critical"] > 0 else "高", "current_level": risk_level}
             },
             "vulnerability_analysis": vuln_analysis,
             "attack_chain_analysis": {
                 "description": "攻击者可能组合利用多个漏洞进行攻击",
-                "attack_paths": ["信息收集 -> 漏洞利用 -> 权限提升"],
-                "lateral_movement_risk": "存在横向移动风险"
+                "attack_paths": ["信息收集 -> 漏洞利用 -> 权限提升", "信息收集 -> 社会工程 -> 凭证获取 -> 内网渗透"],
+                "lateral_movement_risk": "存在横向移动风险",
+                "kill_chain_mapping": {
+                    "reconnaissance": ["端口扫描", "服务识别"],
+                    "weaponization": ["漏洞利用脚本构造"],
+                    "delivery": ["恶意请求发送"],
+                    "exploitation": ["漏洞触发利用"],
+                    "installation": ["后门植入"],
+                    "command_and_control": ["C2通道建立"],
+                    "actions_on_objectives": ["数据窃取", "权限维持"]
+                },
+                "data_flow_risk": "敏感数据可能在攻击链多个环节暴露"
             },
             "compliance_impact": {
-                "standards": ["OWASP Top 10", "等保2.0"],
-                "risk_points": ["输入验证不足", "安全配置缺失"]
+                "standards": ["OWASP Top 10 2021", "等保2.0", "GDPR", "PCI DSS"],
+                "risk_points": [
+                    {"standard": "OWASP Top 10 2021", "clause": "A03:2021-Injection", "description": "注入漏洞风险", "remediation": "参数化查询"},
+                    {"standard": "等保2.0", "clause": "8.1.3.3", "description": "输入验证不足", "remediation": "加强输入校验"}
+                ],
+                "compliance_score": max(0, 100 - risk_score),
+                "regulatory_penalties": "根据等保2.0要求，存在安全整改义务"
             },
             "remediation_recommendations": [
                 {
                     "priority": 1,
                     "vulnerability": v.get("title") or v.get("type", "Unknown"),
                     "recommendation": v.get("solution") or "请参考安全最佳实践进行修复",
+                    "verification": "修复后重新执行扫描验证漏洞是否已消除",
                     "estimated_effort": "2-4小时",
-                    "references": "OWASP"
+                    "references": "CWE / OWASP Cheat Sheet"
                 }
                 for v in vulnerabilities[:5]
             ],
             "security_hardening": {
-                "short_term": ["修复高危漏洞", "加强访问控制"],
-                "mid_term": ["部署WAF", "实施安全监控"],
-                "long_term": ["建立安全开发流程", "定期安全审计"]
+                "short_term": ["修复高危漏洞", "加强访问控制", "部署WAF防护规则"],
+                "mid_term": ["部署WAF", "实施安全监控", "代码安全审计"],
+                "long_term": ["建立安全开发流程", "定期安全审计", "DevSecOps集成"],
+                "monitoring": ["配置SIEM告警规则", "监控异常访问日志", "设置漏洞扫描定期任务"]
             }
         }
     

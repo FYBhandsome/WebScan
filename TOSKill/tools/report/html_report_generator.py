@@ -64,7 +64,7 @@ class HTMLReportGenerator:
         """
         severity_count = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         for v in vulnerabilities:
-            sev = v.get("severity", "info").lower()
+            sev = (v.get("severity") or "info").lower()
             if sev in severity_count:
                 severity_count[sev] += 1
         
@@ -538,7 +538,7 @@ class HTMLReportGenerator:
         
         html = ""
         for i, vuln in enumerate(vulnerabilities):
-            severity = vuln.get("severity", "info").lower()
+            severity = (vuln.get("severity") or "info").lower()
             config = self.SEVERITY_CONFIG.get(severity, self.SEVERITY_CONFIG["info"])
             
             title = vuln.get("title") or vuln.get("name") or vuln.get("vuln_type") or "Unknown"
@@ -603,25 +603,36 @@ class HTMLReportGenerator:
         
         vuln_analysis_html = ""
         for va in vuln_analysis[:5]:
+            cwe_badge = f'<span class="badge" style="background:#7b1fa2;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;margin-left:8px;">{va.get("cwe_id", "")}</span>' if va.get("cwe_id") else ""
+            cvss_val = va.get('cvss_estimate', 'N/A')
+            cvss_color = "#e74c3c" if isinstance(cvss_val, (int, float)) and cvss_val >= 7.0 else "#f39c12" if isinstance(cvss_val, (int, float)) and cvss_val >= 4.0 else "#27ae60"
+            cvss_vector_html = f'<p style="font-size:12px;color:#888;margin-top:4px;"><strong>CVSS向量:</strong> <code style="background:#f0f0f0;padding:2px 6px;border-radius:3px;font-size:11px;">{va.get("cvss_vector", "N/A")}</code></p>' if va.get("cvss_vector") else ""
+            root_cause_html = f'<p><strong>根因分析:</strong> {va.get("root_cause", "N/A")}</p>' if va.get("root_cause") else ""
+            poc_html = f'<p style="font-size:12px;color:#666;"><strong>验证思路:</strong> {va.get("proof_of_concept", "N/A")}</p>' if va.get("proof_of_concept") else ""
             vuln_analysis_html += f"""
             <div class="ai-card">
-                <h4>🔎 {va.get('vuln_name', 'Unknown')}</h4>
+                <h4>🔎 {va.get('vuln_name', 'Unknown')} {cwe_badge}</h4>
                 <p><strong>技术分析:</strong> {va.get('technical_analysis', 'N/A')}</p>
+                {root_cause_html}
                 <p><strong>业务影响:</strong> {va.get('business_impact', 'N/A')}</p>
-                <p><strong>利用难度:</strong> {va.get('exploitation_difficulty', 'N/A')} | <strong>CVSS:</strong> {va.get('cvss_estimate', 'N/A')}</p>
+                <p><strong>利用难度:</strong> {va.get('exploitation_difficulty', 'N/A')} | <strong>CVSS:</strong> <span style="color:{cvss_color};font-weight:bold;">{cvss_val}</span></p>
+                {cvss_vector_html}
                 <p><strong>攻击场景:</strong> {va.get('attack_scenario', 'N/A')}</p>
+                {poc_html}
             </div>
             """
         
         recommendations_html = ""
         for rec in recommendations[:5]:
+            verification_html = f'<p style="font-size:12px;color:#27ae60;">✅ <strong>验证方法:</strong> {rec.get("verification", "重新扫描验证")}</p>' if rec.get("verification") else ""
             recommendations_html += f"""
             <div class="priority-item">
                 <div class="priority-num">{rec.get('priority', 1)}</div>
                 <div class="priority-content">
                     <h5>{rec.get('vulnerability', 'Unknown')}</h5>
                     <p>{rec.get('recommendation', 'N/A')}</p>
-                    <p style="font-size: 12px; color: #888;">预估工作量: {rec.get('estimated_effort', 'N/A')}</p>
+                    {verification_html}
+                    <p style="font-size: 12px; color: #888;">预估工作量: {rec.get('estimated_effort', 'N/A')} | 参考: {rec.get('references', 'N/A')}</p>
                 </div>
             </div>
             """
@@ -629,6 +640,7 @@ class HTMLReportGenerator:
         short_term = hardening.get("short_term", [])
         mid_term = hardening.get("mid_term", [])
         long_term = hardening.get("long_term", [])
+        monitoring = hardening.get("monitoring", [])
         
         hardening_html = f"""
         <div class="hardening-grid">
@@ -647,9 +659,68 @@ class HTMLReportGenerator:
         </div>
         """
         
+        monitoring_html = ""
+        if monitoring:
+            monitoring_html = f"""
+            <div class="ai-card" style="margin-top:15px;border-left:4px solid #00bcd4;">
+                <h4>📡 安全监控建议</h4>
+                <ul>{''.join(f'<li>• {item}</li>' for item in monitoring[:5])}</ul>
+            </div>
+            """
+        
         attack_paths_html = "".join(f"<li>• {path}</li>" for path in attack_chain.get("attack_paths", [])[:3])
-        compliance_html = "".join(f"<li>• {std}</li>" for std in compliance.get("standards", [])[:3])
-        compliance_html += "".join(f"<li>⚠️ {rp}</li>" for rp in compliance.get("risk_points", [])[:3])
+        
+        kill_chain = attack_chain.get("kill_chain_mapping", {})
+        kill_chain_html = ""
+        if kill_chain:
+            kc_stages = {
+                "reconnaissance": ("🔍 侦察", "#9c27b0"),
+                "weaponization": ("⚔️ 武器化", "#f44336"),
+                "delivery": ("📦 投递", "#ff9800"),
+                "exploitation": ("💥 利用", "#e74c3c"),
+                "installation": ("🔧 安装", "#795548"),
+                "command_and_control": ("📡 C2", "#607d8b"),
+                "actions_on_objectives": ("🎯 目标行动", "#d32f2f")
+            }
+            kc_items = ""
+            for stage_key, (stage_label, stage_color) in kc_stages.items():
+                stage_items = kill_chain.get(stage_key, [])
+                if stage_items:
+                    kc_items += f'<div style="flex:1;min-width:120px;padding:8px;border-left:3px solid {stage_color};margin:4px;background:#fafafa;border-radius:4px;"><strong style="color:{stage_color};">{stage_label}</strong><br><span style="font-size:12px;">{", ".join(str(i) for i in stage_items[:3])}</span></div>'
+            if kc_items:
+                kill_chain_html = f"""
+                <div style="margin-top:15px;">
+                    <p><strong>网络杀伤链映射:</strong></p>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;">{kc_items}</div>
+                </div>
+                """
+        
+        data_flow_risk_html = f'<p style="margin-top:10px;"><strong>数据流风险:</strong> {attack_chain.get("data_flow_risk", "N/A")}</p>' if attack_chain.get("data_flow_risk") else ""
+        
+        compliance_score = compliance.get("compliance_score")
+        compliance_score_html = f'<p><strong>合规评分:</strong> <span style="font-weight:bold;color:{"#e74c3c" if isinstance(compliance_score, (int, float)) and compliance_score < 60 else "#f39c12" if isinstance(compliance_score, (int, float)) and compliance_score < 80 else "#27ae60"};">{compliance_score}/100</span></p>' if compliance_score is not None else ""
+        
+        risk_points_list = compliance.get("risk_points", [])
+        compliance_risk_html = ""
+        for rp in risk_points_list[:5]:
+            if isinstance(rp, dict):
+                compliance_risk_html += f'<li>⚠️ <strong>[{rp.get("standard", "")} {rp.get("clause", "")}]</strong> {rp.get("description", "")} — <em>整改: {rp.get("remediation", "")}</em></li>'
+            else:
+                compliance_risk_html += f'<li>⚠️ {rp}</li>'
+        
+        compliance_standards_html = "".join(f"<li>• {std}</li>" for std in compliance.get("standards", [])[:5])
+        regulatory_html = f'<p style="margin-top:10px;color:#c62828;"><strong>监管处罚风险:</strong> {compliance.get("regulatory_penalties", "N/A")}</p>' if compliance.get("regulatory_penalties") else ""
+        
+        risk_matrix = risk.get("risk_matrix", {})
+        risk_matrix_html = ""
+        if risk_matrix:
+            risk_matrix_html = f"""
+            <div style="display:flex;gap:15px;margin-top:10px;">
+                <div style="padding:8px 15px;background:#fff3e0;border-radius:6px;"><strong>可能性:</strong> {risk_matrix.get("likelihood", "N/A")}</div>
+                <div style="padding:8px 15px;background:#ffebee;border-radius:6px;"><strong>影响程度:</strong> {risk_matrix.get("impact", "N/A")}</div>
+                <div style="padding:8px 15px;background:#e8f5e9;border-radius:6px;"><strong>当前等级:</strong> {risk_matrix.get("current_level", "N/A").upper()}</div>
+            </div>
+            """
         
         return f"""
         <div class="ai-section">
@@ -668,6 +739,7 @@ class HTMLReportGenerator:
                 <p><strong>综合风险等级:</strong> {risk.get('overall_risk', 'N/A').upper()}</p>
                 <p><strong>风险评分:</strong> {risk.get('risk_score', 'N/A')}/100</p>
                 <p><strong>评级依据:</strong> {risk.get('risk_justification', 'N/A')}</p>
+                {risk_matrix_html}
             </div>
             
             {f'<h4 style="margin: 25px 0 15px; color: #1565c0;">🔬 漏洞深度分析</h4>{vuln_analysis_html}' if vuln_analysis_html else ''}
@@ -678,17 +750,25 @@ class HTMLReportGenerator:
                 <p style="margin-top: 10px;"><strong>可能的攻击路径:</strong></p>
                 <ul>{attack_paths_html or '<li>• 无</li>'}</ul>
                 <p style="margin-top: 10px;"><strong>横向移动风险:</strong> {attack_chain.get('lateral_movement_risk', 'N/A')}</p>
+                {data_flow_risk_html}
+                {kill_chain_html}
             </div>''' if attack_chain else ''}
             
             {f'''<div class="compliance-box">
                 <h4>📋 合规性影响</h4>
-                <ul>{compliance_html or '<li>• 无</li>'}</ul>
+                <p><strong>相关标准:</strong></p>
+                <ul>{compliance_standards_html or '<li>• 无</li>'}</ul>
+                {compliance_score_html}
+                <p style="margin-top:10px;"><strong>合规风险点:</strong></p>
+                <ul>{compliance_risk_html or '<li>• 无</li>'}</ul>
+                {regulatory_html}
             </div>''' if compliance else ''}
             
             {f'<h4 style="margin: 25px 0 15px; color: #1565c0;">🔧 修复优先级建议</h4>{recommendations_html}' if recommendations_html else ''}
             
             <h4 style="margin: 25px 0 15px; color: #1565c0;">🛡️ 安全加固建议</h4>
             {hardening_html}
+            {monitoring_html}
         </div>
         """
 

@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8888'
+
 export const useAIChatStore = defineStore('aiChat', () => {
   const messages = ref([])
   const isConnected = ref(false)
@@ -31,18 +33,22 @@ export const useAIChatStore = defineStore('aiChat', () => {
   }
   
   const wsUrl = computed(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = window.location.host
-    return `${protocol}//${host}/api/ai-chat/ws`
+    const baseUrl = API_BASE_URL.replace(/^http/, 'ws')
+    return `${baseUrl}/api/ai-chat/ws`
   })
   
-  const connect = () => {
+  const connect = (reconnectSessionId = null) => {
     if (ws.value && ws.value.readyState === WebSocket.OPEN) {
       return
     }
     
     try {
-      ws.value = new WebSocket(wsUrl.value)
+      let url = wsUrl.value
+      if (reconnectSessionId || sessionId.value) {
+        const sid = reconnectSessionId || sessionId.value
+        url = `${url}?session_id=${sid}`
+      }
+      ws.value = new WebSocket(url)
       
       ws.value.onopen = () => {
         console.log('AI Chat WebSocket 连接成功')
@@ -68,7 +74,7 @@ export const useAIChatStore = defineStore('aiChat', () => {
         if (reconnectAttempts.value < maxReconnectAttempts) {
           reconnectAttempts.value++
           console.log(`尝试重连 (${reconnectAttempts.value}/${maxReconnectAttempts})...`)
-          setTimeout(connect, reconnectDelay)
+          setTimeout(() => connect(sessionId.value), reconnectDelay)
         }
       }
       
@@ -98,7 +104,19 @@ export const useAIChatStore = defineStore('aiChat', () => {
     switch (type) {
       case 'connected':
         sessionId.value = payload.session_id
-        addSystemMessage(`会话已建立: ${payload.session_id.slice(0, 8)}...`)
+        if (payload.reconnected) {
+          addSystemMessage(`会话已恢复: ${payload.session_id.slice(0, 8)}...`)
+          if (payload.state) {
+            isScanning.value = !payload.state.is_complete && payload.state.completed_tasks?.length > 0
+          }
+          if (payload.pending_interaction) {
+            isWaitingConfirm.value = true
+            confirmationPrompt.value = payload.pending_interaction.payload?.description || '有待处理的交互请求'
+            addMessage('assistant', confirmationPrompt.value, { type: 'confirmation', pending: payload.pending_interaction })
+          }
+        } else {
+          addSystemMessage(`会话已建立: ${payload.session_id.slice(0, 8)}...`)
+        }
         break
         
       case 'ai_message':
@@ -127,6 +145,21 @@ export const useAIChatStore = defineStore('aiChat', () => {
         
       case 'tool_execution':
         handleToolExecution(payload)
+        break
+        
+      case 'task_executing':
+        addMessage('assistant', `正在执行工具: ${payload.tool_name} -> ${payload.target}`, { type: 'tool' })
+        break
+        
+      case 'interaction_required':
+        isWaitingConfirm.value = true
+        confirmationPrompt.value = payload.options?.map(o => `[${o.key}] ${o.label}: ${o.description}`).join('\n') || '请选择操作'
+        addMessage('assistant', `📋 下一步: ${payload.next_task}\n🎯 目标: ${payload.target}\n${payload.tool_params_info ? '参数: ' + JSON.stringify(payload.tool_params_info) : ''}`, { 
+          type: 'confirmation',
+          tool_params_info: payload.tool_params_info,
+          auth_status: payload.auth_status,
+          options: payload.options
+        })
         break
         
       case 'report_ready':

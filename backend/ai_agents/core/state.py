@@ -1085,13 +1085,16 @@ class AgentState:
         从字典重建 WorkflowTrace 对象
         
         Args:
-            data: 工作流追踪数据字典
+            data: 工作流追踪数据字典或WorkflowTrace对象
             
         Returns:
             WorkflowTrace: 重建的工作流追踪对象
         """
         if not data:
             return None
+        
+        if isinstance(data, WorkflowTrace):
+            return data
         
         workflow_trace = WorkflowTrace(
             workflow_id=data.get("workflow_id", ""),

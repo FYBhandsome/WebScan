@@ -53,7 +53,7 @@ def struts2_s2_032(target: str, timeout: int = 10) -> Dict[str, Any]:
                     "vulnerability": "Struts2 S2-032 Remote Code Execution",
                     "target": target_url
                 },
-                "error": None,
+                "error": "",
                 "metadata": {
                     "tool": "struts2_s2_032",
                     "target": target,
@@ -69,7 +69,7 @@ def struts2_s2_032(target: str, timeout: int = 10) -> Dict[str, Any]:
                     "cve_id": "S2-032",
                     "target": target_url
                 },
-                "error": None,
+                "error": "",
                 "metadata": {
                     "tool": "struts2_s2_032",
                     "target": target,
@@ -79,14 +79,14 @@ def struts2_s2_032(target: str, timeout: int = 10) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入requests模块失败: {str(e)}",
             "metadata": {"tool": "struts2_s2_032", "target": target}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行struts2_s2_032工具异常: {str(e)}",
             "metadata": {"tool": "struts2_s2_032", "target": target}
         }

@@ -272,7 +272,12 @@ async def sync_scans_from_awvs():
                 task.status = status
                 task.progress = progress
                 task.result = result_json
-                await task.save()
+                try:
+                    await task.save()
+                except ValueError as e:
+                    # 从数据库重新获取当前状态
+                    task = await Task.get(id=task.id)
+                    logger.warning(f"跳过任务 {task.id} 状态更新: {str(e)}, 保持原状态 {task.status}")
                 target_task = task
             else:
                 # 检查是否存在未关联scan_id的同目标任务
@@ -675,19 +680,24 @@ async def delete_target(target_id: str):
     """
     try:
         client = get_awvs_client()
-        t = Target(client['api_url'], client['api_key'])
+        if not client['api_url'] or not client['api_key']:
+            return APIResponse(code=503, message="AWVS服务未配置", data=None)
         
+        t = Target(client['api_url'], client['api_key'])
         result = t.delete(target_id)
         
         if result:
             logger.info(f"删除目标成功: {target_id}")
             return APIResponse(code=200, message="删除成功", data={"target_id": target_id})
         else:
-            return APIResponse(code=400, message="删除目标失败", data=None)
+            return APIResponse(code=404, message="目标不存在或删除失败", data=None)
             
+    except AttributeError as e:
+        logger.warning(f"删除目标失败 (AWVS连接异常): {target_id}, error={e}")
+        return APIResponse(code=503, message="AWVS服务不可用", data=None)
     except Exception as e:
         logger.error(f"删除目标失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return APIResponse(code=500, message=f"删除目标失败: {str(e)}")
 
 
 # ====== 获取目标详情 ======

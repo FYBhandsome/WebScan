@@ -38,7 +38,7 @@ def waf_detect(target: str) -> Dict[str, Any]:
                 "waf_name": result.get("waf_name"),
                 "message": result.get("message")
             },
-            "error": None if result.get("status") == "success" else result.get("message"),
+            "error": "" if result.get("status") == "success" else str(result.get("message") or ""),
             "metadata": {
                 "tool": "waf_detect",
                 "target": target,
@@ -49,14 +49,14 @@ def waf_detect(target: str) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入waf模块失败: {str(e)}",
             "metadata": {"tool": "waf_detect", "target": target}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行waf_detect工具异常: {str(e)}",
             "metadata": {"tool": "waf_detect", "target": target}
         }

@@ -36,7 +36,7 @@ def baseinfo(target: str) -> Dict[str, Any]:
         return {
             "success": result.get("code") == 200,
             "data": result,
-            "error": None if result.get("code") == 200 else result.get("msg"),
+            "error": "" if result.get("code") == 200 else str(result.get("msg") or ""),
             "metadata": {
                 "tool": "baseinfo",
                 "target": target,
@@ -48,14 +48,14 @@ def baseinfo(target: str) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入baseinfo模块失败: {str(e)}",
             "metadata": {"tool": "baseinfo", "target": target}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行baseinfo工具异常: {str(e)}",
             "metadata": {"tool": "baseinfo", "target": target}
         }

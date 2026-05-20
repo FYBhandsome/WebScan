@@ -39,7 +39,7 @@ def ip_locate(ip: str) -> Dict[str, Any]:
                 "location": result,
                 "ip": ip
             },
-            "error": None if is_success else result,
+            "error": "" if is_success else str(result or ""),
             "metadata": {
                 "tool": "ip_locate",
                 "ip": ip,
@@ -49,14 +49,14 @@ def ip_locate(ip: str) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入iplocating模块失败: {str(e)}",
             "metadata": {"tool": "ip_locate", "ip": ip}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行ip_locate工具异常: {str(e)}",
             "metadata": {"tool": "ip_locate", "ip": ip}
         }

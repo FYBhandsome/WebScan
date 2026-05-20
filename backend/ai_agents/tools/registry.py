@@ -549,6 +549,18 @@ class ToolRegistry:
             name for name, metadata in self.tool_metadata.items()
             if metadata.get("category") == category
         ]
+    
+    def get_tool(self, name: str) -> Optional[AsyncToolWrapper]:
+        """
+        获取指定名称的工具
+        
+        Args:
+            name: 工具名称
+            
+        Returns:
+            Optional[AsyncToolWrapper]: 工具包装器对象，不存在则返回None
+        """
+        return self.tools.get(name)
 
 registry = ToolRegistry()
 

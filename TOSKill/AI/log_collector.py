@@ -77,9 +77,8 @@ class LogCollector:
         logger.info(f"[{session_id}][{node}][{level}] {message}")
 
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(self.push_to_websocket(session_id, log_entry))
+            asyncio.get_running_loop()
+            asyncio.ensure_future(self.push_to_websocket(session_id, log_entry))
         except RuntimeError:
             pass
 
@@ -98,9 +97,8 @@ class LogCollector:
         logger.info(f"[system][{level}] {message}")
 
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(self.push_to_all(log_entry))
+            asyncio.get_running_loop()
+            asyncio.ensure_future(self.push_to_all(log_entry))
         except RuntimeError:
             pass
 

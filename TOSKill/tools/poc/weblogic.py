@@ -78,7 +78,7 @@ def weblogic_cve_2020_2551(target: str, timeout: int = 10) -> Dict[str, Any]:
                     "vulnerability": "WebLogic T3/IIOP Protocol Deserialization RCE",
                     "target": target
                 },
-                "error": None,
+                "error": "",
                 "metadata": {
                     "tool": "weblogic_cve_2020_2551",
                     "target": target,
@@ -94,7 +94,7 @@ def weblogic_cve_2020_2551(target: str, timeout: int = 10) -> Dict[str, Any]:
                     "cve_id": "CVE-2020-2551",
                     "target": target
                 },
-                "error": None,
+                "error": "",
                 "metadata": {
                     "tool": "weblogic_cve_2020_2551",
                     "target": target,
@@ -104,7 +104,7 @@ def weblogic_cve_2020_2551(target: str, timeout: int = 10) -> Dict[str, Any]:
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行weblogic_cve_2020_2551工具异常: {str(e)}",
             "metadata": {"tool": "weblogic_cve_2020_2551", "target": target}
         }

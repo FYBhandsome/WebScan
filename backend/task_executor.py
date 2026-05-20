@@ -23,7 +23,7 @@ import os
 import json
 import traceback
 from typing import Dict, Any, Set, Optional, Union, List, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from tortoise.expressions import Q
 from backend.api.websocket import manager
@@ -182,7 +182,7 @@ class TaskExecutor:
         """持久化单个任务状态"""
         self._persisted_tasks[task_id] = {
             **state,
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
         self._save_task_states()
 
@@ -464,7 +464,7 @@ class TaskExecutor:
                     "target": target,
                     "task_type": task_type if 'task_type' in dir() else 'unknown',
                     "timeout": timeout,
-                    "started_at": datetime.utcnow().isoformat()
+                    "started_at": datetime.now(timezone.utc).isoformat()
                 })
                 
                 task_state_logger.log_task_started(
@@ -668,8 +668,12 @@ class TaskExecutor:
                 elif task_type in POC_PLUGIN_MAPPING:
                     await self.execute_poc_task(task_id, target, scan_config)
                 else:
-                    logger.warning(f"未知任务类型 {task_type}, 任务ID: {task_id}，尝试使用默认插件执行")
-                    await self.execute_plugin_task(task_id, target, scan_config, task_type)
+                    error_msg = f"未知任务类型 '{task_type}'，无法找到对应的执行器"
+                    logger.error(f"[TaskDispatcher] {error_msg} | 任务ID: {task_id}")
+                    structured_logger.error("Unknown task type dispatch failed",
+                        task_id=task_id, task_type=task_type)
+                    await self._handle_task_failure(task_id, error_msg)
+                    return
         except Exception as e:
             logger.error(f"任务分发失败: {e}", exc_info=True)
             raise
@@ -1095,7 +1099,7 @@ class TaskExecutor:
                 tool_results=tool_results,
                 target_context=target_context,
                 include_ai_analysis=include_ai_analysis,
-                scan_time=datetime.utcnow().isoformat()
+                scan_time=datetime.now(timezone.utc).isoformat()
             )
             
             report_id = await report_service.save_report_to_db(
@@ -1824,7 +1828,7 @@ class TaskExecutor:
         
         logger.info(f"[BatchPOC] 任务 {task_id} 批量验证完成, 发现 {len(vulnerable_targets)} 个易受攻击目标")
 
-    async def execute_vuln_scan_task(self, task_id: int, target: str, scan_config: Dict, task_type: str):
+    async def execute_vuln_scan_task(self, task_id: int, target: str, scan_config: Dict, task_type: str, save_task_progress: bool = True):
         """
         执行漏洞扫描任务
         
@@ -1836,15 +1840,17 @@ class TaskExecutor:
             target: 扫描目标URL
             scan_config: 扫描配置
             task_type: 任务类型 (sqli, xss, csrf, ssrf, lfi, cmdi, fileupload, weakpass, infoleak)
+            save_task_progress: 是否更新任务状态和进度 (批量扫描时应为False)
         """
         from backend.models import Task, Vulnerability
         from backend.vulnerability_scan_plugins.manager import plugin_manager
         from backend.vulnerability_scan_plugins.base import VulnerabilitySeverity
         
         task = await Task.get(id=task_id)
-        task.status = 'running'
-        task.progress = 5
-        await task.save()
+        if save_task_progress:
+            task.status = 'running'
+            task.progress = 5
+            await task.save()
         
         logger.info(f"[VulnScan] 漏洞扫描任务 {task_id} 开始执行: {target}, 类型: {task_type}")
         
@@ -1863,8 +1869,9 @@ class TaskExecutor:
             
             logger.info(f"[VulScan] 任务 {task_id} 将扫描 {len(vuln_types_to_scan)} 个漏洞类型: {vuln_types_to_scan}")
             
-            task.progress = 10
-            await task.save()
+            if save_task_progress:
+                task.progress = 10
+                await task.save()
             
             results = await plugin_manager.scan_all_async(
                 target=target,
@@ -1874,8 +1881,9 @@ class TaskExecutor:
             
             aggregated = plugin_manager.aggregate_results(results)
             
-            task.progress = 80
-            await task.save()
+            if save_task_progress:
+                task.progress = 80
+                await task.save()
             
             saved_vulns = []
             for vuln_data in aggregated.get('vulnerabilities', []):
@@ -1894,6 +1902,8 @@ class TaskExecutor:
                         payload=vuln_data.get('payload', ''),
                         evidence=vuln_data.get('evidence', ''),
                         remediation=vuln_data.get('solution', ''),
+                        cvss_score=vuln_data.get('cvss_score'),
+                        affected_product=vuln_data.get('affected_product'),
                         source='vuln_scan_plugin'
                     )
                     saved_vulns.append(vuln)
@@ -1920,10 +1930,11 @@ class TaskExecutor:
                 "vulnerabilities": aggregated.get('vulnerabilities', [])
             }
             
-            task.status = 'completed'
-            task.progress = 100
-            task.result = json.dumps(result_data, default=str)
-            await task.save()
+            if save_task_progress:
+                task.status = 'completed'
+                task.progress = 100
+                task.result = json.dumps(result_data, default=str)
+                await task.save()
             
             logger.info(f"[VulnScan] 任务 {task_id} 完成，发现 {len(saved_vulns)} 个漏洞，耗时 {duration:.2f}秒")
             
@@ -2001,7 +2012,7 @@ class TaskExecutor:
             async with semaphore:
                 try:
                     single_scan_config = {**scan_config, 'vuln_types': [vuln_type]}
-                    await self.execute_vuln_scan_task(task_id, target, single_scan_config, vuln_type)
+                    await self.execute_vuln_scan_task(task_id, target, single_scan_config, vuln_type, save_task_progress=False)
                     return vuln_type, True, None
                 except Exception as e:
                     logger.error(f"[BatchVulnScan] 扫描 {vuln_type} 失败: {e}")
@@ -2291,7 +2302,7 @@ class TaskExecutor:
             "task_type": task_type,
             "status": status,
             "duration": round(duration, 2),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "error": error,
             "result_summary": result_summary
         }
@@ -2321,7 +2332,7 @@ class TaskExecutor:
             "error_message": str(error),
             "traceback": traceback.format_exc(),
             "context": context or {},
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         logger.error(

@@ -82,5 +82,30 @@
       "tool_count": 2,
       "vulnerability_count": 0
     }
+  },
+  "4ec0a4be": {
+    "report_id": "scan_report_4ec0a4be_20260520_083316",
+    "session_id": "4ec0a4be",
+    "report_file": "scan_report_4ec0a4be_20260520_083316.html",
+    "target": "example.com",
+    "created_at": "2026-05-20 08:33:16",
+    "download_url": "/api/reports/download/scan_report_4ec0a4be_20260520_083316.html",
+    "format": "html",
+    "vulnerabilities_count": 0,
+    "tool_results": {
+      "baseinfo_scan": {
+        "success": true,
+        "data": {
+          "server": "nginx"
+        }
+      },
+      "sqli_scan": {
+        "success": true,
+        "data": {
+          "vulnerable": false
+        }
+      }
+    },
+    "vulnerabilities": []
   }
 }

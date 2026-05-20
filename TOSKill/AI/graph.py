@@ -14,6 +14,7 @@ import os
 import sys
 import base64
 import json
+import re
 from typing import Dict, Optional, Callable, List, Any
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
@@ -34,6 +35,21 @@ from ..RAG.retriever import get_scan_strategy
 from ..utils.log_writer import log_info, log_warn, log_error, log_success, log_debug
 
 logger = logging.getLogger(__name__)
+
+def _parse_chat_response(full_response: str):
+    """从LLM完整响应中分离思考过程和最终回复"""
+    thought = ""
+    content = full_response
+    match = re.match(
+        r'(?:思考[：:]\s*|分析[：:]\s*|Thought:\s*)(.*?)(?=回复[：:]|回答[：:]|Response:|$)',
+        full_response, re.DOTALL
+    )
+    if match:
+        thought = match.group(1).strip()
+        remaining = full_response[match.end():].strip()
+        remaining = re.sub(r'^(?:回复[：:]|回答[：:]|Response:)\s*', '', remaining)
+        content = remaining if remaining else content
+    return thought, content
 
 AUTH_MAX_RETRY_COUNT = 3
 
@@ -177,7 +193,7 @@ def is_auth_failure_response(response: Any) -> bool:
         if status_code in [401, 403]:
             return True
         
-        error = response.get("error", "").lower()
+        error = (response.get("error") or "").lower()
         auth_errors = [
             "unauthorized", "forbidden", "authentication failed",
             "token expired", "session expired", "invalid token",
@@ -191,7 +207,7 @@ def is_auth_failure_response(response: Any) -> bool:
             if isinstance(data, dict):
                 if data.get("status_code") in [401, 403]:
                     return True
-                error_msg = str(data.get("error", "")).lower()
+                error_msg = str(data.get("error") or "").lower()
                 if any(err in error_msg for err in auth_errors):
                     return True
     
@@ -260,10 +276,10 @@ class AuthRetryManager:
 auth_retry_manager = AuthRetryManager()
 
 
-def _match_tool_via_llm(prompt: str, tools_list: list) -> str:
+def _match_tool_via_llm(prompt: str, tools_list: list) -> tuple:
     """统一工具匹配函数，消除重复代码
-    使用LLM选择最匹配的工具
-    返回: 工具名称，如果匹配失败返回空字符串
+    使用LLM选择最匹配的工具，并提取LLM生成的工具调用参数
+    返回: (工具名称, LLM生成的参数字典)，如果匹配失败返回 ("", {})
     """
     from langchain_core.messages import SystemMessage, HumanMessage
     
@@ -277,20 +293,22 @@ def _match_tool_via_llm(prompt: str, tools_list: list) -> str:
         llm_tool_calls = getattr(response_with_tc, 'tool_calls', [])
         
         tool_name = ""
+        llm_params = {}
         if llm_tool_calls:
             for tool_call in llm_tool_calls:
                 tool_name = tool_call.get("name", "") or tool_call.name
                 if tool_name:
+                    llm_params = tool_call.get("args", {})
                     break
-        return tool_name
+        return tool_name, llm_params
     except Exception as e:
         logger.warning(f"LLM工具匹配失败: {e}，使用第一个工具")
         if tools_list:
             first_tool = tools_list[0]
             if hasattr(first_tool, 'name'):
-                return first_tool.name
-            return str(first_tool)
-        return ""
+                return first_tool.name, {}
+            return str(first_tool), {}
+        return "", {}
 
 
 def safe_llm_invoke(llm, prompt, timeout=None, system_prompt=None):
@@ -533,6 +551,14 @@ class MemoryStore:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_script_history ON script_history(tool_name, created_at)
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pending_interactions (
+                    session_id TEXT PRIMARY KEY,
+                    interaction_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+                )
+            """)
             conn.commit()
             
             self._load_from_sqlite()
@@ -552,12 +578,9 @@ class MemoryStore:
     def _start_cleanup_task(self):
         """启动定时清理任务"""
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
-                logger.info("定时清理任务已启动（异步模式）")
-            else:
-                raise RuntimeError("事件循环未运行")
+            asyncio.get_running_loop()
+            self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+            logger.info("定时清理任务已启动（异步模式）")
         except RuntimeError:
             self._stop_cleanup = False
             self._cleanup_thread = threading.Thread(target=self._periodic_cleanup_sync, daemon=True)
@@ -697,15 +720,21 @@ class MemoryStore:
             logger.info(f"删除会话: {session_id}")
     
     def _cleanup_expired_sessions(self):
-        """清理过期会话（带日志记录）"""
+        """清理过期会话（带日志记录，活跃扫描会话豁免）"""
         now = datetime.now()
         expired_count = 0
+        active_scan_ttl = self._session_ttl * 3
         
         with self._lock:
-            expired = [
-                sid for sid, ts in self._session_timestamps.items()
-                if (now - ts).total_seconds() > self._session_ttl
-            ]
+            expired = []
+            for sid, ts in self._session_timestamps.items():
+                state = self._sessions.get(sid)
+                if state and not state.get("is_complete", True) and state.get("target"):
+                    idle_seconds = (now - ts).total_seconds()
+                    if idle_seconds > active_scan_ttl:
+                        expired.append(sid)
+                elif (now - ts).total_seconds() > self._session_ttl:
+                    expired.append(sid)
             
             for sid in expired:
                 expired_count += 1
@@ -1020,16 +1049,56 @@ class MemoryStore:
             return {**state, "chat_history": merged}
     
     def set_pending_interaction(self, session_id: str, interaction_data: Dict):
-        """设置待处理的交互请求"""
+        """设置待处理的交互请求（同步到SQLite）"""
         self._pending_interactions[session_id] = interaction_data
+        conn = self._get_db_conn()
+        if conn:
+            try:
+                interaction_json = json.dumps(interaction_data, ensure_ascii=False, default=str)
+                now = datetime.now().isoformat()
+                with conn:
+                    conn.execute(
+                        """INSERT OR REPLACE INTO pending_interactions (session_id, interaction_json, updated_at)
+                           VALUES (?, ?, ?)""",
+                        (session_id, interaction_json, now)
+                    )
+            except Exception as e:
+                logger.error(f"SQLite 保存 pending_interaction 失败: {e}")
     
     def get_pending_interaction(self, session_id: str) -> Optional[Dict]:
-        """获取待处理的交互请求"""
-        return self._pending_interactions.get(session_id)
+        """获取待处理的交互请求（优先内存，回退SQLite）"""
+        result = self._pending_interactions.get(session_id)
+        if result:
+            return result
+        conn = self._get_db_conn()
+        if conn:
+            try:
+                cursor = conn.execute(
+                    "SELECT interaction_json FROM pending_interactions WHERE session_id = ?",
+                    (session_id,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    result = json.loads(row[0])
+                    self._pending_interactions[session_id] = result
+                    return result
+            except Exception as e:
+                logger.error(f"SQLite 读取 pending_interaction 失败: {e}")
+        return None
     
     def clear_pending_interaction(self, session_id: str):
-        """清除待处理的交互请求"""
+        """清除待处理的交互请求（同步删除SQLite）"""
         self._pending_interactions.pop(session_id, None)
+        conn = self._get_db_conn()
+        if conn:
+            try:
+                with conn:
+                    conn.execute(
+                        "DELETE FROM pending_interactions WHERE session_id = ?",
+                        (session_id,)
+                    )
+            except Exception as e:
+                logger.error(f"SQLite 删除 pending_interaction 失败: {e}")
     
     def set_websocket_callback(self, session_id: str, callback: Callable):
         """设置 WebSocket 回调函数"""
@@ -1179,10 +1248,16 @@ memory_store = MemoryStore.get_instance()
 
 
 async def safe_ws_send(session_id: str, message: Dict) -> bool:
-    """安全发送WebSocket消息"""
+    """安全发送WebSocket消息 - WS不可用时将消息缓存到session状态"""
     ws_callback = memory_store.get_websocket_callback(session_id)
     if ws_callback is None:
-        logger.warning(f"[{session_id}] WebSocket回调不存在")
+        state = memory_store.get_session(session_id)
+        if state:
+            pending_msgs = state.get("_pending_ws_messages", [])
+            pending_msgs.append(message)
+            if len(pending_msgs) > 100:
+                pending_msgs = pending_msgs[-100:]
+            memory_store.update_session(session_id, _pending_ws_messages=pending_msgs)
         return False
     
     try:
@@ -1191,6 +1266,13 @@ async def safe_ws_send(session_id: str, message: Dict) -> bool:
     except Exception as e:
         logger.error(f"[{session_id}] WebSocket发送失败: {e}")
         memory_store.clear_websocket_callback(session_id)
+        state = memory_store.get_session(session_id)
+        if state:
+            pending_msgs = state.get("_pending_ws_messages", [])
+            pending_msgs.append(message)
+            if len(pending_msgs) > 100:
+                pending_msgs = pending_msgs[-100:]
+            memory_store.update_session(session_id, _pending_ws_messages=pending_msgs)
         return False
 
 
@@ -1266,7 +1348,6 @@ def format_tool_result(tool_name: str, target: str, result: Any) -> str:
 
 async def intent_recognition(state: ScanState) -> ScanState:
     """意图识别节点 - 使用LLM Function Calling分析用户输入意图"""
-    import re
     from .tools import INTENT_TOOLS, map_tool_call_to_intent
     from langchain_core.messages import SystemMessage, HumanMessage
     
@@ -1428,7 +1509,6 @@ def intent_router(state: ScanState) -> str:
 async def tool_existence_check(state: ScanState) -> ScanState:
     """工具存在性校验节点 - 使用LLM Function Calling进行模糊匹配"""
     from .tools import get_all_tool_names, is_tool_exists, ALL_TOOLS
-    from langchain_core.messages import SystemMessage, HumanMessage
     
     direct_tool = state.get("direct_tool", "")
     user_input = state.get("user_input", "")
@@ -1437,26 +1517,16 @@ async def tool_existence_check(state: ScanState) -> ScanState:
     
     logger.info(f"[{session_id}] 工具存在性校验: {direct_tool}")
     
-    available_tools = get_all_tool_names()
-    
     if is_tool_exists(direct_tool):
         logger.info(f"工具 '{direct_tool}' 存在，准备执行")
         return update_state(state, tool_exists=True)
     
-    llm = get_llm().bind_tools(ALL_TOOLS)
-    messages = [
-        SystemMessage(content=f"用户想执行工具: \"{direct_tool}\"。请从可用工具中选择最匹配的工具。"),
-        HumanMessage(content=f"用户原始输入: {user_input}\n用户指定的工具名: {direct_tool}")
-    ]
-    response = llm.invoke(messages)
+    prompt = f"用户想执行工具: \"{direct_tool}\"。请从可用工具中选择最匹配的工具。\n用户原始输入: {user_input}\n用户指定的工具名: {direct_tool}"
+    matched_name, _ = _match_tool_via_llm(prompt, ALL_TOOLS)
     
-    tool_calls = getattr(response, 'tool_calls', [])
-    
-    if tool_calls:
-        matched_tool = tool_calls[0]['name']
-        if is_tool_exists(matched_tool):
-            logger.info(f"AI模糊匹配: '{direct_tool}' -> '{matched_tool}'")
-            return update_state(state, tool_exists=True, direct_tool=matched_tool)
+    if matched_name and is_tool_exists(matched_name):
+        logger.info(f"AI模糊匹配: '{direct_tool}' -> '{matched_name}'")
+        return update_state(state, tool_exists=True, direct_tool=matched_name)
     
     error_msg = f"工具 '{direct_tool}' 不存在。您可以选择上传自定义脚本或让AI生成脚本。"
     
@@ -1466,7 +1536,7 @@ async def tool_existence_check(state: ScanState) -> ScanState:
                 "type": "tool_not_found",
                 "payload": {
                     "tool_name": direct_tool,
-                    "available_tools": available_tools,
+                    "available_tools": get_all_tool_names(),
                     "message": error_msg,
                     "options": [
                         {"key": "upload", "label": "上传脚本"},
@@ -1493,53 +1563,11 @@ def tool_check_router(state: ScanState) -> str:
 
 @with_node_retry(max_retries=3)
 async def direct_tool_execute(state: ScanState) -> ScanState:
-    """工具直调节点 - 直接执行指定工具"""
+    """工具直调节点 - 直接执行指定工具（含LLM参数提取和用户确认）"""
     tool_name = state.get("direct_tool", "")
     target = state.get("target", "")
     session_id = state.get("websocket_session_id") or state.get("task_id")
     ws_callback = memory_store.get_websocket_callback(session_id)
-    
-    confirm_message = {
-        "type": "tool_confirm_required",
-        "payload": {
-            "tool_name": tool_name,
-            "target": target,
-            "description": f"即将直接执行工具 {tool_name} 对 {target} 进行扫描",
-            "rejection_count": 0
-        }
-    }
-    
-    memory_store.set_pending_interaction(session_id, confirm_message)
-    
-    if ws_callback:
-        try:
-            await ws_callback(confirm_message)
-        except Exception as e:
-            logger.error(f"WebSocket 发送确认请求失败: {e}")
-    
-    confirm_result = interrupt(confirm_message)
-    memory_store.clear_pending_interaction(session_id)
-    
-    if isinstance(confirm_result, dict):
-        confirmed = confirm_result.get("confirmed", False)
-        if not confirmed:
-            choice = confirm_result.get("choice", "")
-            confirmed = str(choice) in ("1", "confirm", "true", "yes")
-    else:
-        confirmed = str(confirm_result).lower() in ("true", "yes", "1", "confirm")
-    
-    if not confirmed:
-        logger.info(f"[{session_id}] 用户拒绝执行工具: {tool_name}")
-        return update_state(state, 
-            pending_action_type="rejection",
-            rejection_count=1,
-            confirm_tool=tool_name,
-            confirm_target=target
-        )
-    else:
-        logger.info(f"[{session_id}] 用户确认执行工具: {tool_name}")
-    
-    logger.info(f"[{session_id}] 工具直调: {tool_name} -> {target}")
     
     if is_auth_expired(state):
         logger.warning(f"[{session_id}] 未能获取有效认证信息，将以未认证模式继续执行")
@@ -1571,13 +1599,13 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
     from .tools import ALL_TOOLS
     
     prompt = f"用户想执行工具: {tool_name}。请从可用工具中选择最匹配的工具。目标: {target}\n工具名: {tool_name}"
-    matched_name = _match_tool_via_llm(prompt, ALL_TOOLS)
+    matched_name, llm_params = _match_tool_via_llm(prompt, ALL_TOOLS)
     tool = None
     
     if matched_name:
         tool = get_tool_by_name(matched_name)
         if tool:
-            logger.info(f"LLM工具匹配: '{tool_name}' -> '{matched_name}'")
+            logger.info(f"LLM工具匹配: '{tool_name}' -> '{matched_name}', LLM参数: {llm_params}")
     
     if not tool:
         tool = get_tool_by_name(tool_name)
@@ -1591,10 +1619,33 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
             })
         return update_state(state, errors=state.get("errors", []) + [error_msg], is_complete=True)
     
+    confirm_message = {
+        "type": "tool_confirm_required",
+        "payload": {
+            "tool_name": matched_name or tool_name,
+            "target": target,
+            "description": f"即将直接执行工具 {matched_name or tool_name} 对 {target} 进行扫描",
+            "llm_params": llm_params,
+            "param_descriptions": {k: f"LLM生成的参数: {v}" for k, v in llm_params.items()} if llm_params else {},
+            "rejection_count": 0
+        }
+    }
+    
+    memory_store.set_pending_interaction(session_id, confirm_message)
+    
+    if ws_callback:
+        try:
+            await ws_callback(confirm_message)
+        except Exception as e:
+            logger.error(f"WebSocket 发送确认请求失败: {e}")
+    
+    confirm_result = interrupt(confirm_message)
+    memory_store.clear_pending_interaction(session_id)
+    
     try:
         from .tools import invoke_tool_with_auth, extract_auth_from_result
         
-        result = invoke_tool_with_auth(tool, target, state)
+        result = invoke_tool_with_auth(tool, target, state, llm_params=llm_params)
         
         if auth_retry_manager.should_trigger_reauth(session_id, result):
             retry_count = auth_retry_manager.increment_retry(session_id)
@@ -1766,7 +1817,6 @@ async def script_upload_process(state: ScanState) -> ScanState:
     """脚本上传处理节点"""
     from .tools import script_manager
     from .script_safety import validate_script_safety, sanitize_script_name
-    from datetime import datetime
     
     session_id = state.get("websocket_session_id") or state.get("task_id")
     ws_callback = memory_store.get_websocket_callback(session_id)
@@ -1866,7 +1916,6 @@ async def script_generate_process(state: ScanState) -> ScanState:
     """AI脚本生成处理节点"""
     from .tools import script_manager
     from .script_safety import validate_script_safety, sanitize_script_name
-    from datetime import datetime
     
     session_id = state.get("websocket_session_id") or state.get("task_id")
     ws_callback = memory_store.get_websocket_callback(session_id)
@@ -1978,25 +2027,61 @@ def build_react_prompt(state: dict, rag_strategy: str) -> str:
     
     max_rag_length = 2000 if len(remaining) > 3 else 1500
     rag_content = rag_strategy[:max_rag_length] if rag_strategy else '暂无专业知识参考'
+    
+    user_chat_context = state.get("user_chat_context", "")
+    user_directed_next_task = state.get("user_directed_next_task", "")
+    user_directed_params = state.get("user_directed_params", {})
+    
+    chat_section = ""
+    if user_chat_context:
+        chat_section = f"""
+## 用户交互指令（高优先级）
+用户在扫描过程中提供了以下反馈和指令，你必须优先考虑：
+{user_chat_context}
+"""
+        if user_directed_next_task:
+            chat_section += f"""
+用户明确指定下一步任务: {user_directed_next_task}
+你应当优先选择用户指定的任务作为 Action。
+"""
+        if user_directed_params:
+            chat_section += f"""
+用户补充的参数信息: {json.dumps(user_directed_params, ensure_ascii=False)}
+在执行任务时应使用这些参数。
+"""
 
+    remaining_list = ", ".join(remaining) if remaining else "无"
+    
     prompt = f"""你是一名Web安全扫描专家，使用ReACT框架进行决策。
 
 ## 当前状态
 - 目标: {target}
 - 扫描模式: {mode}
 - 已完成任务: {done if done else '无'}
-- 剩余任务: {remaining[:10]}
+- 剩余任务: [{remaining_list}]
 - 上一步结果: {str(last_result)[:500]}
 
 ## 专业知识参考 (RAG)
 {rag_content}
+{chat_section}
+## 输出格式要求（严格遵守）
+请按以下格式输出，每行一个字段，不要添加任何其他内容：
 
-## 指令
-请按以下格式输出，不要输出其他内容：
+Thought: <一句话分析当前状态和下一步决策理由>
+Action: <工具名称>
+Reason: <简短理由>
 
-Thought: [分析当前状态，判断下一步应执行什么工具]
-Action: [工具名称，必须是剩余任务列表中的一个]
-Reason: [选择该工具的简短理由]
+## 重要规则
+1. Action 必须是以下剩余任务之一: {remaining_list}
+2. 如果剩余任务为空，Action 输出: end
+3. 如果用户指定了任务，Action 必须使用用户指定的任务名
+4. 不要输出任何额外内容，不要使用markdown格式
+5. 工具名称必须完全匹配，不要添加空格或修改
+
+示例输出:
+Thought: 当前已完成信息收集，下一步应进行漏洞扫描
+Action: sqli_scan
+Reason: SQL注入是高风险漏洞，优先检测
 """
     return prompt
 
@@ -2050,7 +2135,6 @@ async def ai_decision(state: ScanState) -> ScanState:
             last_result=last_result
         )
         if rag_strategy:
-            import re
             source_matches = re.findall(r'来源: ([^\|]+)', rag_strategy)
             rag_sources = source_matches[:3]
             logger.info(f"RAG 策略检索成功: 来源={rag_sources}, 内容长度={len(rag_strategy)}")
@@ -2093,10 +2177,19 @@ async def ai_decision(state: ScanState) -> ScanState:
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
     
-    # =================== 任务分配（ReACT 优先） ===================
+    # =================== 任务分配（用户指令优先 > ReACT > 默认序列） ===================
     next_task_assigned = None
     is_react_selected = False
-    if react_decision and react_decision.get("action"):
+    is_user_directed = False
+    
+    user_directed_next_task = state.get("user_directed_next_task", "")
+    user_directed_params = state.get("user_directed_params", {})
+    
+    if user_directed_next_task and user_directed_next_task in tool_sequence and user_directed_next_task not in done:
+        next_task_assigned = user_directed_next_task
+        is_user_directed = True
+        logger.info(f"👤 用户指令优先分配任务：{user_directed_next_task}")
+    elif react_decision and react_decision.get("action"):
         react_action = react_decision["action"]
         if react_action in tool_sequence and react_action not in done:
             next_task_assigned = react_action
@@ -2126,6 +2219,8 @@ async def ai_decision(state: ScanState) -> ScanState:
             "rag_reference": rag_strategy[:500] if rag_strategy else "",
             "rag_sources": rag_sources,
             "rag_used": len(rag_strategy) > 0,
+            "user_directed": is_user_directed,
+            "user_directed_params": user_directed_params if is_user_directed else {},
             "react_chain": {
                 "thought": react_decision.get("thought", "") if react_decision else "",
                 "action": react_decision.get("action", "") if react_decision else "",
@@ -2147,7 +2242,9 @@ async def ai_decision(state: ScanState) -> ScanState:
                         "rag_enabled": True,
                         "rag_reference": rag_strategy,
                         "react_selected": is_react_selected,
-                        "react_thought": react_decision.get("thought", "")[:100] if react_decision else ""
+                        "react_thought": react_decision.get("thought", "")[:100] if react_decision else "",
+                        "user_directed": is_user_directed,
+                        "user_directed_params": user_directed_params if is_user_directed else {}
                     }
                 })
             except Exception as e:
@@ -2158,7 +2255,9 @@ async def ai_decision(state: ScanState) -> ScanState:
             need_generate_script=False,
             decision_history=decision_history,
             rag_last_strategy=rag_strategy,
-            last_activity_time=datetime.now().isoformat()
+            last_activity_time=datetime.now().isoformat(),
+            user_directed_params=user_directed_params if is_user_directed else {},
+            user_directed_next_task=""
         )
     # ================================================================
     
@@ -2194,7 +2293,11 @@ async def ai_decision(state: ScanState) -> ScanState:
 
 
 async def user_interact(state: ScanState) -> ScanState:
-    """原子2: 用户交互 - 使用 interrupt 实现暂停等待"""
+    """原子2: 用户交互 - 使用 interrupt 实现暂停等待
+    
+    这是唯一的用户确认断点，包含工具参数展示供用户审查。
+    用户确认后才进入 execute_task 执行，避免双重确认。
+    """
     logger.info(f"[{state.get('task_id')}] 用户交互节点")
     
     next_task = state.get("next_task", "")
@@ -2205,6 +2308,19 @@ async def user_interact(state: ScanState) -> ScanState:
     if next_task == "end":
         return state
     
+    tool = get_tool_by_name(next_task)
+    tool_params_info = {}
+    if tool and hasattr(tool, 'args_schema') and tool.args_schema:
+        try:
+            schema = tool.args_schema.schema()
+            tool_params_info = {
+                k: v.get("description", v.get("type", ""))
+                for k, v in schema.get("properties", {}).items()
+                if k != "target"
+            }
+        except Exception:
+            pass
+    
     interaction_data = {
         "type": "interaction_required",
         "session_id": session_id,
@@ -2213,6 +2329,11 @@ async def user_interact(state: ScanState) -> ScanState:
             "target": target,
             "mode": mode,
             "completed_tasks": state.get("completed_tasks", []),
+            "tool_params_info": tool_params_info,
+            "auth_status": {
+                "has_auth": bool(state.get("auth_info") or state.get("auth_cookies") or state.get("auth_token")),
+                "auth_expired": is_auth_expired(state)
+            },
             "options": [
                 {"key": "1", "label": "执行", "description": f"执行任务: {next_task}"},
                 {"key": "2", "label": "停止", "description": "停止扫描并生成报告"},
@@ -2268,50 +2389,22 @@ async def execute_task(state: ScanState) -> ScanState:
     
     if task not in ("end", ""):
         rejection_count = state.get("rejection_count", 0)
-        skipped = state.get("skipped_tasks", [])
-        
-        confirm_message = {
-            "type": "tool_confirm_required",
-            "payload": {
-                "tool_name": task,
-                "target": target,
-                "description": f"即将执行 {task} 对 {target} 进行扫描",
-                "rejection_count": rejection_count
-            }
-        }
-        
-        memory_store.set_pending_interaction(session_id, confirm_message)
         
         if ws_callback:
             try:
-                await ws_callback(confirm_message)
+                await ws_callback({
+                    "type": "task_executing",
+                    "payload": {
+                        "tool_name": task,
+                        "target": target,
+                        "description": f"正在执行 {task} 对 {target} 进行扫描",
+                        "rejection_count": rejection_count
+                    }
+                })
             except Exception as e:
-                logger.error(f"WebSocket 发送确认请求失败: {e}")
+                logger.error(f"WebSocket 发送执行通知失败: {e}")
         
-        confirm_result = interrupt(confirm_message)
-        memory_store.clear_pending_interaction(session_id)
-        
-        if isinstance(confirm_result, dict):
-            confirmed = confirm_result.get("confirmed", False)
-            if not confirmed:
-                choice = confirm_result.get("choice", "")
-                confirmed = str(choice) in ("1", "confirm", "true", "yes")
-        else:
-            confirmed = str(confirm_result).lower() in ("true", "yes", "1", "confirm")
-        
-        if not confirmed:
-            logger.info(f"[{session_id}] 用户拒绝执行工具: {task}")
-            new_count = rejection_count + 1
-            return update_state(state, 
-                pending_action_type="rejection",
-                rejection_count=new_count,
-                confirm_tool=task,
-                confirm_target=target,
-                user_choice="rejected"
-            )
-        else:
-            logger.info(f"[{session_id}] 用户确认执行工具: {task}")
-            state = update_state(state, rejection_count=0)
+        state = update_state(state, rejection_count=0)
     
     if is_auth_expired(state):
         logger.warning(f"[{session_id}] 未能获取有效认证信息，将以未认证模式继续执行")
@@ -2346,13 +2439,18 @@ async def execute_task(state: ScanState) -> ScanState:
     tools_list = get_tools_by_mode(scan_mode)
     
     prompt = f"当前需要执行的安全任务: {task}。请从可用工具中选择最匹配的工具来执行此任务。任务名称: {task}\n目标: {target}"
-    matched_name = _match_tool_via_llm(prompt, tools_list)
+    matched_name, llm_params = _match_tool_via_llm(prompt, tools_list)
+    
+    user_directed_params = state.get("user_directed_params", {})
+    if user_directed_params and isinstance(llm_params, dict):
+        llm_params.update(user_directed_params)
+        logger.info(f"👤 合并用户指令参数: {user_directed_params}")
     
     tool = None
     if matched_name:
         tool = get_tool_by_name(matched_name)
         if tool:
-            logger.info(f"LLM工具匹配: '{task}' -> '{matched_name}'")
+            logger.info(f"LLM工具匹配: '{task}' -> '{matched_name}', LLM参数: {llm_params}")
     
     if not tool:
         tool = get_tool_by_name(task)
@@ -2379,7 +2477,7 @@ async def execute_task(state: ScanState) -> ScanState:
     try:
         from .tools import invoke_tool_with_auth, extract_auth_from_result
         
-        res = invoke_tool_with_auth(tool, target, state)
+        res = invoke_tool_with_auth(tool, target, state, llm_params=llm_params)
         
         if auth_retry_manager.should_trigger_reauth(session_id, res):
             retry_count = auth_retry_manager.increment_retry(session_id)
@@ -2558,25 +2656,8 @@ async def execute_task(state: ScanState) -> ScanState:
         return update_state(state, errors=state.get("errors", []) + [f"{task}: {str(e)}"])
 
 
-def _parse_response(full_response: str):
-    """从LLM完整响应中分离思考过程和最终回复"""
-    import re
-    thought = ""
-    content = full_response
-    match = re.match(
-        r'(?:思考[：:]\s*|分析[：:]\s*|Thought:\s*)(.*?)(?=回复[：:]|回答[：:]|Response:|$)',
-        full_response, re.DOTALL
-    )
-    if match:
-        thought = match.group(1).strip()
-        remaining = full_response[match.end():].strip()
-        remaining = re.sub(r'^(?:回复[：:]|回答[：:]|Response:)\s*', '', remaining)
-        content = remaining if remaining else content
-    return thought, content
-
-
 async def chat(state: ScanState) -> ScanState:
-    """原子4: 聊天（流式思考）"""
+    """原子4: 聊天（流式思考 + 用户指令提取）"""
     logger.info(f"[{state.get('task_id')}] 聊天节点")
     
     session_id = state.get("websocket_session_id") or state.get("task_id")
@@ -2590,10 +2671,17 @@ async def chat(state: ScanState) -> ScanState:
     user_input = state.get("user_input", "")
     conversation_turn = state.get("conversation_turn", 0) + 1
     
+    done = list(state.get("tool_results", {}).keys())
+    mode = state.get("mode", "full_scan")
+    tool_sequence = get_tool_sequence(mode)
+    remaining = [t for t in tool_sequence if t not in done]
+    
     prompt = f"""你是安全助手，用户：{user_name}
 聊天总结：{chat_summary}
 任务历史：{task_history}
 目标：{target}
+已完成任务：{done}
+剩余任务：{remaining}
 自然简洁回复。"""
     
     await safe_ws_send(session_id, {
@@ -2608,7 +2696,7 @@ async def chat(state: ScanState) -> ScanState:
             full_response += token
             await send_thinking_token(session_id, token)
     
-    thought, content = _parse_response(full_response)
+    thought, content = _parse_chat_response(full_response)
     
     if ws_callback:
         try:
@@ -2621,13 +2709,108 @@ async def chat(state: ScanState) -> ScanState:
     
     new_state = append_chat(state, "assistant", content)
     
-    memory_store.append_chat(session_id, "user", user_input)
     memory_store.append_chat(session_id, "assistant", content)
+    
+    user_chat_context = state.get("user_chat_context", "")
+    chat_history = new_state.get("chat_history", [])
+    recent_user_msgs = []
+    for msg in chat_history[-6:]:
+        if msg.get("role") == "user":
+            recent_user_msgs.append(msg.get("content", ""))
+    if recent_user_msgs:
+        user_chat_context = "\n".join(recent_user_msgs[-3:])
+    
+    user_directed_next_task = ""
+    user_directed_params = {}
+    
+    if user_input:
+        try:
+            remaining_str = ", ".join(remaining) if remaining else "无"
+            extraction_prompt = f"""你是一个指令解析器，从用户输入中提取扫描指令和参数。
+
+## 可用任务列表
+{remaining_str}
+
+## 当前扫描目标
+{target}
+
+## 用户输入
+{user_input}
+
+## 输出要求
+请严格输出以下JSON格式，不要添加任何其他内容：
+
+{{"has_directive":false,"next_task":"","params":{{}},"reason":""}}
+
+## 字段说明
+- has_directive: 布尔值，用户是否指定了扫描任务
+- next_task: 字符串，必须是可用任务列表中的任务名，否则为空
+- params: 对象，用户提供的参数（如focus_url、username等）
+- reason: 字符串，判断理由
+
+## 任务名称映射规则
+- "扫描SQL注入"/"检测SQL注入" → sqli_scan
+- "检查XSS"/"扫描XSS" → xss_scan
+- "端口扫描" → portscan
+- "目录扫描" → dirscan
+- "检测CSRF" → csrf_scan
+- "文件上传漏洞" → fileupload_scan
+- "命令注入" → cmdi_scan
+- "SSRF检测" → ssrf_scan
+- "文件包含" → lfi_scan
+- "弱口令检测" → weakpass_scan
+- "WAF检测" → waf_detect
+- "CMS识别" → cms_detect
+- "信息泄露" → infoleak_scan
+
+## 示例
+用户输入: "帮我扫描一下SQL注入漏洞"
+输出: {{"has_directive":true,"next_task":"sqli_scan","params":{{}},"reason":"用户明确要求扫描SQL注入"}}
+
+用户输入: "重点测试login页面的XSS"
+输出: {{"has_directive":true,"next_task":"xss_scan","params":{{"focus_url":"login"}},"reason":"用户要求测试XSS并指定了重点页面"}}
+
+用户输入: "你好"
+输出: {{"has_directive":false,"next_task":"","params":{{}},"reason":"普通聊天，无扫描指令"}}
+
+现在请分析用户输入并输出JSON："""
+            
+            extraction_response = safe_llm_invoke(llm, extraction_prompt, timeout=15)
+            extraction_text = extraction_response.content if hasattr(extraction_response, 'content') else str(extraction_response)
+            
+            json_match = re.search(r'\{[\s\S]*\}', extraction_text)
+            if json_match:
+                extraction_result = json.loads(json_match.group())
+                if extraction_result.get("has_directive"):
+                    directed_task = extraction_result.get("next_task", "")
+                    if directed_task in remaining:
+                        user_directed_next_task = directed_task
+                        logger.info(f"👤 用户指令提取: next_task={directed_task}")
+                    
+                    extracted_params = extraction_result.get("params", {})
+                    if extracted_params:
+                        user_directed_params = extracted_params
+                        logger.info(f"👤 用户参数提取: params={extracted_params}")
+                    
+                    if user_directed_next_task or user_directed_params:
+                        await safe_ws_send(session_id, {
+                            "type": "user_directive_extracted",
+                            "payload": {
+                                "next_task": user_directed_next_task,
+                                "params": user_directed_params,
+                                "reason": extraction_result.get("reason", "")
+                            }
+                        })
+        except Exception as e:
+            logger.warning(f"用户指令提取失败（不影响正常流程）: {e}")
     
     return update_state(new_state, 
         chat_summary=content[:200],
         conversation_turn=conversation_turn,
-        last_activity_time=datetime.now().isoformat()
+        last_activity_time=datetime.now().isoformat(),
+        user_chat_context=user_chat_context,
+        user_directed_next_task=user_directed_next_task,
+        user_directed_params=user_directed_params
     )
 
 
@@ -2650,7 +2833,7 @@ async def vulnerability_check(state: ScanState) -> ScanState:
     
     risk_summary = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for vuln in vulnerabilities:
-        severity = vuln.get("severity", "info").lower()
+        severity = (vuln.get("severity") or "info").lower()
         if severity in risk_summary:
             risk_summary[severity] += 1
     
@@ -2665,7 +2848,7 @@ async def vulnerability_check(state: ScanState) -> ScanState:
             "risk_summary": risk_summary,
             "vulnerabilities": [
                 v for v in vulnerabilities 
-                if v.get("severity", "").lower() in ("critical", "high")
+                if (v.get("severity") or "").lower() in ("critical", "high")
             ],
             "message": f"检测到 {risk_summary['critical']} 个严重漏洞, {risk_summary['high']} 个高危漏洞",
             "options": [
@@ -2910,7 +3093,6 @@ async def rejection_handler(state: ScanState) -> ScanState:
         alt_response = safe_llm_invoke(llm, alt_prompt, timeout=30)
         alt_text = alt_response.content if hasattr(alt_response, 'content') else str(alt_response)
         
-        import re
         json_match = re.search(r'```json\s*([\s\S]*?)\s*```', alt_text)
         if json_match:
             alternatives = json.loads(json_match.group(1))
@@ -3041,8 +3223,7 @@ def router(state: ScanState) -> str:
     return "user_interact"
 
 
-def create_checkpointer(db_path: str = "data/langgraph_checkpoints.db") -> MemorySaver:
-    """创建内存检查点器"""
+def create_checkpointer() -> MemorySaver:
     return MemorySaver()
 
 
@@ -3078,39 +3259,44 @@ class IntentRecognitionGraph:
         return workflow.compile(checkpointer=checkpointer)
 
 
+def _build_scan_graph(checkpointer: MemorySaver = None) -> StateGraph:
+    """构建扫描子图（信息收集和漏洞扫描共用同一拓扑）"""
+    workflow = StateGraph(ScanState)
+    
+    workflow.add_node("ai_decision", ai_decision)
+    workflow.add_node("user_interact", user_interact)
+    workflow.add_node("execute_task", execute_task)
+    workflow.add_node("vulnerability_check", vulnerability_check)
+    workflow.add_node("rejection_handler", rejection_handler)
+    workflow.add_node("chat", chat)
+    workflow.add_node("script_manager", script_manager)
+    workflow.add_node("script_upload_process", script_upload_process)
+    workflow.add_node("script_generate_process", script_generate_process)
+    workflow.add_node("report_generation", report_generation)
+    
+    workflow.set_entry_point("ai_decision")
+    workflow.add_edge("ai_decision", "user_interact")
+    workflow.add_conditional_edges("user_interact", router)
+    workflow.add_conditional_edges("execute_task", execute_task_router)
+    workflow.add_edge("vulnerability_check", "ai_decision")
+    workflow.add_edge("rejection_handler", "user_interact")
+    workflow.add_edge("chat", "ai_decision")
+    workflow.add_edge("script_manager", "ai_decision")
+    workflow.add_edge("script_upload_process", "ai_decision")
+    workflow.add_edge("script_generate_process", "ai_decision")
+    workflow.add_edge("report_generation", END)
+    
+    if checkpointer is None:
+        checkpointer = create_checkpointer()
+    return workflow.compile(checkpointer=checkpointer)
+
+
 class InfoCollectionGraph:
     """信息收集子图"""
     
     @staticmethod
     def build(checkpointer: MemorySaver = None) -> StateGraph:
-        workflow = StateGraph(ScanState)
-        
-        workflow.add_node("ai_decision", ai_decision)
-        workflow.add_node("user_interact", user_interact)
-        workflow.add_node("execute_task", execute_task)
-        workflow.add_node("vulnerability_check", vulnerability_check)
-        workflow.add_node("rejection_handler", rejection_handler)
-        workflow.add_node("chat", chat)
-        workflow.add_node("script_manager", script_manager)
-        workflow.add_node("script_upload_process", script_upload_process)
-        workflow.add_node("script_generate_process", script_generate_process)
-        workflow.add_node("report_generation", report_generation)
-        
-        workflow.set_entry_point("ai_decision")
-        workflow.add_edge("ai_decision", "user_interact")
-        workflow.add_conditional_edges("user_interact", router)
-        workflow.add_conditional_edges("execute_task", execute_task_router)
-        workflow.add_edge("vulnerability_check", "ai_decision")
-        workflow.add_edge("rejection_handler", "user_interact")
-        workflow.add_edge("chat", "ai_decision")
-        workflow.add_edge("script_manager", "ai_decision")
-        workflow.add_edge("script_upload_process", "ai_decision")
-        workflow.add_edge("script_generate_process", "ai_decision")
-        workflow.add_edge("report_generation", END)
-        
-        if checkpointer is None:
-            checkpointer = create_checkpointer()
-        return workflow.compile(checkpointer=checkpointer)
+        return _build_scan_graph(checkpointer)
 
 
 class VulnScanGraph:
@@ -3118,34 +3304,7 @@ class VulnScanGraph:
     
     @staticmethod
     def build(checkpointer: MemorySaver = None) -> StateGraph:
-        workflow = StateGraph(ScanState)
-        
-        workflow.add_node("ai_decision", ai_decision)
-        workflow.add_node("user_interact", user_interact)
-        workflow.add_node("execute_task", execute_task)
-        workflow.add_node("vulnerability_check", vulnerability_check)
-        workflow.add_node("rejection_handler", rejection_handler)
-        workflow.add_node("chat", chat)
-        workflow.add_node("script_manager", script_manager)
-        workflow.add_node("script_upload_process", script_upload_process)
-        workflow.add_node("script_generate_process", script_generate_process)
-        workflow.add_node("report_generation", report_generation)
-        
-        workflow.set_entry_point("ai_decision")
-        workflow.add_edge("ai_decision", "user_interact")
-        workflow.add_conditional_edges("user_interact", router)
-        workflow.add_conditional_edges("execute_task", execute_task_router)
-        workflow.add_edge("vulnerability_check", "ai_decision")
-        workflow.add_edge("rejection_handler", "user_interact")
-        workflow.add_edge("chat", "ai_decision")
-        workflow.add_edge("script_manager", "ai_decision")
-        workflow.add_edge("script_upload_process", "ai_decision")
-        workflow.add_edge("script_generate_process", "ai_decision")
-        workflow.add_edge("report_generation", END)
-        
-        if checkpointer is None:
-            checkpointer = create_checkpointer()
-        return workflow.compile(checkpointer=checkpointer)
+        return _build_scan_graph(checkpointer)
 
 
 class ReportGraph:
@@ -3386,25 +3545,36 @@ class AgentOrchestrator:
                 state,
                 config={"configurable": {"thread_id": session_id}}
             )
-            
-            state = update_state(state, mode="vuln_scan")
-            state = await self.vuln_graph.ainvoke(
-                state,
-                config={"configurable": {"thread_id": session_id}}
-            )
-            
-            state = await self.report_graph.ainvoke(
-                state,
-                config={"configurable": {"thread_id": session_id}}
-            )
-            memory_store.save_session(session_id, state)
-            
-            logger.info(f"[{state.get('task_id')}] 完整扫描流程完成")
-            return state
-            
         except Exception as e:
-            logger.error(f"完整扫描流程失败: {e}")
-            raise
+            logger.error(f"信息收集阶段失败: {e}")
+            state = update_state(state, error=f"信息收集失败: {str(e)}")
+            memory_store.save_session(session_id, state)
+        
+        if not state.get("error"):
+            try:
+                state = update_state(state, mode="vuln_scan")
+                state = await self.vuln_graph.ainvoke(
+                    state,
+                    config={"configurable": {"thread_id": session_id}}
+                )
+            except Exception as e:
+                logger.error(f"漏洞扫描阶段失败: {e}")
+                state = update_state(state, error=f"漏洞扫描失败: {str(e)}")
+                memory_store.save_session(session_id, state)
+        
+        if not state.get("error"):
+            try:
+                state = await self.report_graph.ainvoke(
+                    state,
+                    config={"configurable": {"thread_id": session_id}}
+                )
+            except Exception as e:
+                logger.error(f"报告生成阶段失败: {e}")
+                state = update_state(state, error=f"报告生成失败: {str(e)}")
+        
+        memory_store.save_session(session_id, state)
+        logger.info(f"[{state.get('task_id')}] 完整扫描流程完成")
+        return state
     
     async def run_info_collection(self, state: ScanState, websocket_callback: Callable = None) -> ScanState:
         """仅运行信息收集"""

@@ -301,7 +301,7 @@ def clean_target(target: str) -> str:
     return target
 
 
-def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None) -> Any:
+def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None, llm_params: Dict[str, Any] = None) -> Any:
     """带认证信息的工具调用辅助函数（非强制性）
     
     认证机制为非强制性要求：
@@ -309,10 +309,16 @@ def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None) 
     - 若无有效认证信息，将以未认证模式继续执行
     - 不会因缺少认证而中断流程或抛出阻断性错误
     
+    LLM参数传递机制：
+    - llm_params: LLM通过Function Calling生成的工具调用参数
+    - 这些参数会被合并到工具调用参数中，覆盖默认值
+    - 支持将LLM生成的结构化参数解析为对应工具脚本的变量
+    
     Args:
         tool: LangChain工具实例
         params_or_target: 扫描目标URL(str)或tool_call参数字典(dict)
         state: 包含认证信息的状态字典（可选，无认证信息时忽略）
+        llm_params: LLM生成的工具调用参数（可选，用于传递结构化参数）
         
     Returns:
         工具执行结果（无论是否有认证信息都会返回）
@@ -322,6 +328,11 @@ def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None) 
     else:
         params = dict(params_or_target)
     
+    if llm_params and isinstance(llm_params, dict):
+        for key, value in llm_params.items():
+            if key not in ("target",) and value is not None:
+                params[key] = value
+    
     if state:
         unified_auth = state.get("auth_info", {})
         
@@ -330,22 +341,22 @@ def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None) 
             headers = unified_auth.get("headers", {})
             auth_token = unified_auth.get("token", "")
             
-            if cookies:
+            if cookies and "cookies" not in params:
                 params["cookies"] = cookies
-            if headers:
+            if headers and "headers" not in params:
                 params["headers"] = headers
-            if auth_token:
+            if auth_token and "auth_token" not in params:
                 params["auth_token"] = auth_token
         else:
             cookies = state.get("auth_cookies") or state.get("session_cookies")
             headers = state.get("auth_headers")
             auth_token = state.get("auth_token") or state.get("session_token")
             
-            if cookies:
+            if cookies and "cookies" not in params:
                 params["cookies"] = cookies
-            if headers:
+            if headers and "headers" not in params:
                 params["headers"] = headers
-            if auth_token:
+            if auth_token and "auth_token" not in params:
                 params["auth_token"] = auth_token
     
     return tool.invoke(params)

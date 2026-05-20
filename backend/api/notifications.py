@@ -219,6 +219,8 @@ async def create_notification(notification_data: CreateNotification, user_id: in
             message="创建通知成功",
             data=notification_to_dict(new_notification)
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"创建通知失败: {e}")
         raise HTTPException(status_code=500, detail=f"创建通知失败: {str(e)}")

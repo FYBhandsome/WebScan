@@ -85,7 +85,7 @@ def weakpass_scan(
                 "detailed_evidence": result.detailed_evidence,
                 "metadata": result.metadata
             },
-            "error": result.error_message,
+            "error": result.error_message or "",
             "metadata": {
                 "tool": "weakpass_scan",
                 "target": target,
@@ -97,14 +97,14 @@ def weakpass_scan(
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入weakpass模块失败: {str(e)}",
             "metadata": {"tool": "weakpass_scan", "target": target}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行weakpass_scan工具异常: {str(e)}",
             "metadata": {"tool": "weakpass_scan", "target": target}
         }

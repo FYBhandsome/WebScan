@@ -116,11 +116,22 @@
           </div>
        
           <div class="task-list" id="taskList">
-            <div class="task-item" v-for="(task, index) in tasks" :key="index">
-              <span class="task-dot" :class="task.status"></span>
-              <span class="task-name">{{ task.name }}</span>
-              <span class="task-elapsed">{{ task.elapsed || 'N/A' }}</span>
-              <span class="task-badge" :class="task.status">{{ badgeText(task.status) }}</span>
+            <div class="task-item" v-for="(task, index) in tasks" :key="index" @click="toggleTaskDetails(index)">
+              <div class="task-main">
+                <span class="task-dot" :class="task.status"></span>
+                <span class="task-name">{{ task.name }}</span>
+                <span class="task-elapsed">{{ task.elapsed || 'N/A' }}</span>
+                <span class="task-badge" :class="task.status">{{ badgeText(task.status) }}</span>
+                <span class="task-expand-icon" v-if="task.inputParams && Object.keys(task.inputParams).length > 0">
+                  {{ task.showDetails ? '▼' : '▶' }}
+                </span>
+              </div>
+              <div class="task-details" v-if="task.showDetails && task.inputParams">
+                <div class="detail-row" v-for="(value, key) in task.inputParams" :key="key">
+                  <span class="detail-key">{{ key }}:</span>
+                  <span class="detail-value">{{ value }}</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -258,6 +269,12 @@ const badgeText = (status) => {
     case 'completed': return '已完成'
     case 'error': return '失败'
     default: return status
+  }
+}
+
+const toggleTaskDetails = (index) => {
+  if (tasks.value[index]) {
+    tasks.value[index].showDetails = !tasks.value[index].showDetails
   }
 }
 
@@ -442,6 +459,24 @@ const handleWSMessage = (data) => {
 
     case 'tool_execution_started':
       addTask(data.payload.tool_name || data.payload.tool, 'running')
+      break
+
+    case 'tool_execution_update':
+      const toolName = data.payload.tool_name
+      const toolStatus = data.payload.status
+      const inputParams = data.payload.input_params || {}
+      
+      if (toolStatus === 'started') {
+        addTask(toolName, 'running')
+        const existingTask = tasks.value.find(t => t.name === toolName)
+        if (existingTask) {
+          existingTask.inputParams = inputParams
+        }
+      } else if (toolStatus === 'completed') {
+        updateTaskStatus(toolName, 'completed')
+      } else if (toolStatus === 'failed') {
+        updateTaskStatus(toolName, 'error')
+      }
       break
 
     case 'tool_execution_completed':
@@ -849,15 +884,65 @@ select:focus {
 
 .task-item {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 0;
   padding: 8px 10px;
   border-radius: 0px;
   transition: background 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+  cursor: pointer;
 }
 
 .task-item:hover {
   background: var(--bg-secondary);
+}
+
+.task-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.task-expand-icon {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.task-details {
+  margin-top: 8px;
+  margin-left: 18px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  font-size: 12px;
+  animation: slideDown 0.2s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.detail-row {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.detail-key {
+  color: var(--text-secondary);
+  min-width: 80px;
+}
+
+.detail-value {
+  color: var(--text-primary);
+  word-break: break-all;
 }
 
 .task-dot {

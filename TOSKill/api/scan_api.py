@@ -14,8 +14,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm
-from TOSKill.AI.state import create_initial_state, append_chat, update_state, get_state_summary
+from TOSKill.AI.graph import memory_store, get_llm
+from TOSKill.AI.state import create_initial_state, update_state, get_state_summary
 from TOSKill.AI.tools import (
     TOOL_MAP, get_tool_by_name, get_all_tool_names,
     INFO_COLLECTION_TOOLS, VULN_SCAN_TOOLS, clean_target
@@ -470,9 +470,9 @@ async def api_generate_report(session_id: str):
 async def api_append_chat_message(request: ChatRequest):
     state = _validate_session(request.session_id)
     
-    new_state = append_chat(state, request.role, request.content)
-    memory_store.save_session(request.session_id, new_state)
     memory_store.append_chat(request.session_id, request.role, request.content)
+    new_state = update_state(state, last_activity_time=datetime.now().isoformat())
+    memory_store.save_session(request.session_id, new_state)
     
     return APIResponse(message="消息已添加")
 
@@ -708,9 +708,9 @@ chat_router = APIRouter(prefix="/chat", tags=["聊天兼容"])
 @chat_router.post("/send", response_model=APIResponse)
 async def api_chat_send(request: ChatSendRequest):
     state = _validate_session(request.session_id)
-    new_state = append_chat(state, "user", request.message)
-    memory_store.save_session(request.session_id, new_state)
     memory_store.append_chat(request.session_id, "user", request.message)
+    new_state = update_state(state, last_activity_time=datetime.now().isoformat())
+    memory_store.save_session(request.session_id, new_state)
     return APIResponse(message="消息已发送")
 
 @chat_router.get("/history/{session_id}", response_model=APIResponse)

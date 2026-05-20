@@ -40,7 +40,7 @@ def webside_query(ip: str) -> Dict[str, Any]:
                 "side_sites": result.get("data", []),
                 "total_count": len(result.get("data", []))
             },
-            "error": None if result.get("success") else result.get("message"),
+            "error": "" if result.get("success") else str(result.get("message") or ""),
             "metadata": {
                 "tool": "webside_query",
                 "ip": ip,
@@ -51,14 +51,14 @@ def webside_query(ip: str) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入webside模块失败: {str(e)}",
             "metadata": {"tool": "webside_query", "ip": ip}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行webside_query工具异常: {str(e)}",
             "metadata": {"tool": "webside_query", "ip": ip}
         }

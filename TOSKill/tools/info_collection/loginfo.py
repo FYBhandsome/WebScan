@@ -59,7 +59,7 @@ def log_handler(
                 "file": file,
                 "handlers_count": len(log.handlers)
             },
-            "error": None,
+            "error": "",
             "metadata": {
                 "tool": "log_handler",
                 "log_name": name,
@@ -69,14 +69,14 @@ def log_handler(
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入loginfo模块失败: {str(e)}",
             "metadata": {"tool": "log_handler", "name": name}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行log_handler工具异常: {str(e)}",
             "metadata": {"tool": "log_handler", "name": name}
         }

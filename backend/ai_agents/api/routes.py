@@ -17,14 +17,55 @@ from pydantic import BaseModel, Field
 from enum import Enum
 
 from backend.models import Task
-from backend.api.common import APIResponse
-from backend.task_executor import task_executor
 from ..core.state import AgentState
 from ..agent_config import agent_config
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai_agents", tags=["AI Agents"])
+
+
+class APIResponse(BaseModel):
+    """统一 API 响应模型"""
+    code: int
+    message: str
+    data: Optional[Any] = None
+
+
+class _LazyModule:
+    """延迟导入代理类，支持测试mock"""
+    def __init__(self, import_path):
+        self._import_path = import_path
+        self._module_path = None
+        self._attr_name = None
+        
+        parts = self._import_path.rsplit('.', 1)
+        if len(parts) == 2:
+            self._module_path, self._attr_name = parts
+        else:
+            self._module_path = self._import_path
+    
+    def _load(self):
+        import sys
+        module = sys.modules.get(self._module_path)
+        if module is None:
+            module = __import__(self._module_path, fromlist=[self._attr_name] if self._attr_name else [])
+        
+        if self._attr_name:
+            return getattr(module, self._attr_name)
+        else:
+            return module
+    
+    def __getattr__(self, name):
+        return getattr(self._load(), name)
+    
+    def __call__(self, *args, **kwargs):
+        return self._load()(*args, **kwargs)
+
+
+task_executor = _LazyModule('backend.task_executor.task_executor')
+registry = _LazyModule('backend.ai_agents.tools.registry.registry')
+get_execution_optimizer = _LazyModule('backend.api.workflow_schemas.get_execution_optimizer')
 
 
 class AgentScanRequest(BaseModel):
@@ -159,6 +200,8 @@ async def get_agent_task(task_id: str):
         stages = {}
         graph_flow = None
         final_output = None
+        target_context = {}
+        scan_summary = {}
         
         if task.result:
             try:
@@ -443,8 +486,6 @@ async def list_tools(category: Optional[str] = None) -> APIResponse:
         >>> GET /ai_agents/tools?category=plugin
     """
     try:
-        from ..tools.registry import registry
-        
         tools = registry.list_tools(category=category)
         
         return APIResponse(
@@ -766,7 +807,8 @@ async def get_frozen_tasks():
 
 class POCSearchRequest(BaseModel):
     """POC搜索请求模型"""
-    cve_id: str
+    cve_id: Optional[str] = None
+    keyword: Optional[str] = None
 
 
 class POCExecuteRequest(BaseModel):
@@ -788,23 +830,26 @@ async def search_poc(request: POCSearchRequest):
     """
     搜索POC
     
-    通过CVE编号搜索可用的POC。
+    通过CVE编号或关键词搜索可用的POC。
     
     Args:
-        request: 包含CVE编号的搜索请求
+        request: 包含CVE编号或关键词的搜索请求
         
     Returns:
         APIResponse: POC搜索结果
     """
     try:
-        logger.info(f"[POC_SEARCH] 搜索POC - CVE: {request.cve_id}")
+        search_term = request.cve_id or request.keyword or ""
+        logger.info(f"[POC_SEARCH] 搜索POC - 搜索词: {search_term}")
         
         from backend.ai_agents.poc_system.poc_manager import poc_manager
         
-        poc_infos = await poc_manager.sync_from_seebug(keyword=request.cve_id, limit=10)
+        poc_infos = await poc_manager.sync_from_seebug(keyword=search_term, limit=10)
         
         data = {
+            "search_term": search_term,
             "cve_id": request.cve_id,
+            "keyword": request.keyword,
             "count": len(poc_infos),
             "results": [
                 {
@@ -952,8 +997,6 @@ async def get_execution_metrics(task_id: Optional[str] = None):
     try:
         logger.info(f"[WORKFLOW_METRICS] 获取执行指标 - 任务ID: {task_id}")
         
-        from backend.api.workflow_schemas import get_execution_optimizer
-        
         optimizer = get_execution_optimizer()
         summary = optimizer.get_execution_summary(task_id)
         metrics = optimizer.get_execution_metrics(task_id)
@@ -980,7 +1023,7 @@ async def get_execution_metrics(task_id: Optional[str] = None):
         
     except Exception as e:
         logger.error(f"[WORKFLOW_METRICS_ERROR] 获取执行指标失败 - 错误: {str(e)}")
-        return APIResponse(code=500, message=f"获取执行指标失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取执行指标失败: {str(e)}")
 
 
 # ============ 报告生成 API 端点 ============

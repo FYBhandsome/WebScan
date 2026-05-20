@@ -34,7 +34,7 @@ def cdn_detect(target: str) -> Dict[str, Any]:
         if isinstance(result, str):
             return {
                 "success": False,
-                "data": None,
+                "data": {},
                 "error": result,
                 "metadata": {"tool": "cdn_detect", "target": target}
             }
@@ -45,7 +45,7 @@ def cdn_detect(target: str) -> Dict[str, Any]:
                 "has_cdn": result,
                 "message": "目标使用CDN" if result else "目标未使用CDN"
             },
-            "error": None,
+            "error": "",
             "metadata": {
                 "tool": "cdn_detect",
                 "target": target,
@@ -55,14 +55,14 @@ def cdn_detect(target: str) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入cdnexist模块失败: {str(e)}",
             "metadata": {"tool": "cdn_detect", "target": target}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行cdn_detect工具异常: {str(e)}",
             "metadata": {"tool": "cdn_detect", "target": target}
         }

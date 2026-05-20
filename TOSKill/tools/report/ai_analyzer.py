@@ -511,7 +511,7 @@ def ai_analyzer(
         return {
             "success": True,
             "data": result.to_dict(),
-            "error": None,
+            "error": "",
             "metadata": {
                 "tool": "ai_analyzer",
                 "target": target_context.get("target", "Unknown"),
@@ -524,7 +524,7 @@ def ai_analyzer(
         logger.error(f"AI分析执行失败: {str(e)}")
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"AI分析执行异常: {str(e)}",
             "metadata": {
                 "tool": "ai_analyzer",

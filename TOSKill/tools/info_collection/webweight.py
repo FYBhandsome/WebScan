@@ -37,7 +37,7 @@ def web_weight(domain: str) -> Dict[str, Any]:
                 "result": result.get("result", ""),
                 "raw_data": result.get("raw_data", {})
             },
-            "error": None if result.get("success") else result.get("message"),
+            "error": "" if result.get("success") else str(result.get("message") or ""),
             "metadata": {
                 "tool": "web_weight",
                 "domain": domain,
@@ -47,14 +47,14 @@ def web_weight(domain: str) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入webweight模块失败: {str(e)}",
             "metadata": {"tool": "web_weight", "domain": domain}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行web_weight工具异常: {str(e)}",
             "metadata": {"tool": "web_weight", "domain": domain}
         }

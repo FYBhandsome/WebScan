@@ -21,7 +21,7 @@ from typing import Callable
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import traceback
 
@@ -81,7 +81,7 @@ class APILoggingMiddleware(BaseHTTPMiddleware):
             request_id = str(uuid.uuid4())[:8]
             set_request_id(request_id)
         start_time = time.time()
-        request_timestamp = datetime.utcnow().isoformat() + "Z"
+        request_timestamp = datetime.now(timezone.utc).isoformat()
         
         request_info = {
             "request_id": request_id,

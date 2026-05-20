@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     
     HOST: str = "127.0.0.1"
-    PORT: int = 8888
+    PORT: int = 8899
     
     CORS_ORIGINS: list = ["http://localhost:5173", "http://127.0.0.1:5173"]
     

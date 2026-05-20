@@ -98,6 +98,11 @@ class ScanState(TypedDict, total=False):
     highest_risk_level: NotRequired[str]
     risk_summary: NotRequired[Dict[str, int]]
     skip_remaining_tasks: NotRequired[bool]
+    
+    # 用户交互决策上下文
+    user_chat_context: NotRequired[str]
+    user_directed_params: NotRequired[Dict[str, Any]]
+    user_directed_next_task: NotRequired[str]
 
 
 def create_initial_state(target: str, task_id: str = None, mode: str = "info_collection") -> ScanState:

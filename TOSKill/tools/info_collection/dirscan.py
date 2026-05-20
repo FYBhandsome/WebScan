@@ -39,7 +39,7 @@ def dirscan(target: str, dict_path: Optional[str] = None) -> Dict[str, Any]:
                 "total_scanned": result.get("total_scanned", 0),
                 "found_count": result.get("found_count", 0)
             },
-            "error": None if result.get("code") == 200 else result.get("msg"),
+            "error": "" if result.get("code") == 200 else str(result.get("msg") or ""),
             "metadata": {
                 "tool": "dirscan",
                 "target": target,
@@ -50,14 +50,14 @@ def dirscan(target: str, dict_path: Optional[str] = None) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入dirscan模块失败: {str(e)}",
             "metadata": {"tool": "dirscan", "target": target}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行dirscan工具异常: {str(e)}",
             "metadata": {"tool": "dirscan", "target": target}
         }

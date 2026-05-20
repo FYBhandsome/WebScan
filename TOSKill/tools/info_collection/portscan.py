@@ -35,7 +35,7 @@ def portscan(target: str) -> Dict[str, Any]:
             error_msg = scanner.get_last_error() or "端口扫描执行失败，可能是目标不可达"
             return {
                 "success": False,
-                "data": None,
+                "data": {},
                 "error": error_msg,
                 "metadata": {"tool": "portscan", "target": target}
             }
@@ -49,7 +49,7 @@ def portscan(target: str) -> Dict[str, Any]:
                 "total_count": len(results),
                 "portspoof_detected": "Portspoof:0" in results
             },
-            "error": None,
+            "error": "",
             "metadata": {
                 "tool": "portscan",
                 "target": target,
@@ -60,14 +60,14 @@ def portscan(target: str) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入portscan模块失败: {str(e)}",
             "metadata": {"tool": "portscan", "target": target}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行portscan工具异常: {str(e)}",
             "metadata": {"tool": "portscan", "target": target}
         }

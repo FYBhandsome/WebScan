@@ -24,7 +24,7 @@ class TOSKillSettings(BaseSettings):
     LOG_FILE: str = "logs/toskill.log"
 
 
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "59fada9c8160545dacd8750420d28d74:M2FkMDU4MDM0OTgwMTZlZDk4NWQ1Nzk3")
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://maas-api.cn-huabei-1.xf-yun.com/v2")
     MODEL_ID: str = os.getenv("MODEL_ID", "xop35qwen2b")
     LLM_TEMPERATURE: float = 0.1

@@ -36,7 +36,7 @@ def subdomain(domain: str) -> Dict[str, Any]:
                 "subdomains": subdomains,
                 "total_count": len(subdomains)
             },
-            "error": None if subdomains else f"未找到 {domain} 的子域名",
+            "error": "" if subdomains else f"未找到 {domain} 的子域名",
             "metadata": {
                 "tool": "subdomain",
                 "domain": domain,
@@ -46,14 +46,14 @@ def subdomain(domain: str) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入subdomain模块失败: {str(e)}",
             "metadata": {"tool": "subdomain", "domain": domain}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行subdomain工具异常: {str(e)}",
             "metadata": {"tool": "subdomain", "domain": domain}
         }

@@ -29,128 +29,75 @@ from ..agent_config import agent_config
 logger = logging.getLogger(__name__)
 
 
-def _log_node_entry(node_name: str, task_id: str, details: Dict[str, Any] = None):
-    """
-    记录节点进入日志
-    
-    Args:
-        node_name: 节点名称
-        task_id: 任务ID
-        details: 详细信息
-    """
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    log_msg = f"[{timestamp}] [NODE_ENTRY] 节点: {node_name}, 任务ID: {task_id}"
-    if details:
-        log_msg += f", 详情: {details}"
-    logger.info(log_msg)
-    logger.debug(f"[{timestamp}] [NODE_ENTRY_DEBUG] 节点: {node_name}, 完整详情: {json.dumps(details, ensure_ascii=False, default=str) if details else 'None'}")
+class LogHelper:
+    _CATEGORIES = {
+        "node_entry": ("NODE_ENTRY", "info"),
+        "node_exit": ("NODE_EXIT", "info"),
+        "state_change": ("STATE_CHANGE", "info"),
+        "decision": ("DECISION", "info"),
+        "edge_traversal": ("EDGE_TRAVERSAL", "info"),
+        "error": ("ERROR", "error"),
+        "variable": ("VARIABLE", "debug"),
+    }
+
+    def __init__(self, logger_instance: logging.Logger = None):
+        self._logger = logger_instance or logger
+
+    def _log(self, category: str, task_id: str, message: str, details: Any = None, level: str = None):
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        tag, default_level = self._CATEGORIES.get(category, (category.upper(), "info"))
+        log_level = level or default_level
+        log_msg = f"[{timestamp}] [{tag}] 任务ID: {task_id}, {message}"
+        if details:
+            log_msg += f", 详情: {details}"
+        getattr(self._logger, log_level)(log_msg)
+
+    def _log_debug(self, category: str, task_id: str, message: str, data: Any = None):
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        tag = self._CATEGORIES.get(category, (category.upper(),))[0] + "_DEBUG"
+        data_str = json.dumps(data, ensure_ascii=False, default=str) if data else "None"
+        self._logger.debug(f"[{timestamp}] [{tag}] 任务ID: {task_id}, {message}, 完整数据: {data_str}")
+
+    def node_entry(self, node_name: str, task_id: str, details: Dict[str, Any] = None):
+        self._log("node_entry", task_id, f"节点: {node_name}", details)
+        self._log_debug("node_entry", task_id, f"节点: {node_name}", details)
+
+    def node_exit(self, node_name: str, task_id: str, status: str, details: Dict[str, Any] = None):
+        self._log("node_exit", task_id, f"节点: {node_name}, 状态: {status}", details)
+        self._log_debug("node_exit", task_id, f"节点: {node_name}, 状态: {status}", details)
+
+    def state_change(self, task_id: str, key: str, old_value: Any, new_value: Any):
+        self._log("state_change", task_id, f"键: {key}, 旧值: {old_value}, 新值: {new_value}")
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        self._logger.debug(f"[{timestamp}] [STATE_CHANGE_DEBUG] 任务ID: {task_id}, 键: {key}, 旧值类型: {type(old_value).__name__}, 新值类型: {type(new_value).__name__}")
+
+    def decision(self, task_id: str, decision_type: str, decision: str, reason: str = ""):
+        msg = f"类型: {decision_type}, 决策: {decision}"
+        if reason:
+            msg += f", 原因: {reason}"
+        self._log("decision", task_id, msg)
+
+    def edge_traversal(self, task_id: str, from_node: str, to_node: str, condition: str = "", state_snapshot: Dict[str, Any] = None):
+        msg = f"边: {from_node} → {to_node}"
+        if condition:
+            msg += f", 条件: {condition}"
+        self._log("edge_traversal", task_id, msg)
+        if state_snapshot:
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            self._logger.debug(f"[{timestamp}] [EDGE_STATE_SNAPSHOT] 任务ID: {task_id}, 状态快照: {json.dumps(state_snapshot, ensure_ascii=False, default=str)[:500]}")
+
+    def error(self, task_id: str, node_name: str, error: Exception, context: Dict[str, Any] = None):
+        self._log("error", task_id, f"节点: {node_name}, 错误: {str(error)}", context)
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        self._logger.debug(f"[{timestamp}] [ERROR_DEBUG] 任务ID: {task_id}, 异常类型: {type(error).__name__}, 堆栈: {error.__traceback__}")
+
+    def variable_value(self, task_id: str, node_name: str, var_name: str, var_value: Any, var_type: str = None):
+        value_str = str(var_value)[:100] if var_value is not None else "None"
+        type_str = var_type or type(var_value).__name__ if var_value is not None else "NoneType"
+        self._log("variable", task_id, f"节点: {node_name}, 变量: {var_name}, 值: {value_str}, 类型: {type_str}")
 
 
-def _log_node_exit(node_name: str, task_id: str, status: str, details: Dict[str, Any] = None):
-    """
-    记录节点退出日志
-    
-    Args:
-        node_name: 节点名称
-        task_id: 任务ID
-        status: 退出状态(success/failed/skipped)
-        details: 详细信息
-    """
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    log_msg = f"[{timestamp}] [NODE_EXIT] 节点: {node_name}, 任务ID: {task_id}, 状态: {status}"
-    if details:
-        log_msg += f", 详情: {details}"
-    logger.info(log_msg)
-    logger.debug(f"[{timestamp}] [NODE_EXIT_DEBUG] 节点: {node_name}, 完整详情: {json.dumps(details, ensure_ascii=False, default=str) if details else 'None'}")
-
-
-def _log_state_change(task_id: str, key: str, old_value: Any, new_value: Any):
-    """
-    记录状态变更日志
-    
-    Args:
-        task_id: 任务ID
-        key: 状态键名
-        old_value: 旧值
-        new_value: 新值
-    """
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    logger.info(f"[{timestamp}] [STATE_CHANGE] 任务ID: {task_id}, 键: {key}, 旧值: {old_value}, 新值: {new_value}")
-    logger.debug(f"[{timestamp}] [STATE_CHANGE_DEBUG] 任务ID: {task_id}, 键: {key}, 旧值类型: {type(old_value).__name__}, 新值类型: {type(new_value).__name__}")
-
-
-def _log_decision(task_id: str, decision_type: str, decision: str, reason: str = ""):
-    """
-    记录决策日志
-    
-    Args:
-        task_id: 任务ID
-        decision_type: 决策类型
-        decision: 决策结果
-        reason: 决策原因
-    """
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    log_msg = f"[{timestamp}] [DECISION] 任务ID: {task_id}, 类型: {decision_type}, 决策: {decision}"
-    if reason:
-        log_msg += f", 原因: {reason}"
-    logger.info(log_msg)
-
-
-def _log_edge_traversal(task_id: str, from_node: str, to_node: str, condition: str = "", state_snapshot: Dict[str, Any] = None):
-    """
-    记录边遍历日志
-    
-    Args:
-        task_id: 任务ID
-        from_node: 起始节点
-        to_node: 目标节点
-        condition: 条件说明
-        state_snapshot: 状态快照
-    """
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    log_msg = f"[{timestamp}] [EDGE_TRAVERSAL] 任务ID: {task_id}, 边: {from_node} → {to_node}"
-    if condition:
-        log_msg += f", 条件: {condition}"
-    logger.info(log_msg)
-    if state_snapshot:
-        logger.debug(f"[{timestamp}] [EDGE_STATE_SNAPSHOT] 任务ID: {task_id}, 状态快照: {json.dumps(state_snapshot, ensure_ascii=False, default=str)[:500]}")
-
-
-
-
-def _log_error(task_id: str, node_name: str, error: Exception, context: Dict[str, Any] = None):
-    """
-    记录错误日志
-    
-    Args:
-        task_id: 任务ID
-        node_name: 节点名称
-        error: 异常对象
-        context: 错误上下文
-    """
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    log_msg = f"[{timestamp}] [ERROR] 任务ID: {task_id}, 节点: {node_name}, 错误: {str(error)}"
-    if context:
-        log_msg += f", 上下文: {context}"
-    logger.error(log_msg)
-    logger.debug(f"[{timestamp}] [ERROR_DEBUG] 任务ID: {task_id}, 异常类型: {type(error).__name__}, 堆栈: {error.__traceback__}")
-
-
-def _log_variable_value(task_id: str, node_name: str, var_name: str, var_value: Any, var_type: str = None):
-    """
-    记录变量值日志
-    
-    Args:
-        task_id: 任务ID
-        node_name: 节点名称
-        var_name: 变量名
-        var_value: 变量值
-        var_type: 变量类型
-    """
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    value_str = str(var_value)[:100] if var_value is not None else "None"
-    type_str = var_type or type(var_value).__name__ if var_value is not None else "NoneType"
-    logger.debug(f"[{timestamp}] [VARIABLE] 任务ID: {task_id}, 节点: {node_name}, 变量: {var_name}, 值: {value_str}, 类型: {type_str}")
+log_helper = LogHelper()
 
 
 class ScanAgentGraph:
@@ -189,31 +136,29 @@ class ScanAgentGraph:
         构建LangGraph图 (简化版)
 
         实现简化的工作流:
-        - 环境感知 → 任务规划 → 工具执行
+        - 任务规划 → 工具执行
         - 工具执行 → 结果验证 → 循环/漏洞分析
         - 漏洞分析 → 报告生成 → 结束
 
         Returns:
             StateGraph: 编译后的图
         """
-        _log_node_entry("_build_graph", "GRAPH_BUILD", {"total_nodes": 6})
+        log_helper.node_entry("_build_graph", "GRAPH_BUILD", {"total_nodes": 5})
 
         # 创建状态图
         workflow = StateGraph(AgentState)
 
         # 添加核心节点
-        workflow.add_node("environment_awareness", self.env_awareness_node)
         workflow.add_node("task_planning", self.planning_node)
         workflow.add_node("tool_execution", self.execution_node)
         workflow.add_node("result_verification", self.verification_node)
         workflow.add_node("vulnerability_analysis", self.analysis_node)
         workflow.add_node("report_generation", self.report_node)
 
-        # 设置入口点:从环境感知开始
-        workflow.set_entry_point("environment_awareness")
+        # 设置入口点:从任务规划开始
+        workflow.set_entry_point("task_planning")
 
-        # 基础流程:环境感知 → 任务规划 → 工具执行
-        workflow.add_edge("environment_awareness", "task_planning")
+        # 基础流程:任务规划 → 工具执行
         workflow.add_edge("task_planning", "tool_execution")
 
         # 工具流程:执行→验证→循环/分析
@@ -232,7 +177,7 @@ class ScanAgentGraph:
         workflow.add_edge("report_generation", END)
 
         logger.info("📊 LangGraph图边定义完成")
-        _log_node_exit("_build_graph", "GRAPH_BUILD", "success", {"nodes_count": 6, "edges_count": 6})
+        log_helper.node_exit("_build_graph", "GRAPH_BUILD", "success", {"nodes_count": 5, "edges_count": 5})
         return workflow
     
     def _should_continue_or_verify(self, state: AgentState) -> Literal["continue", "analyze"]:
@@ -249,18 +194,18 @@ class ScanAgentGraph:
         tool_round_key = "_tool_execution_rounds"
         current_round = state.target_context.get(tool_round_key, 0)
 
-        _log_variable_value(state.task_id, "_should_continue_or_verify", "current_round", current_round)
-        _log_variable_value(state.task_id, "_should_continue_or_verify", "planned_tasks", state.planned_tasks)
+        log_helper.variable_value(state.task_id, "_should_continue_or_verify", "current_round", current_round)
+        log_helper.variable_value(state.task_id, "_should_continue_or_verify", "planned_tasks", state.planned_tasks)
 
         if current_round >= max_tool_rounds:
             logger.warning(f"[{state.task_id}] ⚠️ 已达到工具执行最大轮次({max_tool_rounds}),强制进入分析阶段")
-            _log_edge_traversal(
+            log_helper.edge_traversal(
                 task_id=state.task_id,
                 from_node="result_verification",
                 to_node="vulnerability_analysis",
                 condition=f"max_rounds_reached={max_tool_rounds}"
             )
-            _log_decision(
+            log_helper.decision(
                 task_id=state.task_id,
                 decision_type="SHOULD_CONTINUE",
                 decision="analyze",
@@ -269,17 +214,17 @@ class ScanAgentGraph:
             return "analyze"
 
         state.target_context[tool_round_key] = current_round + 1
-        _log_state_change(state.task_id, tool_round_key, current_round, current_round + 1)
+        log_helper.state_change(state.task_id, tool_round_key, current_round, current_round + 1)
 
         if state.planned_tasks:
             logger.info(f"[{state.task_id}] 🔄 继续执行工具: {state.planned_tasks[0]}")
-            _log_edge_traversal(
+            log_helper.edge_traversal(
                 task_id=state.task_id,
                 from_node="result_verification",
                 to_node="tool_execution",
                 condition=f"next_task={state.planned_tasks[0]}"
             )
-            _log_decision(
+            log_helper.decision(
                 task_id=state.task_id,
                 decision_type="SHOULD_CONTINUE",
                 decision="continue",
@@ -288,13 +233,13 @@ class ScanAgentGraph:
             return "continue"
 
         logger.info(f"[{state.task_id}] 📋 所有任务已完成,进入分析阶段")
-        _log_edge_traversal(
+        log_helper.edge_traversal(
             task_id=state.task_id,
             from_node="result_verification",
             to_node="vulnerability_analysis",
             condition="all_tasks_completed"
         )
-        _log_decision(
+        log_helper.decision(
             task_id=state.task_id,
             decision_type="SHOULD_CONTINUE",
             decision="analyze",
@@ -312,7 +257,7 @@ class ScanAgentGraph:
         Returns:
             StateGraph: 信息收集子图
         """
-        _log_node_entry("_build_info_collection_graph", "SUBGRAPH_BUILD", {"total_nodes": 4})
+        log_helper.node_entry("_build_info_collection_graph", "SUBGRAPH_BUILD", {"total_nodes": 4})
 
         from .nodes import (
             EnvironmentAwarenessNode,
@@ -347,7 +292,7 @@ class ScanAgentGraph:
         )
 
         logger.info("📊 信息收集子图构建完成 (4节点)")
-        _log_node_exit("_build_info_collection_graph", "SUBGRAPH_BUILD", "success", {"nodes_count": 4, "edges_count": 4})
+        log_helper.node_exit("_build_info_collection_graph", "SUBGRAPH_BUILD", "success", {"nodes_count": 4, "edges_count": 4})
         return workflow
 
     def _should_continue_info_collection(self, state: AgentState) -> str:
@@ -373,7 +318,7 @@ class ScanAgentGraph:
         Returns:
             StateGraph: 漏洞扫描子图
         """
-        _log_node_entry("_build_vuln_scan_graph", "SUBGRAPH_BUILD", {"total_nodes": 3})
+        log_helper.node_entry("_build_vuln_scan_graph", "SUBGRAPH_BUILD", {"total_nodes": 3})
 
         from .nodes import (
             VulnScanPlanningNode,
@@ -404,7 +349,7 @@ class ScanAgentGraph:
         workflow.add_edge("vuln_result_aggregation", END)
 
         logger.info("📊 漏洞扫描子图构建完成 (3节点)")
-        _log_node_exit("_build_vuln_scan_graph", "SUBGRAPH_BUILD", "success", {"nodes_count": 3, "edges_count": 3})
+        log_helper.node_exit("_build_vuln_scan_graph", "SUBGRAPH_BUILD", "success", {"nodes_count": 3, "edges_count": 3})
         return workflow
 
     def _should_continue_vuln_scan(self, state: AgentState) -> str:
@@ -430,7 +375,7 @@ class ScanAgentGraph:
         Returns:
             StateGraph: POC验证子图
         """
-        _log_node_entry("_build_poc_verification_graph", "SUBGRAPH_BUILD", {"total_nodes": 3})
+        log_helper.node_entry("_build_poc_verification_graph", "SUBGRAPH_BUILD", {"total_nodes": 3})
 
         from .nodes import (
             PocTaskPlanningNode,
@@ -461,7 +406,7 @@ class ScanAgentGraph:
         )
 
         logger.info("📊 POC验证子图构建完成 (3节点)")
-        _log_node_exit("_build_poc_verification_graph", "SUBGRAPH_BUILD", "success", {"nodes_count": 3, "edges_count": 4})
+        log_helper.node_exit("_build_poc_verification_graph", "SUBGRAPH_BUILD", "success", {"nodes_count": 3, "edges_count": 4})
         return workflow
 
     def _should_continue_poc_verification(self, state: AgentState) -> str:
@@ -487,7 +432,7 @@ class ScanAgentGraph:
         Returns:
             StateGraph: 结果分析子图
         """
-        _log_node_entry("_build_result_analysis_graph", "SUBGRAPH_BUILD", {"total_nodes": 2})
+        log_helper.node_entry("_build_result_analysis_graph", "SUBGRAPH_BUILD", {"total_nodes": 2})
 
         workflow = StateGraph(AgentState)
 
@@ -499,7 +444,7 @@ class ScanAgentGraph:
         workflow.add_edge("report_generation", END)
 
         logger.info("📊 结果分析子图构建完成")
-        _log_node_exit("_build_result_analysis_graph", "SUBGRAPH_BUILD", "success", {"nodes_count": 2, "edges_count": 2})
+        log_helper.node_exit("_build_result_analysis_graph", "SUBGRAPH_BUILD", "success", {"nodes_count": 2, "edges_count": 2})
         return workflow
 
     def get_info_collection_graph(self):
@@ -567,7 +512,7 @@ class ScanAgentGraph:
             AgentState: 执行后的状态
         """
         logger.info(f"🚀 开始执行信息收集子图: {initial_state.task_id}")
-        _log_node_entry("invoke_info_collection", initial_state.task_id, {"target": initial_state.target})
+        log_helper.node_entry("invoke_info_collection", initial_state.task_id, {"target": initial_state.target})
         
         try:
             compiled_graph = self.compile_info_collection()
@@ -578,14 +523,14 @@ class ScanAgentGraph:
                 final_state = AgentState.from_dict(final_state)
             
             logger.info(f"✅ 信息收集子图执行完成: {final_state.task_id}")
-            _log_node_exit("invoke_info_collection", initial_state.task_id, "success", {
+            log_helper.node_exit("invoke_info_collection", initial_state.task_id, "success", {
                 "planned_tasks": final_state.planned_tasks
             })
             
             return final_state
         except Exception as e:
             logger.error(f"❌ 信息收集子图执行失败: {initial_state.task_id}, 错误: {str(e)}")
-            _log_error(initial_state.task_id, "invoke_info_collection", e, {"target": initial_state.target})
+            log_helper.error(initial_state.task_id, "invoke_info_collection", e, {"target": initial_state.target})
             raise
 
     async def invoke_vulnerability_scan(self, initial_state: AgentState) -> AgentState:
@@ -599,7 +544,7 @@ class ScanAgentGraph:
             AgentState: 执行后的状态
         """
         logger.info(f"🚀 开始执行漏洞扫描子图: {initial_state.task_id}")
-        _log_node_entry("invoke_vulnerability_scan", initial_state.task_id, {"target": initial_state.target})
+        log_helper.node_entry("invoke_vulnerability_scan", initial_state.task_id, {"target": initial_state.target})
         
         try:
             compiled_graph = self.compile_vulnerability_scan()
@@ -610,7 +555,7 @@ class ScanAgentGraph:
                 final_state = AgentState.from_dict(final_state)
             
             logger.info(f"✅ 漏洞扫描子图执行完成: {final_state.task_id}")
-            _log_node_exit("invoke_vulnerability_scan", initial_state.task_id, "success", {
+            log_helper.node_exit("invoke_vulnerability_scan", initial_state.task_id, "success", {
                 "completed_tasks": len(final_state.completed_tasks),
                 "vulnerabilities_found": len(final_state.vulnerabilities)
             })
@@ -618,7 +563,7 @@ class ScanAgentGraph:
             return final_state
         except Exception as e:
             logger.error(f"❌ 漏洞扫描子图执行失败: {initial_state.task_id}, 错误: {str(e)}")
-            _log_error(initial_state.task_id, "invoke_vulnerability_scan", e, {"target": initial_state.target})
+            log_helper.error(initial_state.task_id, "invoke_vulnerability_scan", e, {"target": initial_state.target})
             raise
 
     async def invoke_vuln_scan(self, initial_state: AgentState) -> AgentState:
@@ -632,7 +577,7 @@ class ScanAgentGraph:
             AgentState: 执行后的状态
         """
         logger.info(f"🚀 开始执行漏洞扫描子图: {initial_state.task_id}")
-        _log_node_entry("invoke_vuln_scan", initial_state.task_id, {"target": initial_state.target})
+        log_helper.node_entry("invoke_vuln_scan", initial_state.task_id, {"target": initial_state.target})
         
         try:
             compiled_graph = self._build_vuln_scan_graph().compile()
@@ -643,14 +588,14 @@ class ScanAgentGraph:
                 final_state = AgentState.from_dict(final_state)
             
             logger.info(f"✅ 漏洞扫描子图执行完成: {final_state.task_id}")
-            _log_node_exit("invoke_vuln_scan", initial_state.task_id, "success", {
+            log_helper.node_exit("invoke_vuln_scan", initial_state.task_id, "success", {
                 "vulnerabilities_found": len(final_state.vulnerabilities)
             })
             
             return final_state
         except Exception as e:
             logger.error(f"❌ 漏洞扫描子图执行失败: {initial_state.task_id}, 错误: {str(e)}")
-            _log_error(initial_state.task_id, "invoke_vuln_scan", e, {"target": initial_state.target})
+            log_helper.error(initial_state.task_id, "invoke_vuln_scan", e, {"target": initial_state.target})
             raise
 
     async def invoke_poc_verification(self, initial_state: AgentState) -> AgentState:
@@ -664,7 +609,7 @@ class ScanAgentGraph:
             AgentState: 执行后的状态
         """
         logger.info(f"🚀 开始执行POC验证子图: {initial_state.task_id}")
-        _log_node_entry("invoke_poc_verification", initial_state.task_id, {"target": initial_state.target})
+        log_helper.node_entry("invoke_poc_verification", initial_state.task_id, {"target": initial_state.target})
         
         try:
             compiled_graph = self._build_poc_verification_graph().compile()
@@ -675,14 +620,14 @@ class ScanAgentGraph:
                 final_state = AgentState.from_dict(final_state)
             
             logger.info(f"✅ POC验证子图执行完成: {final_state.task_id}")
-            _log_node_exit("invoke_poc_verification", initial_state.task_id, "success", {
+            log_helper.node_exit("invoke_poc_verification", initial_state.task_id, "success", {
                 "completed_tasks": len(final_state.completed_tasks)
             })
             
             return final_state
         except Exception as e:
             logger.error(f"❌ POC验证子图执行失败: {initial_state.task_id}, 错误: {str(e)}")
-            _log_error(initial_state.task_id, "invoke_poc_verification", e, {"target": initial_state.target})
+            log_helper.error(initial_state.task_id, "invoke_poc_verification", e, {"target": initial_state.target})
             raise
 
     async def invoke_result_analysis(self, initial_state: AgentState) -> AgentState:
@@ -696,7 +641,7 @@ class ScanAgentGraph:
             AgentState: 执行后的状态
         """
         logger.info(f"🚀 开始执行结果分析子图: {initial_state.task_id}")
-        _log_node_entry("invoke_result_analysis", initial_state.task_id, {"target": initial_state.target})
+        log_helper.node_entry("invoke_result_analysis", initial_state.task_id, {"target": initial_state.target})
         
         try:
             compiled_graph = self.compile_result_analysis()
@@ -707,14 +652,14 @@ class ScanAgentGraph:
                 final_state = AgentState.from_dict(final_state)
             
             logger.info(f"✅ 结果分析子图执行完成: {final_state.task_id}")
-            _log_node_exit("invoke_result_analysis", initial_state.task_id, "success", {
+            log_helper.node_exit("invoke_result_analysis", initial_state.task_id, "success", {
                 "vulnerabilities": len(final_state.vulnerabilities)
             })
             
             return final_state
         except Exception as e:
             logger.error(f"❌ 结果分析子图执行失败: {initial_state.task_id}, 错误: {str(e)}")
-            _log_error(initial_state.task_id, "invoke_result_analysis", e, {"target": initial_state.target})
+            log_helper.error(initial_state.task_id, "invoke_result_analysis", e, {"target": initial_state.target})
             raise
 
     async def invoke_subgraphs_sequential(self, initial_state: AgentState) -> AgentState:
@@ -734,7 +679,7 @@ class ScanAgentGraph:
             AgentState: 最终状态
         """
         logger.info(f"🚀 开始依次执行所有子图: {initial_state.task_id}")
-        _log_node_entry("invoke_subgraphs_sequential", initial_state.task_id, {"target": initial_state.target})
+        log_helper.node_entry("invoke_subgraphs_sequential", initial_state.task_id, {"target": initial_state.target})
         
         try:
             state1 = await self.invoke_info_collection(initial_state)
@@ -749,7 +694,7 @@ class ScanAgentGraph:
             final_state = await self.invoke_result_analysis(state3)
             
             logger.info(f"✅ 所有子图依次执行完成: {getattr(final_state, 'task_id', initial_state.task_id)}")
-            _log_node_exit("invoke_subgraphs_sequential", initial_state.task_id, "success", {
+            log_helper.node_exit("invoke_subgraphs_sequential", initial_state.task_id, "success", {
                 "completed_tasks": len(getattr(final_state, 'completed_tasks', [])),
                 "vulnerabilities_found": len(getattr(final_state, 'vulnerabilities', []))
             })
@@ -757,7 +702,7 @@ class ScanAgentGraph:
             return final_state
         except Exception as e:
             logger.error(f"❌ 子图依次执行失败: {initial_state.task_id}, 错误: {str(e)}")
-            _log_error(initial_state.task_id, "invoke_subgraphs_sequential", e, {"target": initial_state.target})
+            log_helper.error(initial_state.task_id, "invoke_subgraphs_sequential", e, {"target": initial_state.target})
             raise
 
     def compile(self):
@@ -784,7 +729,7 @@ class ScanAgentGraph:
             AgentState: 最终状态
         """
         logger.info(f"🚀 开始执行Agent工作流: {initial_state.task_id}, 执行模式: {'子图顺序执行' if self.use_subgraph_execution else '统一图执行'}")
-        _log_node_entry("invoke", initial_state.task_id, {
+        log_helper.node_entry("invoke", initial_state.task_id, {
             "target": initial_state.target,
             "execution_mode": "subgraph_sequential" if self.use_subgraph_execution else "unified_graph"
         })
@@ -806,7 +751,7 @@ class ScanAgentGraph:
             errors = getattr(final_state, 'errors', [])
             
             logger.info(f"✅ Agent工作流执行完成: {task_id}, 执行模式: {'子图顺序执行' if self.use_subgraph_execution else '统一图执行'}")
-            _log_node_exit("invoke", initial_state.task_id, "success", {
+            log_helper.node_exit("invoke", initial_state.task_id, "success", {
                 "completed_tasks": len(completed_tasks),
                 "vulnerabilities_found": len(vulnerabilities),
                 "errors_count": len(errors),
@@ -816,7 +761,7 @@ class ScanAgentGraph:
             return final_state
         except Exception as e:
             logger.error(f"❌ Agent工作流执行失败: {initial_state.task_id}, 错误: {str(e)}")
-            _log_error(initial_state.task_id, "invoke", e, {"target": initial_state.target})
+            log_helper.error(initial_state.task_id, "invoke", e, {"target": initial_state.target})
             raise
     
 

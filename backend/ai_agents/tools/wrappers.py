@@ -353,8 +353,7 @@ def with_timeout_and_error_handling(
             
             try:
                 if asyncio.iscoroutinefunction(func):
-                    loop = asyncio.get_event_loop()
-                    result = loop.run_until_complete(
+                    result = asyncio.run(
                         asyncio.wait_for(
                             func(*args, timeout=actual_timeout, progress_callback=progress_callback, **kwargs),
                             timeout=actual_timeout

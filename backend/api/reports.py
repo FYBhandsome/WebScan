@@ -30,6 +30,11 @@ class ReportCreate(BaseModel):
     name: str = Field(..., description="报告名称")
     format: str = Field(default="json", description="报告格式")
     include_ai_analysis: bool = Field(default=True, description="是否包含AI分析")
+    include_summary: bool = Field(default=True, description="是否包含摘要")
+    include_vulnerabilities: bool = Field(default=True, description="是否包含漏洞详情")
+    include_recommendations: bool = Field(default=True, description="是否包含修复建议")
+    include_charts: bool = Field(default=False, description="是否包含图表")
+    include_appendix: bool = Field(default=False, description="是否包含附录")
 
 
 class ReportUpdate(BaseModel):
@@ -335,7 +340,13 @@ async def export_report(
         
         if "summary" in content:
             from backend.services.report_service import ReportSummary
-            report_data.summary = ReportSummary(**content["summary"])
+            summary_data = dict(content["summary"])
+            if "critical" in summary_data and "critical_count" not in summary_data:
+                summary_data["critical_count"] = summary_data.pop("critical")
+            report_data.summary = ReportSummary(**{
+                k: v for k, v in summary_data.items()
+                if k in {"total_vulnerabilities", "critical_count", "high_count", "medium_count", "low_count", "info_count", "vulnerability_rate"}
+            })
         
         if "risk_assessment" in content:
             from backend.services.report_service import RiskAssessment
@@ -343,7 +354,11 @@ async def export_report(
         
         if "ai_analysis" in content:
             from backend.services.report_service import AIAnalysisData
-            report_data.ai_analysis = AIAnalysisData(**content["ai_analysis"])
+            ai_data = dict(content["ai_analysis"])
+            report_data.ai_analysis = AIAnalysisData(**{
+                k: v for k, v in ai_data.items()
+                if k in {"summary", "risk_level", "causes", "risks", "priorities", "recommendations"}
+            })
         
         format_lower = format.lower()
         

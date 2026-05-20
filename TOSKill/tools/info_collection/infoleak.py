@@ -44,7 +44,7 @@ def infoleak_scan(target: str) -> Dict[str, Any]:
                 "grouped_results": grouped_results,
                 "total_count": len(risk_links)
             },
-            "error": None,
+            "error": "",
             "metadata": {
                 "tool": "infoleak_scan",
                 "target": target,
@@ -55,14 +55,14 @@ def infoleak_scan(target: str) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入infoleak模块失败: {str(e)}",
             "metadata": {"tool": "infoleak_scan", "target": target}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行infoleak_scan工具异常: {str(e)}",
             "metadata": {"tool": "infoleak_scan", "target": target}
         }

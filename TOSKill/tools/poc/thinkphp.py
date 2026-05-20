@@ -56,7 +56,7 @@ def thinkphp_rce(target: str, timeout: int = 10) -> Dict[str, Any]:
                             "payload": payload,
                             "path": path
                         },
-                        "error": None,
+                        "error": "",
                         "metadata": {
                             "tool": "thinkphp_rce",
                             "target": target,
@@ -72,7 +72,7 @@ def thinkphp_rce(target: str, timeout: int = 10) -> Dict[str, Any]:
                 "vulnerable": False,
                 "target": target_url
             },
-            "error": None,
+            "error": "",
             "metadata": {
                 "tool": "thinkphp_rce",
                 "target": target
@@ -81,14 +81,14 @@ def thinkphp_rce(target: str, timeout: int = 10) -> Dict[str, Any]:
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入requests模块失败: {str(e)}",
             "metadata": {"tool": "thinkphp_rce", "target": target}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行thinkphp_rce工具异常: {str(e)}",
             "metadata": {"tool": "thinkphp_rce", "target": target}
         }

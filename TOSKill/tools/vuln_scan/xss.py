@@ -96,7 +96,7 @@ def xss_scan(
                 "detailed_evidence": result.detailed_evidence,
                 "metadata": result.metadata
             },
-            "error": result.error_message,
+            "error": result.error_message or "",
             "metadata": {
                 "tool": "xss_scan",
                 "target": target,
@@ -107,14 +107,14 @@ def xss_scan(
     except ImportError as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"导入xss模块失败: {str(e)}",
             "metadata": {"tool": "xss_scan", "target": target}
         }
     except Exception as e:
         return {
             "success": False,
-            "data": None,
+            "data": {},
             "error": f"执行xss_scan工具异常: {str(e)}",
             "metadata": {"tool": "xss_scan", "target": target}
         }

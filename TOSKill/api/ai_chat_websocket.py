@@ -13,7 +13,7 @@ from uuid import uuid4
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
-from TOSKill.AI.state import create_initial_state, append_chat, update_state
+from TOSKill.AI.state import create_initial_state, update_state
 from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm as _get_llm
 from TOSKill.AI.core import CHAT_SYSTEM_PROMPT
 from TOSKill.AI.tools import get_tool_by_name, get_all_tool_names
@@ -31,10 +31,13 @@ SCAN_MODE_MAP = {"info": "info_collection", "vuln": "vuln_scan", "full": "full_s
 class AIChatManager:
     """AI对话连接管理器"""
     
+    CONFIRM_DEBOUNCE_SECONDS = 2
+    
     def __init__(self):
         self.connections: Dict[str, WebSocket] = {}
         self.tasks: Dict[str, asyncio.Task] = {}
         self.llm = None
+        self._last_confirm_time: Dict[str, float] = {}
     
     def _get_llm(self):
         if not self.llm:
@@ -45,23 +48,66 @@ class AIChatManager:
         await websocket.accept()
         session_id = session_id or str(uuid4())[:8]
         self.connections[session_id] = websocket
-        memory_store.save_session(session_id, create_initial_state(target="", task_id=session_id))
+        
+        existing_state = memory_store.get_session(session_id)
+        if existing_state:
+            pass
+        else:
+            memory_store.save_session(session_id, create_initial_state(target="", task_id=session_id))
+        
+        async def _ws_callback(message: Dict):
+            await self._send(session_id, message)
+        
+        memory_store.set_websocket_callback(session_id, _ws_callback)
         
         log_info("WebSocket连接建立", category="api", node="ai_chat", session_id=session_id,
-                 details={"client_ip": websocket.client.host if websocket.client else "unknown"})
+                 details={"client_ip": websocket.client.host if websocket.client else "unknown", "reconnected": existing_state is not None})
+        
+        reconnect_payload = {
+            "session_id": session_id, 
+            "available_tools": get_all_tool_names()
+        }
+        
+        if existing_state:
+            reconnect_payload["reconnected"] = True
+            reconnect_payload["state"] = {
+                "task_id": existing_state.get("task_id", ""),
+                "target": existing_state.get("target", ""),
+                "mode": existing_state.get("mode", ""),
+                "completed_tasks": existing_state.get("completed_tasks", []),
+                "is_complete": existing_state.get("is_complete", False)
+            }
+            pending = memory_store.get_pending_interaction(session_id)
+            if pending:
+                reconnect_payload["pending_interaction"] = pending
         
         await self._send(session_id, {
             "type": "connected",
-            "payload": {"session_id": session_id, "available_tools": get_all_tool_names()}
+            "payload": reconnect_payload
         })
+        
+        if existing_state:
+            pending_msgs = existing_state.get("_pending_ws_messages", [])
+            if pending_msgs:
+                logger.info(f"[{session_id}] 重连后重放 {len(pending_msgs)} 条缓存消息")
+                for msg in pending_msgs:
+                    try:
+                        await self._send(session_id, msg)
+                    except Exception as e:
+                        logger.error(f"[{session_id}] 重放消息失败: {e}")
+                        break
+                memory_store.update_session(session_id, _pending_ws_messages=[])
         return session_id
     
     def disconnect(self, session_id: str):
         self.connections.pop(session_id, None)
+        memory_store.clear_websocket_callback(session_id)
         if session_id in self.tasks:
-            task = self.tasks.pop(session_id)
+            task = self.tasks[session_id]
             if not task.done():
-                task.cancel()
+                logger.info(f"[{session_id}] WebSocket断开，扫描任务继续运行(后台)")
+            else:
+                self.tasks.pop(session_id, None)
     
     async def _send(self, session_id: str, message: Dict):
         if ws := self.connections.get(session_id):
@@ -113,11 +159,16 @@ class AIChatManager:
             "tool_rejected": self._handle_tool_rejected,
             "alternative_selected": self._handle_alternative_selected,
             "task_error": self._handle_task_error,
+            "ping": self._handle_ping,
         }
         
         if handler := handlers.get(msg_type):
             logger.info(f"[{session_id}] 调用处理器: {handler.__name__}")
-            await handler(session_id, payload)
+            try:
+                await handler(session_id, payload)
+            except Exception as e:
+                logger.error(f"[{session_id}] 处理器 {handler.__name__} 异常: {e}", exc_info=True)
+                await self._send_error(session_id, f"处理请求失败: {str(e)}")
         else:
             logger.warning(f"[{session_id}] 未知消息类型: {msg_type}")
     
@@ -126,10 +177,18 @@ class AIChatManager:
         memory_store.append_chat(session_id, "user", content)
         state = memory_store.get_session(session_id)
         if state:
-            memory_store.save_session(session_id, append_chat(state, "user", content))
+            memory_store.save_session(session_id, update_state(state, last_activity_time=datetime.now().isoformat()))
         await self._send(session_id, {"type": "user_message_received", "payload": {"content": content}})
     
     async def _handle_user_confirm(self, session_id: str, payload: Dict):
+        import time
+        now = time.time()
+        last_time = self._last_confirm_time.get(session_id, 0)
+        if now - last_time < self.CONFIRM_DEBOUNCE_SECONDS:
+            logger.warning(f"[{session_id}] 用户确认请求过于频繁，已忽略 (间隔: {now - last_time:.1f}s)")
+            return
+        self._last_confirm_time[session_id] = now
+        
         choice = payload.get("choice", "confirm")
         
         orchestrator = get_agent_orchestrator()
@@ -561,6 +620,14 @@ class AIChatManager:
     
     async def _handle_high_risk_confirm(self, session_id: str, payload: Dict):
         """处理高危漏洞确认"""
+        import time
+        now = time.time()
+        last_time = self._last_confirm_time.get(f"{session_id}_risk", 0)
+        if now - last_time < self.CONFIRM_DEBOUNCE_SECONDS:
+            logger.warning(f"[{session_id}] 高危确认请求过于频繁，已忽略")
+            return
+        self._last_confirm_time[f"{session_id}_risk"] = now
+        
         choice = payload.get("choice", "continue")
         
         state = memory_store.get_session(session_id)
@@ -581,6 +648,14 @@ class AIChatManager:
         logger.info(f"[{session_id}] 高危漏洞确认: {choice}")
 
     async def _handle_tool_confirmed(self, session_id: str, payload: Dict):
+        import time
+        now = time.time()
+        last_time = self._last_confirm_time.get(f"{session_id}_tool", 0)
+        if now - last_time < self.CONFIRM_DEBOUNCE_SECONDS:
+            logger.warning(f"[{session_id}] 工具确认请求过于频繁，已忽略")
+            return
+        self._last_confirm_time[f"{session_id}_tool"] = now
+        
         orchestrator = get_agent_orchestrator()
         await orchestrator._ensure_initialized()
 
@@ -600,6 +675,14 @@ class AIChatManager:
                 await self._send_error(session_id, f"恢复工作流失败: {str(e)}")
 
     async def _handle_tool_rejected(self, session_id: str, payload: Dict):
+        import time
+        now = time.time()
+        last_time = self._last_confirm_time.get(f"{session_id}_reject", 0)
+        if now - last_time < self.CONFIRM_DEBOUNCE_SECONDS:
+            logger.warning(f"[{session_id}] 工具拒绝请求过于频繁，已忽略")
+            return
+        self._last_confirm_time[f"{session_id}_reject"] = now
+        
         orchestrator = get_agent_orchestrator()
         await orchestrator._ensure_initialized()
 
@@ -681,6 +764,9 @@ class AIChatManager:
             }
         })
 
+    async def _handle_ping(self, session_id: str, payload: Dict):
+        await self._send(session_id, {"type": "pong", "payload": {}})
+
 
 manager = AIChatManager()
 
@@ -689,7 +775,8 @@ manager = AIChatManager()
 async def websocket_endpoint(websocket: WebSocket):
     session_id = None
     try:
-        session_id = await manager.connect(websocket)
+        query_session_id = websocket.query_params.get("session_id")
+        session_id = await manager.connect(websocket, session_id=query_session_id)
         while True:
             try:
                 data = await websocket.receive_json()

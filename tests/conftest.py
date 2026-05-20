@@ -325,6 +325,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "workflow: marks tests as workflow tests"
     )
+    config.addinivalue_line(
+        "markers", "toskill: marks tests that require TOSKill mock server"
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -336,3 +339,32 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.integration)
         if "unit" in item.keywords:
             item.add_marker(pytest.mark.unit)
+
+
+@pytest.fixture(scope="session")
+def mock_toskill_server():
+    """
+    启动 TOSKill 模拟服务器 (端口 8081)
+    
+    用于 TOSKill 桥接测试，当真实 TOSKill 服务未运行时提供模拟数据。
+    session 级别：整个测试会话只启动一次。
+    """
+    import socket
+
+    def _port_in_use(host, port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.1)
+            return s.connect_ex((host, port)) == 0
+
+    if _port_in_use("127.0.0.1", 8081):
+        yield "http://127.0.0.1:8081"
+        return
+
+    from tests.mock_toskill_server import MockTOSKillServer
+
+    server = MockTOSKillServer(host="127.0.0.1", port=8081)
+    server.start()
+
+    yield server.base_url
+
+    server.stop()

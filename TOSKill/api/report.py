@@ -171,3 +171,63 @@ async def get_report_content(filename: str) -> APIResponse:
     except Exception as e:
         logger.error(f"读取报告失败: {e}")
         raise HTTPException(status_code=500, detail=f"读取失败: {str(e)}")
+
+
+@router.get("/{filename}/preview", response_model=APIResponse)
+async def preview_report(filename: str) -> APIResponse:
+    """预览报告（返回内容+统计信息）"""
+    file_path = validate_report_path(filename)
+    
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        is_html = filename.endswith('.html')
+        
+        preview_data = {
+            "filename": filename,
+            "is_html": is_html,
+            "content": content,
+            "size": file_path.stat().st_size,
+            "created_at": datetime.fromtimestamp(file_path.stat().st_ctime).isoformat(),
+            "download_url": f"/api/reports/download/{filename}"
+        }
+        
+        return APIResponse(data=preview_data)
+    except Exception as e:
+        logger.error(f"预览报告失败: {e}")
+        raise HTTPException(status_code=500, detail=f"预览失败: {str(e)}")
+
+
+@router.get("/stats/summary", response_model=APIResponse)
+async def get_report_stats() -> APIResponse:
+    """获取报告统计摘要"""
+    ensure_reports_dir()
+    
+    reports = []
+    total_size = 0
+    formats = {}
+    
+    for ext in REPORT_EXTENSIONS:
+        for file_path in REPORTS_DIR.glob(ext):
+            info = build_report_info(file_path)
+            reports.append(info)
+            total_size += info["size"]
+            fmt = file_path.suffix.lower().replace(".", "")
+            formats[fmt] = formats.get(fmt, 0) + 1
+    
+    try:
+        from TOSKill.tools.report.report_manager import get_report_manager
+        rm = get_report_manager()
+        mapping_count = len(rm.get_all_reports())
+    except Exception:
+        mapping_count = 0
+    
+    return APIResponse(data={
+        "total_reports": len(reports),
+        "total_size": total_size,
+        "total_size_formatted": f"{total_size / 1024:.1f} KB" if total_size < 1024 * 1024 else f"{total_size / (1024 * 1024):.1f} MB",
+        "formats": formats,
+        "mapping_entries": mapping_count,
+        "reports": reports[:5]
+    })

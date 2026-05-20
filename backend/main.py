@@ -76,7 +76,7 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import uvicorn
 from backend.config import settings
-from backend.database import init_db, close_db
+from backend.database import init_database, close_db
 import logging
 
 Path("logs").mkdir(exist_ok=True)
@@ -136,7 +136,17 @@ async def lifespan(app: FastAPI):
     
     logger.info(f"启动 {settings.APP_NAME} v{settings.APP_VERSION}")
     
-    await init_db()
+    await init_database()
+    
+    try:
+        from backend.migrations import ensure_migrations_applied
+        await ensure_migrations_applied()
+    except Exception as e:
+        logger.warning(f"数据库迁移检查失败（不影响正常启动）: {e}")
+    
+    import backend.database
+    backend.database._DB_INITIALIZED = False
+    await backend.database.init_db()
     
     try:
         from backend.AVWS.API.Base import Base as AWVSBase
@@ -180,7 +190,7 @@ async def lifespan(app: FastAPI):
     logger.info("开始优雅关闭流程...")
     logger.info("=" * 50)
     
-    shutdown_start_time = asyncio.get_event_loop().time()
+    shutdown_start_time = asyncio.get_running_loop().time()
     
     try:
         logger.info("[1/3] 正在关闭任务执行器...")
@@ -220,7 +230,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[3/3] 关闭数据库时发生错误: {e}")
     
-    shutdown_duration = asyncio.get_event_loop().time() - shutdown_start_time
+    shutdown_duration = asyncio.get_running_loop().time() - shutdown_start_time
     logger.info("=" * 50)
     logger.info(f"优雅关闭完成，耗时: {shutdown_duration:.2f}秒")
     logger.info("=" * 50)

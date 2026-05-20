@@ -119,6 +119,6 @@ if __name__ == "__main__":
         host=settings.HOST,
         port=settings.PORT,
         reload=settings.DEBUG,
-        log_level=settings.LOG_LEVEL.lower(),
+        log_level=(settings.LOG_LEVEL or "info").lower(),
         access_log=True
     )
