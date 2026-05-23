@@ -5,21 +5,24 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)
 ![Vue](https://img.shields.io/badge/vue-3.5+-brightgreen.svg)
 ![Vite](https://img.shields.io/badge/vite-5.4+-blue.svg)
+![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
 
 **AI驱动的Web应用安全扫描平台**
 
-一个功能强大的Web应用安全扫描平台，集成POC漏洞扫描、端口扫描、AI Agent等多种安全检测能力
+一个功能强大的Web应用安全扫描平台，集成POC漏洞扫描、端口扫描、AI Agent智能决策等多种安全检测能力
 
-[功能特性](#-功能特性) • [快速开始](#-快速开始) • [项目结构](#-项目结构) • [API文档](#-api文档)
+[功能特性](#-功能特性) • [系统架构](#-系统架构) • [快速开始](#-快速开始) • [API文档](#-api文档)
 
 </div>
 
 ---
 
 ## 目录
+
 - [项目简介](#-项目简介)
-- [项目版本说明](#-项目版本说明)
+- [系统架构](#-系统架构)
+- [双系统对比](#-双系统对比)
 - [功能特性](#-功能特性)
 - [技术栈](#-技术栈)
 - [快速开始](#-快速开始)
@@ -29,10 +32,12 @@
 - [开发指南](#-开发指南)
 - [部署指南](#-部署指南)
 - [常见问题](#-常见问题)
+- [作者介绍](#-作者介绍)
+- [联系方式](#-联系方式)
 
 ---
 
-## 项目简介
+## 📖 项目简介
 
 WebScan AI Security Platform 是一个基于AI技术的Web应用安全扫描平台，旨在帮助开发者和安全专业人员快速发现和修复Web应用中的安全漏洞。
 
@@ -48,67 +53,162 @@ WebScan AI Security Platform 是一个基于AI技术的Web应用安全扫描平�
 
 ---
 
-## 项目版本说明
+## 🏗️ 系统架构
 
-本项目包含新旧两个版本的项目代码：
+本项目采用双系统架构设计，提供两套独立的安全扫描服务：
 
-### 新版项目（推荐使用）
-
-| 项目 | 目录 | 描述 | 端口 |
-|------|------|------|------|
-| **TOSKill** | `TOSKill/` | 重构版后端项目，基于LangGraph的AI驱动安全扫描服务 | 8081 |
-| **TOSKillfront** | `TOSKillfront/` | 重构版前端项目，轻量级原生JavaScript实现 | 静态文件 |
-
-**新版特点：**
-- 基于LangGraph的ReACT推理框架
-- RAG知识库增强的智能决策
-- WebSocket实时通信
-- 用户交互中断/恢复机制
-- 认证信息自动提取与复用
-- AI脚本生成与安全审查
-- 简化的部署架构（单服务）
-
-### 旧版项目（已废弃）
-
-| 项目 | 目录 | 描述 | 端口 |
-|------|------|------|------|
-| **backend** | `backend/` | 旧版后端项目，功能较重，依赖较多 | 8888 |
-| **front** | `front/` | 旧版前端项目，Vue 3 + Element Plus | 5173 |
-
-> **注意**: 旧版项目（backend/front）已不再维护，建议使用新版项目（TOSKill/TOSKillfront）。
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           WebScan AI Security Platform                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────────────────────┐    ┌─────────────────────────────────┐ │
+│  │       TOSKill System            │    │       Backend System            │ │
+│  │       (轻量级独立服务)            │    │       (企业级完整服务)           │ │
+│  │                                 │    │                                 │ │
+│  │  ┌───────────────────────────┐  │    │  ┌───────────────────────────┐  │ │
+│  │  │   LangGraph Agent Core    │  │    │  │   Multi-Agent System      │  │ │
+│  │  │   - ReACT推理框架          │  │    │  │   - 任务规划Agent          │  │ │
+│  │  │   - 状态机工作流           │  │    │  │   - 漏洞扫描Agent          │  │ │
+│  │  │   - 用户交互中断           │  │    │  │   - 报告生成Agent          │  │ │
+│  │  └───────────────────────────┘  │    │  └───────────────────────────┘  │ │
+│  │                                 │    │                                 │ │
+│  │  ┌───────────────────────────┐  │    │  ┌───────────────────────────┐  │ │
+│  │  │   RAG Knowledge Base      │  │    │  │   Vulnerability Plugins   │  │ │
+│  │  │   - LlamaIndex检索        │  │    │  │   - SQL注入/XSS/CSRF      │  │ │
+│  │  │   - 向量存储              │  │    │  │   - 文件上传/SSRF/LFI     │  │ │
+│  │  │   - 知识文档库            │  │    │  │   - 命令注入/弱口令       │  │ │
+│  │  └───────────────────────────┘  │    │  └───────────────────────────┘  │ │
+│  │                                 │    │                                 │ │
+│  │  ┌───────────────────────────┐  │    │  ┌───────────────────────────┐  │ │
+│  │  │   Scan Tools              │  │    │  │   POC System              │  │ │
+│  │  │   - 信息收集              │  │    │  │   - Struts2/ThinkPHP      │  │ │
+│  │  │   - 漏洞扫描              │  │    │  │   - Weblogic/Tomcat       │  │ │
+│  │  │   - POC验证               │  │    │  │   - Drupal/Nexus          │  │ │
+│  │  └───────────────────────────┘  │    │  └───────────────────────────┘  │ │
+│  │                                 │    │                                 │ │
+│  │  Port: 8081                    │    │  Port: 8888                     │ │
+│  └─────────────────────────────────┘    └─────────────────────────────────┘ │
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                          Frontend Applications                         │  │
+│  │                                                                        │  │
+│  │  ┌─────────────────────┐    ┌─────────────────────┐                   │  │
+│  │  │   toskill-frontend  │    │      front (Vue3)   │                   │  │
+│  │  │   (原生JavaScript)   │    │   (Element Plus)    │                   │  │
+│  │  │   轻量级/快速部署    │    │   企业级/功能丰富    │                   │  │
+│  │  └─────────────────────┘    └─────────────────────┘                   │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 功能特性
+## 🔄 双系统对比
+
+本项目包含两套独立的安全扫描系统，可根据需求选择使用：
+
+### TOSKill System (推荐)
+
+| 特性 | 说明 |
+|------|------|
+| **定位** | 轻量级、独立的AI驱动安全扫描服务 |
+| **端口** | 8081 |
+| **架构** | 单服务架构，部署简单 |
+| **AI引擎** | LangGraph ReACT框架 |
+| **知识库** | RAG (LlamaIndex) |
+| **前端** | 原生JavaScript，轻量高效 |
+| **适用场景** | 快速部署、个人安全测试、学习研究 |
+
+**TOSKill核心优势：**
+- ✅ 基于LangGraph的智能决策引擎
+- ✅ RAG知识库增强的漏洞分析
+- ✅ 用户交互式中断/恢复机制
+- ✅ 认证信息自动提取与复用
+- ✅ AI脚本生成与安全审查
+- ✅ 简化的单服务部署架构
+
+### Backend System
+
+| 特性 | 说明 |
+|------|------|
+| **定位** | 企业级、功能完整的安全扫描平台 |
+| **端口** | 8888 |
+| **架构** | 多模块架构，功能丰富 |
+| **AI引擎** | Multi-Agent协作系统 |
+| **插件系统** | 可扩展的漏洞扫描插件 |
+| **前端** | Vue3 + Element Plus |
+| **适用场景** | 企业安全审计、团队协作、大规模扫描 |
+
+**Backend核心优势：**
+- ✅ 多Agent协作的任务规划系统
+- ✅ 完整的漏洞扫描插件生态
+- ✅ 丰富的POC验证库
+- ✅ 企业级报告生成系统
+- ✅ AWVS集成支持
+- ✅ Seebug POC平台对接
+
+### 功能对比表
+
+| 功能模块 | TOSKill | Backend |
+|---------|:-------:|:-------:|
+| 端口扫描 | ✅ | ✅ |
+| 子域名枚举 | ✅ | ✅ |
+| CMS识别 | ✅ | ✅ |
+| WAF检测 | ✅ | ✅ |
+| SQL注入扫描 | ✅ | ✅ |
+| XSS扫描 | ✅ | ✅ |
+| CSRF扫描 | ✅ | ✅ |
+| 文件上传漏洞 | ✅ | ✅ |
+| SSRF扫描 | ✅ | ✅ |
+| LFI扫描 | ✅ | ✅ |
+| 命令注入 | ✅ | ✅ |
+| POC验证 | ✅ | ✅ |
+| AI智能决策 | ✅ LangGraph | ✅ Multi-Agent |
+| RAG知识库 | ✅ | ❌ |
+| 用户交互中断 | ✅ | ❌ |
+| 认证信息提取 | ✅ | ❌ |
+| AI脚本生成 | ✅ | ❌ |
+| AWVS集成 | ❌ | ✅ |
+| Seebug对接 | ❌ | ✅ |
+| 多格式报告 | ✅ | ✅ |
+| WebSocket实时 | ✅ | ✅ |
+
+---
+
+## ⚡ 功能特性
 
 ### 核心功能
 
 | 功能模块 | 描述 | 状态 |
-|---------|------|------|
-| **信息收集** | 端口扫描、子域名枚举、CMS识别、WAF检测、CDN检测等 | ✅ 已实现 |
-| **漏洞扫描** | SQL注入、XSS、命令注入、文件上传、SSRF、CSRF、LFI等 | ✅ 已实现 |
-| **POC验证** | Struts2、ThinkPHP、Weblogic等框架漏洞POC | ✅ 已实现 |
-| **AI Agent扫描** | 基于LangGraph的智能代理自动化扫描 | ✅ 已实现 |
-| **RAG知识库** | LlamaIndex驱动的专业知识检索增强 | ✅ 已实现 |
-| **AI对话** | 智能安全咨询和漏洞分析 | ✅ 已实现 |
-| **脚本管理** | 自定义脚本上传、AI脚本生成、安全审查 | ✅ 已实现 |
-| **扫描报告** | 生成详细的扫描报告，支持Markdown格式 | ✅ 已实现 |
-| **实时监控** | WebSocket实时推送扫描进度和结果 | ✅ 已实现 |
+|---------|------|:----:|
+| **信息收集** | 端口扫描、子域名枚举、CMS识别、WAF检测、CDN检测等 | ✅ |
+| **漏洞扫描** | SQL注入、XSS、命令注入、文件上传、SSRF、CSRF、LFI等 | ✅ |
+| **POC验证** | Struts2、ThinkPHP、Weblogic、Tomcat、Drupal等框架漏洞POC | ✅ |
+| **AI Agent扫描** | 基于LangGraph/Multi-Agent的智能代理自动化扫描 | ✅ |
+| **RAG知识库** | LlamaIndex驱动的专业知识检索增强（TOSKill） | ✅ |
+| **AI对话** | 智能安全咨询和漏洞分析 | ✅ |
+| **脚本管理** | 自定义脚本上传、AI脚本生成、安全审查 | ✅ |
+| **扫描报告** | HTML/JSON/Markdown/PDF多格式报告生成 | ✅ |
+| **实时监控** | WebSocket实时推送扫描进度和结果 | ✅ |
 
 ### 高级特性
 
 - **ReACT推理决策** - AI使用Thought-Action-Reason模式进行智能决策
-- **用户交互中断** - 工作流支持暂停等待用户确认
+- **用户交互中断** - 工作流支持暂停等待用户确认（TOSKill）
 - **认证信息管理** - 自动提取、加密存储、复用认证信息
 - **智能工具选择** - 根据端口扫描结果推荐合适的扫描工具
 - **脚本安全审查** - 上传和生成的脚本自动进行安全检查
 - **会话状态管理** - 支持TTL过期清理、版本控制、状态恢复
+- **CVSS评分** - 自动估算漏洞CVSS评分和风险等级
+- **漏洞去重** - 基于类型+URL+参数的智能去重
 
 ---
 
-## 技术栈
+## 🛠️ 技术栈
 
-### 新版后端 (TOSKill)
+### TOSKill System
 
 ```yaml
 核心框架:
@@ -130,34 +230,45 @@ RAG知识库:
   - Requests: 2.32+           # HTTP请求
 ```
 
-### 新版前端 (TOSKillfront)
+### Backend System
 
 ```yaml
-技术选型:
-  - 原生JavaScript            # 无框架依赖，轻量高效
-  - CSS3                      # 现代样式
-  - WebSocket API             # 实时通信
+核心框架:
+  - FastAPI: 0.115+           # 现代化Python Web框架
+  - Tortoise-ORM: 最新版      # 异步ORM
+  - Aerich: 最新版            # 数据库迁移
 
-模块结构:
-  - app.js                    # 应用主入口
-  - api.js                    # API请求封装
-  - websocket.js              # WebSocket管理
-  - scanner.js                # 扫描器模块
-  - chat.js                   # AI对话模块
-  - tools.js                  # 工具管理
-  - reports.js                # 报告管理
+AI框架:
+  - LangChain: 0.3+           # AI应用框架
+  - OpenAI: 1.59+             # OpenAI API客户端
+
+安全扫描:
+  - Nmap: 0.7+                # 端口扫描
+  - Pocsuite3: 最新版         # POC框架
+
+集成支持:
+  - AWVS API: 完整支持        # 漏洞扫描集成
+  - Seebug API: 完整支持      # POC平台对接
 ```
+
+### 前端技术栈
+
+| 项目 | 技术栈 | 特点 |
+|------|--------|------|
+| toskill-frontend | 原生JavaScript + CSS3 | 轻量级、无依赖、快速加载 |
+| front | Vue3 + Element Plus + Vite | 企业级、组件丰富、开发效率高 |
 
 ---
 
-## 快速开始
+## 🚀 快速开始
 
 ### 环境要求
 
 - Python 3.8 或更高版本
 - 现代浏览器（Chrome、Firefox、Edge等）
+- （可选）Node.js 18+ 用于Vue前端开发
 
-### 新版项目启动
+### 方式一：TOSKill System（推荐新手）
 
 #### 1. 克隆项目
 
@@ -169,7 +280,7 @@ cd webscan-ai
 #### 2. 后端安装与启动
 
 ```bash
-# 进入新版后端目录
+# 进入TOSKill目录
 cd TOSKill
 
 # 创建虚拟环境（推荐）
@@ -184,6 +295,9 @@ source venv/bin/activate
 # 安装依赖
 pip install -r requirements.txt
 
+# 配置环境变量（可选）
+# 创建 .env 文件并配置 OPENAI_API_KEY
+
 # 启动服务
 python main.py
 ```
@@ -192,348 +306,402 @@ python main.py
 
 #### 3. 访问前端
 
-新版前端由后端直接提供静态文件服务，启动后端后直接访问：
+TOSKill前端由后端直接提供静态文件服务：
 
-http://localhost:8081/frontend
-
-或使用首页跳转：
-
-http://localhost:8081 → 点击"前端页面"
-
-#### 4. API文档
-
-启动后端后，访问以下地址查看自动生成的API文档：
-
-- **Swagger UI**: http://localhost:8081/docs
+- **前端页面**: http://localhost:8081/frontend
+- **API文档**: http://localhost:8081/docs
 - **ReDoc**: http://localhost:8081/redoc
 
-### 旧版项目启动（已废弃）
+### 方式二：Backend System（企业级）
 
-如需运行旧版项目，请参考：
+#### 1. 后端安装与启动
 
 ```bash
-# 后端
+# 进入backend目录
 cd backend
-pip install -r requirements.txt
-python main.py  # 端口 8888
 
-# 前端
+# 创建虚拟环境
+python -m venv venv
+venv\Scripts\activate  # Windows
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 配置数据库（SQLite默认可用）
+# 或修改 config.py 配置MySQL/PostgreSQL
+
+# 启动服务
+python main.py
+```
+
+后端服务将运行在：http://localhost:8888
+
+#### 2. Vue前端安装与启动
+
+```bash
+# 进入前端目录
 cd front
+
+# 安装依赖
 npm install
-npm run dev  # 端口 5173
+
+# 开发模式启动
+npm run dev
+
+# 或构建生产版本
+npm run build
+```
+
+前端开发服务器：http://localhost:5173
+
+### 方式三：双系统并行运行
+
+```bash
+# 终端1: 启动TOSKill
+cd TOSKill && python main.py
+
+# 终端2: 启动Backend
+cd backend && python main.py
+
+# 终端3: 启动Vue前端（可选）
+cd front && npm run dev
 ```
 
 ---
 
-## 项目结构
+## 📁 项目结构
 
 ```
 AI_WebSecurity/
-├── TOSKill/                      # 新版后端项目（推荐）
-│   ├── AI/                       # AI核心模块
-│   │   ├── core.py              # 核心业务逻辑
-│   │   ├── graph.py             # LangGraph工作流定义
-│   │   ├── state.py             # 状态定义
-│   │   ├── tools.py             # 工具函数
-│   │   ├── validators.py        # 输入验证器
-│   │   └── script_safety.py     # 脚本安全审查
+├── TOSKill/                          # TOSKill系统（推荐）
+│   ├── AI/                           # AI核心模块
+│   │   ├── core.py                   # 核心业务逻辑
+│   │   ├── graph.py                  # LangGraph工作流定义
+│   │   ├── state.py                  # 状态机定义
+│   │   ├── tools.py                  # 工具函数
+│   │   ├── validators.py             # 输入验证器
+│   │   ├── script_safety.py          # 脚本安全审查
+│   │   └── llm_client.py             # LLM客户端
 │   │
-│   ├── RAG/                      # RAG知识库模块
-│   │   ├── rag_engine.py        # RAG引擎
-│   │   ├── retriever.py         # 检索器
-│   │   ├── knowledge/           # 知识文档
-│   │   └── storage/             # 向量存储
+│   ├── RAG/                          # RAG知识库模块
+│   │   ├── rag_engine.py             # RAG引擎
+│   │   ├── retriever.py              # 检索器
+│   │   ├── knowledge/                # 知识文档（14个专业文档）
+│   │   └── storage/                  # 向量存储
 │   │
-│   ├── api/                      # API路由
-│   │   ├── ai_chat_websocket.py # AI对话WebSocket
-│   │   ├── scan_api.py          # 扫描API
-│   │   └── report.py            # 报告API
+│   ├── api/                          # API路由
+│   │   ├── ai_chat_websocket.py      # AI对话WebSocket
+│   │   ├── scan_api.py               # 扫描API
+│   │   └── report.py                 # 报告API
 │   │
-│   ├── tools/                    # 扫描工具
-│   │   ├── info_collection/     # 信息收集工具
-│   │   │   ├── portscan.py      # 端口扫描
-│   │   │   ├── subdomain.py     # 子域名扫描
-│   │   │   ├── waf.py           # WAF检测
-│   │   │   ├── whatcms.py       # CMS识别
+│   ├── tools/                        # 扫描工具
+│   │   ├── info_collection/          # 信息收集工具
+│   │   │   ├── portscan.py           # 端口扫描
+│   │   │   ├── subdomain.py          # 子域名扫描
+│   │   │   ├── waf.py                # WAF检测
+│   │   │   ├── whatcms.py            # CMS识别
 │   │   │   └── ...
 │   │   │
-│   │   ├── vuln_scan/           # 漏洞扫描工具
-│   │   │   ├── sqli.py          # SQL注入
-│   │   │   ├── xss.py           # XSS扫描
-│   │   │   ├── cmdi.py          # 命令注入
+│   │   ├── vuln_scan/                # 漏洞扫描工具
+│   │   │   ├── sqli.py               # SQL注入
+│   │   │   ├── xss.py                # XSS扫描
+│   │   │   ├── cmdi.py               # 命令注入
 │   │   │   └── ...
 │   │   │
-│   │   ├── poc/                 # POC验证
+│   │   ├── poc/                      # POC验证
 │   │   │   ├── struts2.py
 │   │   │   ├── thinkphp.py
 │   │   │   └── weblogic.py
 │   │   │
-│   │   └── report/              # 报告生成
-│   │       ├── report_manager.py
-│   │       └── ai_analyzer.py
+│   │   └── report/                   # 报告生成
+│   │       ├── report_manager.py     # 报告管理器
+│   │       ├── ai_analyzer.py        # AI分析器
+│   │       ├── vuln_analyzer.py      # 漏洞分析器
+│   │       └── html_report_generator.py
 │   │
-│   ├── main.py                   # 应用入口
-│   ├── config.py                 # 配置管理
-│   ├── cli.py                    # 命令行接口
-│   ├── README.md                 # 后端文档
-│   └── API_DOCUMENTATION.md      # API文档
+│   ├── tests/                        # 测试文件
+│   ├── main.py                       # 应用入口
+│   ├── config.py                     # 配置管理
+│   └── requirements.txt              # 依赖列表
 │
-├── TOSKillfront/                 # 新版前端项目（推荐）
-│   ├── index.html               # 主页面
-│   ├── demo.html                # 演示页面
-│   ├── css/
-│   │   └── style.css            # 样式文件
-│   └── js/
-│       ├── app.js               # 应用主入口
-│       ├── api.js               # API封装
-│       ├── websocket.js         # WebSocket管理
-│       ├── scanner.js           # 扫描器模块
-│       ├── chat.js              # AI对话模块
-│       ├── tools.js             # 工具管理
-│       └── reports.js           # 报告管理
+├── toskill-frontend/                 # TOSKill前端
+│   ├── index.html                    # 主页面
+│   ├── src/
+│   │   ├── components/               # Vue组件
+│   │   │   ├── views/                # 页面视图
+│   │   │   │   ├── ScanView.vue      # 扫描页面
+│   │   │   │   ├── ReportsView.vue   # 报告页面
+│   │   │   │   ├── ToolsView.vue     # 工具页面
+│   │   │   │   └── SettingsView.vue  # 设置页面
+│   │   │   └── ...
+│   │   ├── services/                 # 服务层
+│   │   │   ├── api.js                # API封装
+│   │   │   └── websocket.js          # WebSocket管理
+│   │   └── ...
+│   └── package.json
 │
-├── backend/                      # 旧版后端项目（已废弃）
-│   ├── api/                     # API路由
-│   ├── ai_agents/               # AI代理系统
-│   ├── plugins/                 # 扫描插件
-│   ├── poc/                     # POC库
-│   └── ...
+├── backend/                          # Backend系统
+│   ├── ai_agents/                    # AI代理系统
+│   │   ├── core/                     # 核心模块
+│   │   │   ├── graph.py              # Agent工作流图
+│   │   │   ├── nodes.py              # 节点定义
+│   │   │   └── state.py              # 状态定义
+│   │   │
+│   │   ├── analyzers/                # 分析器
+│   │   │   ├── ai_analyzer.py        # AI分析器
+│   │   │   ├── enhanced_report_gen.py
+│   │   │   └── vuln_analyzer.py
+│   │   │
+│   │   ├── poc_system/               # POC系统
+│   │   │   ├── poc_manager.py        # POC管理器
+│   │   │   ├── verification_engine.py
+│   │   │   └── matching/             # POC匹配
+│   │   │
+│   │   └── tools/                    # Agent工具
+│   │       ├── registry.py           # 工具注册
+│   │       ├── wrappers.py           # 工具包装器
+│   │       └── adapters.py           # 适配器
+│   │
+│   ├── api/                          # API路由
+│   │   ├── ai.py                     # AI对话API
+│   │   ├── tasks.py                  # 任务API
+│   │   ├── reports.py                # 报告API
+│   │   ├── poc.py                    # POC API
+│   │   ├── seebug.py                 # Seebug API
+│   │   ├── awvs.py                   # AWVS API
+│   │   └── websocket.py              # WebSocket
+│   │
+│   ├── vulnerability_scan_plugins/   # 漏洞扫描插件
+│   │   ├── sqli/                     # SQL注入
+│   │   ├── xss/                      # XSS扫描
+│   │   ├── csrf/                     # CSRF扫描
+│   │   ├── fileupload/               # 文件上传
+│   │   ├── ssrf/                     # SSRF扫描
+│   │   ├── lfi/                      # 本地文件包含
+│   │   ├── cmdi/                     # 命令注入
+│   │   └── infoleak/                 # 信息泄露
+│   │
+│   ├── poc/                          # POC库
+│   │   ├── struts2/                  # Struts2 POC
+│   │   ├── thinkphp/                 # ThinkPHP POC
+│   │   ├── weblogic/                 # Weblogic POC
+│   │   ├── tomcat/                   # Tomcat POC
+│   │   └── ...
+│   │
+│   ├── services/                     # 业务服务
+│   │   ├── report_service.py         # 报告服务
+│   │   └── notification_service.py   # 通知服务
+│   │
+│   ├── tests/                        # 测试文件
+│   ├── main.py                       # 应用入口
+│   ├── config.py                     # 配置管理
+│   └── requirements.txt              # 依赖列表
 │
-├── front/                        # 旧版前端项目（已废弃）
-│   ├── src/                     # Vue 3源码
-│   └── ...
+├── front/                            # Vue前端
+│   ├── src/
+│   │   ├── components/               # 组件
+│   │   │   ├── business/             # 业务组件
+│   │   │   ├── common/               # 通用组件
+│   │   │   └── layout/               # 布局组件
+│   │   │
+│   │   ├── views/                    # 页面
+│   │   │   ├── Dashboard.vue         # 仪表盘
+│   │   │   ├── AgentScan.vue         # Agent扫描
+│   │   │   ├── POCScan.vue           # POC扫描
+│   │   │   ├── Reports.vue           # 报告管理
+│   │   │   └── ...
+│   │   │
+│   │   ├── store/                    # 状态管理
+│   │   ├── utils/                    # 工具函数
+│   │   └── styles/                   # 样式文件
+│   │
+│   └── package.json
 │
-├── Seebug_Agent/                # Seebug Agent模块
-│   ├── client.py                # Seebug客户端
-│   ├── generator.py             # POC生成器
-│   └── README.md                # 模块文档
+├── Seebug_Agent/                     # Seebug Agent模块
+│   ├── client.py                     # Seebug客户端
+│   ├── generator.py                  # POC生成器
+│   └── README.md
 │
-├── tests/                        # 测试文件
-│   ├── unit/                    # 单元测试
-│   ├── integration/             # 集成测试
-│   └── e2e/                     # 端到端测试
-│
-├── reports/                      # 生成的报告
-├── logs/                         # 日志文件
-├── README.md                     # 项目说明文档
-└── .gitignore                    # Git忽略文件
+├── demo_presentation_report/         # 演示报告
+├── tests/                            # 集成测试
+└── README.md                         # 项目文档
 ```
 
 ---
 
-## 配置说明
+## ⚙️ 配置说明
 
-### 新版后端配置 (TOSKill)
+### TOSKill配置
 
-主要配置文件：`TOSKill/config.py`
+配置文件：`TOSKill/config.py`
 
 ```python
 class TOSKillSettings(BaseSettings):
-    # 应用基础配置
+    # 应用配置
     APP_NAME: str = "TOSKill Security Scanner"
-    APP_VERSION: str = "1.0.0"
-    DEBUG: bool = False
-    
-    # 服务器配置
     HOST: str = "127.0.0.1"
     PORT: int = 8081
     
-    # CORS配置
-    CORS_ORIGINS: list = ["*"]
-    
-    # 日志配置
-    LOG_LEVEL: str = "INFO"
-    LOG_FILE: str = "logs/toskill.log"
-    
-    # AI API配置
-    OPENAI_API_KEY: str = "your_api_key"
-    OPENAI_BASE_URL: str = "https://maas-api.cn-huabei-1.xf-yun.com/v2"
-    MODEL_ID: str = "xop3qwen1b7"
-    LLM_TEMPERATURE: float = 0.1
+    # AI配置（必填）
+    OPENAI_API_KEY: str = ""           # 从环境变量获取
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    MODEL_ID: str = "gpt-4"
     
     # 扫描配置
     SCAN_TIMEOUT: int = 300
     MAX_CONCURRENT_SCANS: int = 5
-    
-    # 目录配置
-    REPORTS_DIR: str = "reports"
-    UPLOAD_DIR: str = "uploads"
 ```
 
-### 环境变量配置
+### Backend配置
+
+配置文件：`backend/config.py`
+
+```python
+class Settings(BaseSettings):
+    # 应用配置
+    APP_NAME: str = "WebScan Backend"
+    HOST: str = "127.0.0.1"
+    PORT: int = 8888
+    
+    # 数据库配置
+    DATABASE_URL: str = "sqlite://db.sqlite3"
+    
+    # AI配置
+    OPENAI_API_KEY: str = None
+    
+    # AWVS配置（可选）
+    AWVS_URL: str = ""
+    AWVS_API_KEY: str = ""
+```
+
+### 环境变量
 
 创建 `.env` 文件：
 
 ```env
+# AI配置（必填）
+OPENAI_API_KEY=your_api_key_here
+OPENAI_BASE_URL=https://api.openai.com/v1
+
 # 应用配置
-APP_NAME=TOSKill Security Scanner
-APP_VERSION=1.0.0
 DEBUG=False
-HOST=127.0.0.1
-PORT=8081
-
-# AI配置
-OPENAI_API_KEY=your_api_key
-OPENAI_BASE_URL=https://maas-api.cn-huabei-1.xf-yun.com/v2
-MODEL_ID=xop3qwen1b7
-LLM_TEMPERATURE=0.1
-
-# 日志配置
 LOG_LEVEL=INFO
-LOG_FILE=logs/toskill.log
 ```
-
-### WebSocket配置
-
-| 配置项 | 默认值 | 说明 |
-|-------|--------|------|
-| WebSocket URL | `ws://localhost:8081/api/ai-chat/ws` | WebSocket连接地址 |
-| 重连次数 | 5 | 最大自动重连次数 |
-| 重连延迟 | 1-30秒 | 指数退避重连策略 |
-| 心跳间隔 | 30秒 | 心跳检测间隔 |
 
 ---
 
-## API文档
+## 📚 API文档
 
-### 新版API端点 (TOSKill)
+### TOSKill API (端口 8081)
 
-启动后端服务后，访问：
+启动后访问：
 - **Swagger UI**: http://localhost:8081/docs
 - **ReDoc**: http://localhost:8081/redoc
 
+### Backend API (端口 8888)
+
+启动后访问：
+- **Swagger UI**: http://localhost:8888/docs
+- **ReDoc**: http://localhost:8888/redoc
+
 ### 主要API端点
 
-#### 健康检查
-```http
-GET /health
-```
+#### 扫描任务
 
-#### WebSocket连接
 ```http
+# TOSKill WebSocket扫描
 WebSocket /api/ai-chat/ws
+
+# Backend REST API
+POST /api/tasks/              # 创建扫描任务
+GET  /api/tasks/{id}          # 获取任务详情
+DELETE /api/tasks/{id}        # 删除任务
 ```
 
-#### 开始扫描
+#### 报告管理
+
 ```http
-WebSocket消息:
-{
-  "type": "start_scan",
-  "payload": {
-    "target": "http://example.com",
-    "scan_mode": "full"
-  }
-}
+GET  /api/reports/            # 获取报告列表
+POST /api/reports/            # 创建报告
+GET  /api/reports/{id}        # 获取报告详情
+GET  /api/reports/{id}/export # 导出报告
 ```
 
-#### 执行工具
+#### POC管理
+
 ```http
-WebSocket消息:
-{
-  "type": "execute_tool",
-  "payload": {
-    "tool_name": "portscan",
-    "target": "example.com"
-  }
-}
+GET  /api/poc/list            # 获取POC列表
+POST /api/poc/execute         # 执行POC
 ```
-
-#### AI对话
-```http
-WebSocket消息:
-{
-  "type": "chat",
-  "payload": {
-    "content": "请分析这个网站的安全状况"
-  }
-}
-```
-
-### WebSocket消息类型
-
-| 类型 | 方向 | 描述 |
-|------|------|------|
-| `connected` | 服务端→客户端 | 连接成功，返回session_id |
-| `start_scan` | 客户端→服务端 | 开始扫描任务 |
-| `scan_started` | 服务端→客户端 | 扫描已启动 |
-| `task_started` | 服务端→客户端 | 单个任务开始 |
-| `task_completed` | 服务端→客户端 | 单个任务完成 |
-| `ai_decision` | 服务端→客户端 | AI决策结果 |
-| `interaction_required` | 服务端→客户端 | 需要用户交互 |
-| `user_confirm` | 客户端→服务端 | 用户确认选择 |
-| `workflow_resumed` | 服务端→客户端 | 工作流已恢复 |
-| `scan_completed` | 服务端→客户端 | 扫描完成 |
-| `report_generated` | 服务端→客户端 | 报告已生成 |
-
-详细API文档请参考：[TOSKill/API_DOCUMENTATION.md](TOSKill/API_DOCUMENTATION.md)
 
 ---
 
-## 开发指南
+## 🔧 开发指南
 
-### 后端开发
-
-#### 添加新的扫描工具
-
-1. 在 `TOSKill/tools/` 对应目录下创建工具文件
-2. 实现工具函数并添加 `@tool` 装饰器
-3. 在 `TOSKill/AI/tools.py` 中注册工具
+### 添加新的扫描工具
 
 ```python
+# TOSKill: 在 TOSKill/tools/ 下创建
 from langchain_core.tools import tool
 
 @tool
-def my_new_scanner(target: str) -> dict:
+def my_scanner(target: str) -> dict:
     """新扫描工具描述"""
-    result = do_scan(target)
-    return {"vulnerable": False, "data": result}
+    return {"vulnerable": False, "data": {}}
+
+# Backend: 在 backend/vulnerability_scan_plugins/ 下创建
+from .base import BaseScanner
+
+class MyScanner(BaseScanner):
+    async def scan(self, target: str) -> dict:
+        return {"vulnerable": False}
 ```
 
-#### 扩展AI工作流
+### 扩展AI工作流
 
-1. 在 `TOSKill/AI/graph.py` 中添加新节点
-2. 定义节点函数和路由逻辑
-3. 更新工作流图结构
+```python
+# TOSKill: 在 TOSKill/AI/graph.py 中添加节点
+def my_custom_node(state: AgentState) -> AgentState:
+    # 自定义逻辑
+    return state
 
-### 前端开发
-
-#### 添加新消息处理器
-
-在对应的JS模块中添加消息处理：
-
-```javascript
-// 在 scanner.js 或 chat.js 中
-case 'new_message_type':
-    this.handleNewMessage(data.payload);
-    break;
+# 添加到工作流图
+graph.add_node("my_node", my_custom_node)
 ```
 
-### 测试
+### 运行测试
 
 ```bash
-# 运行测试
-cd tests
-pytest
+# TOSKill测试
+cd TOSKill && pytest tests/ -v
 
-# 运行特定测试
-pytest test_toskill_workflow.py -v
+# Backend测试
+cd backend && pytest tests/ -v
 ```
 
 ---
 
-## 部署指南
+## 🐳 部署指南
 
-### 生产环境部署
+### Docker部署
 
-#### 使用Gunicorn部署
-
-```bash
-pip install gunicorn
-
-gunicorn TOSKill.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 127.0.0.1:8081
+```dockerfile
+# TOSKill Dockerfile
+FROM python:3.9-slim
+WORKDIR /app
+COPY TOSKill/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY TOSKill/ .
+CMD ["python", "main.py"]
 ```
 
-#### 使用Nginx反向代理
+```bash
+# 构建并运行
+docker build -t toskill .
+docker run -p 8081:8081 -e OPENAI_API_KEY=your_key toskill
+```
+
+### Nginx反向代理
 
 ```nginx
 server {
@@ -544,7 +712,6 @@ server {
         proxy_pass http://127.0.0.1:8081;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         
         # WebSocket支持
         proxy_http_version 1.1;
@@ -554,24 +721,9 @@ server {
 }
 ```
 
-### Docker部署
-
-```dockerfile
-FROM python:3.9-slim
-
-WORKDIR /app
-
-COPY TOSKill/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY TOSKill/ .
-
-CMD ["python", "main.py"]
-```
-
 ---
 
-## 常见问题
+## ❓ 常见问题
 
 ### 1. 后端服务启动失败
 
@@ -586,61 +738,77 @@ netstat -ano | findstr :8081
 lsof -i :8081
 ```
 
-### 2. WebSocket连接失败
+### 2. AI模型连接失败
+
+**问题**: AI决策功能不可用
+
+**解决方案**:
+- 检查 `OPENAI_API_KEY` 环境变量是否设置
+- 确认 `OPENAI_BASE_URL` 可访问
+- 查看日志中的错误信息
+
+### 3. WebSocket连接失败
 
 **问题**: 前端无法建立WebSocket连接
 
 **解决方案**:
 - 检查后端服务是否正常运行
 - 确认WebSocket URL配置正确
-- 检查防火墙设置
-
-### 3. AI模型连接失败
-
-**问题**: AI决策功能不可用
-
-**解决方案**:
-- 检查 `OPENAI_API_KEY` 配置
-- 确认 `OPENAI_BASE_URL` 可访问
-- 查看日志中的错误信息
-
-### 4. RAG知识库检索失败
-
-**问题**: 知识库检索返回空结果
-
-**解决方案**:
-- 确认 `TOSKill/RAG/knowledge/` 目录下有知识文档
-- 检查向量存储文件是否存在
-- 重新构建向量索引
+- 检查防火墙/Nginx配置
 
 ---
 
-## 相关文档
+## 👨‍💻 作者介绍
 
-### 新版项目文档
-- [TOSKill后端文档](TOSKill/README.md)
-- [TOSKill API文档](TOSKill/API_DOCUMENTATION.md)
-- [TOSKill工具文档](TOSKill/TOOLS_DOCUMENTATION.md)
+<div align="center">
 
-### 旧版项目文档（已废弃）
-- [旧版后端文档](backend/README.md)
-- [旧版前端文档](front/README.md)
-- [AI Agents文档](backend/ai_agents/README.md)
-- [插件文档](backend/plugins/README.md)
-- [POC文档](backend/poc/README.md)
+### 关于作者
 
-### 其他文档
-- [Seebug Agent文档](Seebug_Agent/README.md)
+**一名对 AI for Security 充满热情的在校大学生**
+
+目前正在攻读大三，专注于人工智能与网络安全的交叉领域研究。对大语言模型（LLM）在安全领域的应用、自动化漏洞挖掘、智能安全分析等方向有浓厚兴趣。
+
+**研究方向：**
+- 🤖 AI驱动的安全扫描与漏洞分析
+- 🔍 大语言模型在渗透测试中的应用
+- 🛡️ 智能化安全防护系统设计
+- 📊 安全知识图谱与RAG技术
+
+**技术栈：**
+- Python / FastAPI / LangChain / LangGraph
+- Vue.js / JavaScript / WebSocket
+- 安全工具：Nmap / Burp Suite / Pocsuite3
+- AI/ML：OpenAI API / LlamaIndex / 向量数据库
+
+</div>
 
 ---
 
-## 许可证
+## 📬 联系方式
+
+<div align="center">
+
+欢迎交流学习，共同探讨AI与网络安全的结合！
+
+| 联系方式 | 信息 |
+|:-------:|:----:|
+| 📧 **邮箱** | fybfyb0801@qq.com |
+| 💬 **微信** | fyb15227908455 |
+| 🐙 **GitHub** | 欢迎Star和Fork本项目 |
+
+**如果您对这个项目感兴趣，或者想讨论AI安全相关话题，欢迎随时联系！**
+
+</div>
+
+---
+
+## 📄 许可证
 
 本项目采用 MIT 许可证。详见 [LICENSE](LICENSE) 文件。
 
 ---
 
-## 贡献指南
+## 🤝 贡献指南
 
 我们欢迎任何形式的贡献！
 
@@ -658,14 +826,18 @@ lsof -i :8081
 - 遵循 JavaScript Standard Style（JavaScript）
 - 添加详细的文档字符串和注释
 - 使用有意义的变量和函数名
-- 保持代码简洁清晰
 
 ---
 
-## 联系方式
+## 🙏 致谢
 
-- 项目主页: https://github.com/yourusername/webscan-ai
-- 问题反馈: https://github.com/yourusername/webscan-ai/issues
+感谢以下开源项目：
+
+- [FastAPI](https://fastapi.tiangolo.com/) - 现代化的Python Web框架
+- [LangChain](https://langchain.com/) - AI应用开发框架
+- [LangGraph](https://langchain-ai.github.io/langgraph/) - AI工作流框架
+- [LlamaIndex](https://www.llamaindex.ai/) - RAG框架
+- [Vue.js](https://vuejs.org/) - 渐进式JavaScript框架
 
 ---
 
@@ -673,6 +845,6 @@ lsof -i :8081
 
 **如果这个项目对您有帮助，请给我们一个 ⭐️**
 
-Made with ❤️ by WebScan AI Team
+Made with ❤️ by a passionate student exploring AI for Security
 
 </div>
