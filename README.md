@@ -206,6 +206,88 @@ WebScan AI Security Platform 是一个基于AI技术的Web应用安全扫描平�
 
 ---
 
+## 📸 项目展示
+
+### 系统截图
+
+#### AI交互式扫描
+
+<div align="center">
+AI交互式扫描
+
+
+![系统设置](./demo_project_presentation/images/屏幕截图%202026-05-17%20135106.png)
+
+
+*基于LangGraph的AI智能交互式扫描决策过程*
+
+#### 端口扫描
+
+![报告管理](./demo_project_presentation/images/屏幕截图%202026-05-17%20133943.png)
+
+#### 任务选择
+![AI对话分析](./demo_project_presentation/images/屏幕截图%202026-05-17%20132347.png)
+*扫描任务选择与配置*
+
+
+
+#### 脚本管理
+
+![脚本管理](./demo_project_presentation/images/屏幕截图%202026-05-17%20133958.png)
+*自定义脚本上传与管理*
+
+
+
+#### 报告管理
+
+![任务选择](./demo_project_presentation/images/屏幕截图%202026-05-17%20134012.png)*扫描报告管理与导出*
+
+#### 扫描报告
+
+![DAWA靶场教学平台](./demo_project_presentation/images/屏幕截图%202026-05-23%20212816.png)
+
+![image-20260523214635924](./demo_project_presentation/images/image-20260523214635924.png)
+
+![image-20260523214724263](./demo_project_presentation/images/image-20260523214724263.png)
+
+*多格式扫描报告生成*
+
+#### 教学漏洞扫描结果
+![教学漏洞扫描结果](./demo_project_presentation/images/屏幕截图%202026-05-17%20131909.png)
+*教学环境下的漏洞扫描结果展示*
+
+#### DAWA靶场教学平台
+
+![教学系统主界面](./demo_project_presentation/images/屏幕截图%202026-05-17%20131804.png)
+
+*DAWA靶场教学平台集成*
+
+#### 教学系统主界面
+
+![AI交互式扫描](./demo_project_presentation/images/屏幕截图%202026-05-17%20131840.png)
+
+*WebScan AI Security Platform 教学系统主界面*
+
+</div>
+
+### 🎥 项目演示视频
+
+<div align="center">
+
+<video width="100%" controls>
+  <source src="./demo_project_presentation/videos/"AI for Security"具备自主决策能力的Web安全漏洞扫描智能体系统.mp4" type="video/mp4">
+  您的浏览器不支持视频播放。
+</video>
+**"AI for Security" - 具备自主决策能力的Web安全漏洞扫描智能体系统**
+
+*完整演示视频展示了系统的核心功能、AI决策过程、漏洞扫描流程等*
+
+**如果视频无法播放，请[点击这里下载观看](./demo_project_presentation/videos/"AI%20for%20Security"具备自主决策能力的Web安全漏洞扫描智能体系统.mp4)**
+
+</div>
+
+---
+
 ## 🛠️ 技术栈
 
 ### TOSKill System
@@ -243,7 +325,6 @@ AI框架:
   - OpenAI: 1.59+             # OpenAI API客户端
 
 安全扫描:
-  - Nmap: 0.7+                # 端口扫描
   - Pocsuite3: 最新版         # POC框架
 
 集成支持:
@@ -764,21 +845,74 @@ lsof -i :8081
 
 ### 关于作者
 
-**一名对 AI for Security 充满热情的在校大学生**
+**fanyibin| Python开发工程师 · 正在寻找工作机会**
 
-目前正在攻读大三，专注于人工智能与网络安全的交叉领域研究。对大语言模型（LLM）在安全领域的应用、自动化漏洞挖掘、智能安全分析等方向有浓厚兴趣。
+**🎓 基础信息**
 
-**研究方向：**
-- 🤖 AI驱动的安全扫描与漏洞分析
-- 🔍 大语言模型在渗透测试中的应用
-- 🛡️ 智能化安全防护系统设计
-- 📊 安全知识图谱与RAG技术
+- 出生年月：2005年
+- 学历：本科 网络工程专业（2023.09-2027.06在读）
+- 联系方式： 📧 fybfyb0801@qq.com
 
-**技术栈：**
-- Python / FastAPI / LangChain / LangGraph
-- Vue.js / JavaScript / WebSocket
-- 安全工具：Nmap / Burp Suite / Pocsuite3
-- AI/ML：OpenAI API / LlamaIndex / 向量数据库
+**🏆 学业与荣誉**
+
+- **专业综合成绩排名第一**，GPA 3.4/4.0
+- 航天类专项奖学金
+
+**💼 求职意向**
+
+- **期望岗位**：Python开发工程师 / AI安全研究员 / 全栈开发工程师
+- **工作地点**：不限（可接受远程/出差）
+- **到岗时间**：可协商（支持实习/全职）
+
+**🏢 实习经历**
+
+- **Python开发工程师（实习）**
+  - 参与智测平台全栈研发，负责Python后端与自动化流程开发
+  - 搭建文档自动化流水线，集成大模型生成智能测试内容
+  - 设计Prompt规则，搭建文档智能审核引擎，审核效率达10条/秒
+  - 基于向量数据库+大模型，生成标准化合规测试内容
+  - 用Flask+PyQt5搭建授权系统，实现RSA+AES双重加密权限认证
+
+**🚀 核心项目经历**
+
+**1. AI安全智能体平台（WebScan）| 全栈开发**
+- 技术栈：Python、FastAPI、LangGraph、ReACT、LlamaIndex、Vue3
+- 实现动态漏洞扫描+静态白盒代码审计，支持AST解析、代码比对
+- 构建ReACT多轮推理、COT思维链、记忆化会话管理
+- 设计10节点状态机工作流，完成全流程AI安全检测
+- 开发37个安全工具，覆盖端口扫描、SQL/XSS/CSRF/SSRF等检测与CVE验证
+
+**2. 飞桨OCR Agent综测计算助手 | 全栈开发**
+- 技术栈：Django、Vue3、PaddleOCR、Chroma、RAG
+- 实现证书自动识别、成绩预测、可视化分析
+- 开发RAG智能检索与Agent交互模块，封装为自定义技能包
+
+**3. 线性规划种植优化 | 编程负责人**
+- 全国大学生数学建模竞赛**省级一等奖**
+- 完成数据清洗、可视化、线性规划/遗传算法等模型落地
+
+**🏅 获奖与证书**
+
+- **国家级**：计算机应用能力与信息素养大赛一等奖
+- **省级**：数学建模一等奖、计算机大赛赛区二等奖、创新方法大赛三等奖、大创省级结项
+- **校级**：挑战杯二等奖、大创校级结项
+- **语言**：CET-4、CET-6
+- **软著**：2项软件著作权
+
+**💪 专业能力**
+
+1. **全栈开发**：熟练掌握Python/C；熟练FastAPI/Flask/Django；熟悉Vue3/PyQt5前后端开发
+2. **AI工程**：掌握Prompt、RAG/GraphRAG、LangChain/LangGraph、ReACT、LlamaIndex
+3. **并发与部署**：asyncio异步、多线程/多进程、PyInstaller、Docker、Linux运维
+4. **数据与安全**：MySQL/SQLServer等数据库、ORM开发；RSA/AES加密、安全工具开发
+5. **文档处理**：python-docx、openpyxl处理Office文档
+6. **系统运维**：CentOS/Ubuntu操作、磁盘分区、Samba/SSH服务部署
+
+**🎯 校园经历**
+
+- **网络工程创新俱乐部 负责人**
+  - 主导技术培训、项目开发，指导低年级成员
+  - 成果：大创省级立项1项、计算机设计大赛省级奖2项、软著2项
 
 </div>
 
@@ -792,11 +926,14 @@ lsof -i :8081
 
 | 联系方式 | 信息 |
 |:-------:|:----:|
+| 👤 **姓名** | fanyibin |
 | 📧 **邮箱** | fybfyb0801@qq.com |
 | 💬 **微信** | fyb15227908455 |
 | 🐙 **GitHub** | 欢迎Star和Fork本项目 |
 
 **如果您对这个项目感兴趣，或者想讨论AI安全相关话题，欢迎随时联系！**
+
+**正在寻找Python开发工程师、AI安全研究员、全栈开发工程师等岗位的工作机会，期待与您交流！**
 
 </div>
 
