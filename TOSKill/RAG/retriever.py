@@ -4,6 +4,7 @@ RAG 检索器 - 给 graph.py 调用的极简接口
 """
 from typing import List, Dict, Any
 from .rag_engine import get_rag_engine
+from ..config import settings
 
 
 def get_scan_strategy(
@@ -27,6 +28,8 @@ def get_scan_strategy(
     Returns:
         str: RAG 检索到的专家建议
     """
+    if not settings.RAG_ENABLED:
+        return ""
     engine = get_rag_engine()
     return engine.retrieve_scan_strategy(
         target=target,
@@ -56,6 +59,13 @@ def is_rag_ready() -> bool:
     """
     engine = get_rag_engine()
     return engine.is_ready
+
+
+def initialize_rag(force: bool = False) -> bool:
+    """初始化或重新加载 RAG 引擎。"""
+    if not settings.RAG_ENABLED:
+        return False
+    return get_rag_engine().initialize(force=force)
 
 
 def rebuild_knowledge_base() -> bool:

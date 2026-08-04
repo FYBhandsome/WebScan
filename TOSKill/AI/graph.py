@@ -27,8 +27,9 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from .state import ScanState, create_initial_state, append_chat, update_state
 from .tools import get_tool_by_name, get_tool_sequence, is_auth_expired, get_auth_remaining_time
-from .llm_client import get_llm, is_llm_available
+from .llm_client import get_llm, invoke_llm, is_llm_available
 from .log_collector import log_collector
+from .progress_events import scanner_progress_context
 from ..config import settings
 from ..RAG.retriever import get_scan_strategy
 from ..utils.log_writer import log_info, log_warn, log_error, log_success, log_debug
@@ -177,7 +178,7 @@ def is_auth_failure_response(response: Any) -> bool:
         if status_code in [401, 403]:
             return True
         
-        error = response.get("error", "").lower()
+        error = str(response.get("error") or "").lower()
         auth_errors = [
             "unauthorized", "forbidden", "authentication failed",
             "token expired", "session expired", "invalid token",
@@ -284,12 +285,7 @@ def _match_tool_via_llm(prompt: str, tools_list: list) -> str:
                     break
         return tool_name
     except Exception as e:
-        logger.warning(f"LLM工具匹配失败: {e}，使用第一个工具")
-        if tools_list:
-            first_tool = tools_list[0]
-            if hasattr(first_tool, 'name'):
-                return first_tool.name
-            return str(first_tool)
+        logger.warning(f"LLM工具匹配失败: {e}，回退到原始工具名")
         return ""
 
 
@@ -308,6 +304,139 @@ def safe_llm_invoke(llm, prompt, timeout=None, system_prompt=None):
     except Exception as e:
         logger.error(f"LLM call failed: {e}")
         raise
+
+
+def summarize_tool_result(tool_name: str, result: Any) -> str:
+    """不依赖外部模型的即时工具摘要。"""
+    if not isinstance(result, dict):
+        return f"{tool_name} 执行完成，原始结果已保留。"
+
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    vulnerabilities = data.get("vulnerabilities") if isinstance(data.get("vulnerabilities"), list) else []
+    count = len(vulnerabilities)
+    if not count:
+        try:
+            count = int(data.get("vulnerability_count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+    if not count:
+        return f"{tool_name} 执行完成，未发现漏洞。"
+
+    severity_counts: Dict[str, int] = {}
+    for vulnerability in vulnerabilities:
+        if not isinstance(vulnerability, dict):
+            continue
+        severity = str(vulnerability.get("severity") or "unknown").lower()
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+    severity_text = "、".join(f"{level.upper()} {amount}" for level, amount in severity_counts.items())
+    suffix = f"（{severity_text}）" if severity_text else ""
+    return f"{tool_name} 执行完成，发现 {count} 个漏洞{suffix}。"
+
+
+_background_tasks = set()
+
+
+async def _enhance_tool_result_analysis(
+    session_id: str,
+    tool_name: str,
+    target: str,
+    result: Dict[str, Any],
+    ws_callback: Callable,
+) -> None:
+    try:
+        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        vulnerabilities = data.get("vulnerabilities") if isinstance(data.get("vulnerabilities"), list) else []
+        compact_vulnerabilities = [
+            {
+                "title": item.get("title"),
+                "type": item.get("vuln_type") or item.get("type"),
+                "severity": item.get("severity"),
+            }
+            for item in vulnerabilities[:10]
+            if isinstance(item, dict)
+        ]
+        prompt = (
+            "请用1-2句话简要分析安全扫描结果，不要重复工具名称。"
+            f"目标：{target}；漏洞数量：{len(vulnerabilities)}；"
+            f"关键漏洞：{compact_vulnerabilities}"
+        )
+        response = await asyncio.wait_for(
+            asyncio.to_thread(invoke_llm, [HumanMessage(content=prompt)], 30),
+            timeout=35,
+        )
+        analysis = response.content if hasattr(response, "content") else str(response)
+        if analysis.strip():
+            await ws_callback({
+                "type": "task_analysis_updated",
+                "payload": {
+                    "tool": tool_name,
+                    "target": target,
+                    "analysis": analysis.strip(),
+                    "timestamp": datetime.now().isoformat(),
+                },
+            })
+    except Exception as exc:
+        logger.warning(f"[{session_id}] LLM结果增强失败，已使用本地摘要: {exc}")
+
+
+def schedule_tool_result_analysis(
+    session_id: str,
+    tool_name: str,
+    target: str,
+    result: Dict[str, Any],
+    ws_callback: Optional[Callable],
+) -> None:
+    if ws_callback is None:
+        return
+    task = asyncio.create_task(
+        _enhance_tool_result_analysis(session_id, tool_name, target, result, ws_callback)
+    )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+async def _enhance_tool_error_analysis(
+    session_id: str,
+    tool_name: str,
+    target: str,
+    error: str,
+    ws_callback: Callable,
+) -> None:
+    try:
+        prompt = f"请用1-2句话用中文分析安全扫描工具失败原因并给出建议。工具：{tool_name}；错误：{error[:500]}"
+        response = await asyncio.wait_for(
+            asyncio.to_thread(invoke_llm, [HumanMessage(content=prompt)], 30),
+            timeout=35,
+        )
+        analysis = response.content if hasattr(response, "content") else str(response)
+        if analysis.strip():
+            await ws_callback({
+                "type": "task_analysis_updated",
+                "payload": {
+                    "tool": tool_name,
+                    "target": target,
+                    "analysis": analysis.strip(),
+                    "timestamp": datetime.now().isoformat(),
+                },
+            })
+    except Exception as exc:
+        logger.warning(f"[{session_id}] LLM错误增强失败，已保留原始错误: {exc}")
+
+
+def schedule_tool_error_analysis(
+    session_id: str,
+    tool_name: str,
+    target: str,
+    error: str,
+    ws_callback: Optional[Callable],
+) -> None:
+    if ws_callback is None:
+        return
+    task = asyncio.create_task(
+        _enhance_tool_error_analysis(session_id, tool_name, target, error, ws_callback)
+    )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 async def safe_llm_astream(llm, prompt, system_prompt=None):
@@ -1570,17 +1699,14 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
     
     from .tools import ALL_TOOLS
     
-    prompt = f"用户想执行工具: {tool_name}。请从可用工具中选择最匹配的工具。目标: {target}\n工具名: {tool_name}"
-    matched_name = _match_tool_via_llm(prompt, ALL_TOOLS)
-    tool = None
-    
-    if matched_name:
-        tool = get_tool_by_name(matched_name)
-        if tool:
-            logger.info(f"LLM工具匹配: '{tool_name}' -> '{matched_name}'")
-    
+    tool = get_tool_by_name(tool_name)
     if not tool:
-        tool = get_tool_by_name(tool_name)
+        prompt = f"用户想执行工具: {tool_name}。请从可用工具中选择最匹配的工具。目标: {target}\n工具名: {tool_name}"
+        matched_name = _match_tool_via_llm(prompt, ALL_TOOLS)
+        if matched_name:
+            tool = get_tool_by_name(matched_name)
+            if tool:
+                logger.info(f"LLM工具匹配: '{tool_name}' -> '{matched_name}'")
     
     if not tool:
         error_msg = f"工具 {tool_name} 不存在"
@@ -1594,7 +1720,8 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
     try:
         from .tools import invoke_tool_with_auth, extract_auth_from_result
         
-        result = invoke_tool_with_auth(tool, target, state)
+        with scanner_progress_context(session_id, tool_name, target, ws_callback):
+            result = await asyncio.to_thread(invoke_tool_with_auth, tool, target, state)
         
         if auth_retry_manager.should_trigger_reauth(session_id, result):
             retry_count = auth_retry_manager.increment_retry(session_id)
@@ -1972,9 +2099,10 @@ def build_react_prompt(state: dict, rag_strategy: str) -> str:
     target = state.get("target", "")
     mode = state.get("mode", "full_scan")
     done = list(state.get("tool_results", {}).keys())
+    failed = state.get("failed_tasks", [])
     last_result = state.get("task_result", {})
     tool_sequence = get_tool_sequence(mode)
-    remaining = [t for t in tool_sequence if t not in done]
+    remaining = [t for t in tool_sequence if t not in done and t not in failed]
     
     max_rag_length = 2000 if len(remaining) > 3 else 1500
     rag_content = rag_strategy[:max_rag_length] if rag_strategy else '暂无专业知识参考'
@@ -1985,6 +2113,7 @@ def build_react_prompt(state: dict, rag_strategy: str) -> str:
 - 目标: {target}
 - 扫描模式: {mode}
 - 已完成任务: {done if done else '无'}
+- 已失败任务: {failed if failed else '无'}
 - 剩余任务: {remaining[:10]}
 - 上一步结果: {str(last_result)[:500]}
 
@@ -2030,11 +2159,12 @@ async def ai_decision(state: ScanState) -> ScanState:
         return update_state(state, next_task="end", need_generate_script=False)
     
     done = list(state.get("tool_results", {}).keys())
+    failed = state.get("failed_tasks", [])
     mode = state.get("mode", "full_scan")
     tool_sequence = get_tool_sequence(mode)
     ws_callback = memory_store.get_websocket_callback(session_id)
     
-    remaining_tasks = [t for t in tool_sequence if t not in done]
+    remaining_tasks = [t for t in tool_sequence if t not in done and t not in failed]
     next_candidate = remaining_tasks[0] if remaining_tasks else ""
     
     # =================== RAG 知识库检索（强制） ===================
@@ -2098,13 +2228,13 @@ async def ai_decision(state: ScanState) -> ScanState:
     is_react_selected = False
     if react_decision and react_decision.get("action"):
         react_action = react_decision["action"]
-        if react_action in tool_sequence and react_action not in done:
+        if react_action in tool_sequence and react_action not in done and react_action not in failed:
             next_task_assigned = react_action
             is_react_selected = True
             logger.info(f"✅ ReACT 决策分配任务：{react_action}")
 
     if next_task_assigned is None and len(done) < len(tool_sequence):
-        remaining = [t for t in tool_sequence if t not in done]
+        remaining = [t for t in tool_sequence if t not in done and t not in failed]
         logger.warning(f"ReACT 决策未选出任务，回退到默认序列。待处理任务: {remaining}")
         next_task_assigned = remaining[0] if remaining else None
         is_react_selected = False
@@ -2205,10 +2335,13 @@ async def user_interact(state: ScanState) -> ScanState:
     if next_task == "end":
         return state
     
+    interaction_id = f"{session_id}:interaction:{next_task}:{len(state.get('completed_tasks', []))}"
     interaction_data = {
         "type": "interaction_required",
         "session_id": session_id,
+        "interaction_id": interaction_id,
         "payload": {
+            "interaction_id": interaction_id,
             "next_task": next_task,
             "target": target,
             "mode": mode,
@@ -2226,13 +2359,19 @@ async def user_interact(state: ScanState) -> ScanState:
     logger.info(f"🎯 目标：{target} | 模式：{mode} | 下一个任务：{next_task}")
     logger.info("[1]执行 [2]停止 [3]聊天 [4]上传脚本 [5]生成脚本")
     
-    memory_store.set_pending_interaction(session_id, interaction_data)
-    
     ws_callback = memory_store.get_websocket_callback(session_id)
     logger.info(f"获取到 WebSocket 回调: {ws_callback}")
     logger.info(f"发送交互数据: {interaction_data}")
     
-    if ws_callback:
+    pending_interaction = memory_store.get_pending_interaction(session_id)
+    is_replayed_interaction = (
+        pending_interaction
+        and pending_interaction.get("interaction_id") == interaction_id
+    )
+    if not is_replayed_interaction:
+        memory_store.set_pending_interaction(session_id, interaction_data)
+
+    if ws_callback and not is_replayed_interaction:
         try:
             await ws_callback(interaction_data)
         except Exception as e:
@@ -2249,7 +2388,12 @@ async def user_interact(state: ScanState) -> ScanState:
     
     logger.info(f"👤 用户选择: {user_choice}")
     
-    return update_state(state, user_choice=str(user_choice))
+    choice = str(user_choice)
+    return update_state(
+        state,
+        user_choice=choice,
+        authorized_task=next_task if choice == "1" else ""
+    )
 
 
 @with_node_retry(max_retries=3)
@@ -2266,13 +2410,17 @@ async def execute_task(state: ScanState) -> ScanState:
     log_collector.add_log(session_id, "execute_task", "info", f"任务开始: {task}, 目标={target}")
     ws_callback = memory_store.get_websocket_callback(session_id)
     
-    if task not in ("end", ""):
+    task_is_authorized = state.get("authorized_task") == task
+    if task not in ("end", "") and not task_is_authorized:
         rejection_count = state.get("rejection_count", 0)
         skipped = state.get("skipped_tasks", [])
-        
+
+        interaction_id = f"{session_id}:tool_confirm:{task}:{len(state.get('completed_tasks', []))}"
         confirm_message = {
             "type": "tool_confirm_required",
+            "interaction_id": interaction_id,
             "payload": {
+                "interaction_id": interaction_id,
                 "tool_name": task,
                 "target": target,
                 "description": f"即将执行 {task} 对 {target} 进行扫描",
@@ -2280,9 +2428,15 @@ async def execute_task(state: ScanState) -> ScanState:
             }
         }
         
-        memory_store.set_pending_interaction(session_id, confirm_message)
-        
-        if ws_callback:
+        pending_interaction = memory_store.get_pending_interaction(session_id)
+        is_replayed_interaction = (
+            pending_interaction
+            and pending_interaction.get("interaction_id") == interaction_id
+        )
+        if not is_replayed_interaction:
+            memory_store.set_pending_interaction(session_id, confirm_message)
+
+        if ws_callback and not is_replayed_interaction:
             try:
                 await ws_callback(confirm_message)
             except Exception as e:
@@ -2312,6 +2466,8 @@ async def execute_task(state: ScanState) -> ScanState:
         else:
             logger.info(f"[{session_id}] 用户确认执行工具: {task}")
             state = update_state(state, rejection_count=0)
+
+    state = update_state(state, authorized_task="")
     
     if is_auth_expired(state):
         logger.warning(f"[{session_id}] 未能获取有效认证信息，将以未认证模式继续执行")
@@ -2345,17 +2501,14 @@ async def execute_task(state: ScanState) -> ScanState:
     scan_mode = state.get("mode", "info_collection")
     tools_list = get_tools_by_mode(scan_mode)
     
-    prompt = f"当前需要执行的安全任务: {task}。请从可用工具中选择最匹配的工具来执行此任务。任务名称: {task}\n目标: {target}"
-    matched_name = _match_tool_via_llm(prompt, tools_list)
-    
-    tool = None
-    if matched_name:
-        tool = get_tool_by_name(matched_name)
-        if tool:
-            logger.info(f"LLM工具匹配: '{task}' -> '{matched_name}'")
-    
+    tool = get_tool_by_name(task)
     if not tool:
-        tool = get_tool_by_name(task)
+        prompt = f"当前需要执行的安全任务: {task}。请从可用工具中选择最匹配的工具来执行此任务。任务名称: {task}\n目标: {target}"
+        matched_name = _match_tool_via_llm(prompt, tools_list)
+        if matched_name:
+            tool = get_tool_by_name(matched_name)
+            if tool:
+                logger.info(f"LLM工具匹配: '{task}' -> '{matched_name}'")
 
     if not tool:
         logger.warning(f"工具 {task} 不存在，跳过并继续下一个任务")
@@ -2379,7 +2532,8 @@ async def execute_task(state: ScanState) -> ScanState:
     try:
         from .tools import invoke_tool_with_auth, extract_auth_from_result
         
-        res = invoke_tool_with_auth(tool, target, state)
+        with scanner_progress_context(session_id, task, target, ws_callback):
+            res = await asyncio.to_thread(invoke_tool_with_auth, tool, target, state)
         
         if auth_retry_manager.should_trigger_reauth(session_id, res):
             retry_count = auth_retry_manager.increment_retry(session_id)
@@ -2422,6 +2576,9 @@ async def execute_task(state: ScanState) -> ScanState:
             auth_retry_manager.reset_retry(session_id)
         
         logger.info(f"📊 【{task}】结果：{res}")
+
+        if isinstance(res, dict) and res.get("success") is False:
+            raise RuntimeError(res.get("error") or f"{task} 执行失败")
         
         auth_info = extract_auth_from_result(res)
         if auth_info:
@@ -2451,9 +2608,15 @@ async def execute_task(state: ScanState) -> ScanState:
                 except Exception as e:
                     logger.error(f"WebSocket推送认证通知失败: {e}")
         
-        llm = get_llm()
-        analysis = safe_llm_invoke(llm, f"用1-2句话简要分析这个扫描结果的关键发现：{str(res)[:500]}").content
-        logger.info(f"🧾 分析：{analysis}")
+        analysis = summarize_tool_result(task, res)
+
+        result_data = res.get("data", {}) if isinstance(res, dict) else {}
+        is_vulnerable = bool(
+            isinstance(res, dict) and (
+                res.get("vulnerable") or
+                (isinstance(result_data, dict) and result_data.get("vulnerabilities"))
+            )
+        )
         
         if ws_callback:
             try:
@@ -2464,13 +2627,15 @@ async def execute_task(state: ScanState) -> ScanState:
                         "target": target,
                         "raw_result": res if isinstance(res, dict) else {"data": str(res)},
                         "analysis": analysis,
-                        "vulnerable": isinstance(res, dict) and res.get("vulnerable", False),
+                        "vulnerable": is_vulnerable,
                         "auth_obtained": bool(auth_info),
                         "timestamp": datetime.now().isoformat()
                     }
                 })
             except Exception as e:
                 logger.error(f"WebSocket推送失败: {e}")
+
+            schedule_tool_result_analysis(session_id, task, target, res, ws_callback)
         
         log_collector.add_log(session_id, "execute_task", "info", f"任务完成: {task}")
         
@@ -2482,9 +2647,12 @@ async def execute_task(state: ScanState) -> ScanState:
         completed_tasks.append(task)
         
         all_vulns = state.get("vulnerabilities", []).copy()
+        current_vulns = []
         current_mode = state.get("mode", "")
         if current_mode in ("vuln_scan", "full_scan") and isinstance(res, dict):
-            vuln_data = res.get("data", {}).get("vulnerabilities", [])
+            result_data = res.get("data", {})
+            vuln_data = result_data.get("vulnerabilities", []) if isinstance(result_data, dict) else []
+            current_vulns = vuln_data if isinstance(vuln_data, list) else []
             if vuln_data:
                 for v in vuln_data:
                     if isinstance(v, dict):
@@ -2509,6 +2677,7 @@ async def execute_task(state: ScanState) -> ScanState:
             tool_results=tool_results, 
             completed_tasks=completed_tasks,
             vulnerabilities=all_vulns,
+            current_task_vulnerabilities=current_vulns,
             task_history=task_history,
             stage_status=stage_status,
             task_result={"tool": task, "result": res},
@@ -2527,16 +2696,7 @@ async def execute_task(state: ScanState) -> ScanState:
         from TOSKill.utils.error_handler import format_tool_error
         error_response = format_tool_error(task, e)
         
-        ai_analysis = None
-        try:
-            llm = get_llm()
-            analysis_prompt = f"A security scanning tool failed. Analyze the following error and provide diagnostic suggestions in Chinese. Error: {str(e)}"
-            analysis_result = safe_llm_invoke(llm, analysis_prompt, timeout=30)
-            ai_analysis = analysis_result.content if hasattr(analysis_result, 'content') else str(analysis_result)
-            logger.info(f"[{session_id}] AI错误分析完成")
-        except Exception as llm_e:
-            logger.warning(f"[{session_id}] LLM错误分析失败，回退到原始错误: {llm_e}")
-            ai_analysis = str(e)
+        ai_analysis = error_response.get("payload", {}).get("suggestion") or str(e)
         
         if ws_callback:
             try:
@@ -2555,7 +2715,19 @@ async def execute_task(state: ScanState) -> ScanState:
                 })
             except Exception as we:
                 logger.error(f"WebSocket推送失败: {we}")
-        return update_state(state, errors=state.get("errors", []) + [f"{task}: {str(e)}"])
+            schedule_tool_error_analysis(session_id, task, target, str(e), ws_callback)
+        failed_tasks = state.get("failed_tasks", []).copy()
+        if task not in failed_tasks:
+            failed_tasks.append(task)
+
+        return update_state(
+            state,
+            errors=state.get("errors", []) + [f"{task}: {str(e)}"],
+            failed_tasks=failed_tasks,
+            current_task_vulnerabilities=[],
+            authorized_task="",
+            next_task="continue"
+        )
 
 
 def _parse_response(full_response: str):
@@ -2646,28 +2818,38 @@ async def vulnerability_check(state: ScanState) -> ScanState:
     4. 根据用户决策更新状态
     """
     vulnerabilities = state.get("vulnerabilities", [])
+    current_vulnerabilities = state.get("current_task_vulnerabilities", [])
     session_id = state.get("websocket_session_id") or state.get("task_id")
     
     risk_summary = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for vuln in vulnerabilities:
-        severity = vuln.get("severity", "info").lower()
+        severity = str(vuln.get("severity") or "info").lower()
         if severity in risk_summary:
             risk_summary[severity] += 1
-    
+
+    current_risk_summary = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for vuln in current_vulnerabilities:
+        severity = str(vuln.get("severity") or "info").lower()
+        if severity in current_risk_summary:
+            current_risk_summary[severity] += 1
+
     state = update_state(state, risk_summary=risk_summary)
-    
-    if risk_summary["critical"] > 0 or risk_summary["high"] > 0:
-        highest_risk = "critical" if risk_summary["critical"] > 0 else "high"
-        
+
+    if current_risk_summary["critical"] > 0 or current_risk_summary["high"] > 0:
+        highest_risk = "critical" if current_risk_summary["critical"] > 0 else "high"
+        task_name = state.get("task_result", {}).get("tool", "unknown")
+        interaction_id = f"{session_id}:high_risk:{task_name}:{len(current_vulnerabilities)}"
+
         interrupt_data = {
             "type": "high_risk_vulnerability_detected",
+            "interaction_id": interaction_id,
             "highest_risk_level": highest_risk,
-            "risk_summary": risk_summary,
+            "risk_summary": current_risk_summary,
             "vulnerabilities": [
-                v for v in vulnerabilities 
-                if v.get("severity", "").lower() in ("critical", "high")
+                v for v in current_vulnerabilities
+                if str(v.get("severity") or "").lower() in ("critical", "high")
             ],
-            "message": f"检测到 {risk_summary['critical']} 个严重漏洞, {risk_summary['high']} 个高危漏洞",
+            "message": f"检测到 {current_risk_summary['critical']} 个严重漏洞, {current_risk_summary['high']} 个高危漏洞",
             "options": [
                 {"key": "continue", "label": "继续扫描", "description": "继续执行剩余扫描任务"},
                 {"key": "stop", "label": "停止并报告", "description": "立即停止扫描并生成报告"},
@@ -2675,23 +2857,47 @@ async def vulnerability_check(state: ScanState) -> ScanState:
             ]
         }
         
+        interaction_message = {
+            "type": "high_risk_vulnerability_detected",
+            "interaction_id": interaction_id,
+            "payload": interrupt_data
+        }
+        pending_interaction = memory_store.get_pending_interaction(session_id)
+        is_replayed_interaction = (
+            pending_interaction
+            and pending_interaction.get("interaction_id") == interaction_id
+        )
+        if not is_replayed_interaction:
+            memory_store.set_pending_interaction(session_id, interaction_message)
+
         ws_callback = memory_store.get_websocket_callback(session_id)
-        if ws_callback:
-            await ws_callback(interrupt_data)
+        if ws_callback and not is_replayed_interaction:
+            await ws_callback(interaction_message)
         
         user_decision = interrupt(interrupt_data)
-        
-        decision = user_decision.get("choice", "continue") if isinstance(user_decision, dict) else "continue"
+        memory_store.clear_pending_interaction(session_id)
+
+        decision = user_decision.get("choice", "continue") if isinstance(user_decision, dict) else str(user_decision or "continue")
         
         logger.info(f"[{session_id}] 高危漏洞确认 - 用户决策: {decision}")
         
         if decision == "stop":
-            state = update_state(state, skip_remaining_tasks=True, confirmed=True)
+            state = update_state(
+                state,
+                skip_remaining_tasks=True,
+                confirmed=True,
+                current_task_vulnerabilities=[]
+            )
             return update_state(state, next_task="end", need_generate_script=False)
         elif decision == "poc_verify":
-            state = update_state(state, next_task="poc_verification", confirmed=True)
+            state = update_state(
+                state,
+                next_task="poc_verification",
+                confirmed=True,
+                current_task_vulnerabilities=[]
+            )
         else:
-            state = update_state(state, confirmed=True)
+            state = update_state(state, confirmed=True, current_task_vulnerabilities=[])
     
     return state
 
@@ -3338,7 +3544,8 @@ class AgentOrchestrator:
                 logger.error(f"WebSocket推送失败: {e}")
         
         try:
-            result = tool.invoke(target)
+            with scanner_progress_context(session_id, tool_name, target, websocket_callback):
+                result = await asyncio.to_thread(tool.invoke, target)
             formatted = format_tool_result(tool_name, target, result)
             
             if websocket_callback:

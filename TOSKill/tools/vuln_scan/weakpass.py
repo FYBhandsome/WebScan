@@ -12,7 +12,10 @@ def weakpass_scan(
     usernames: Optional[List[str]] = None,
     passwords: Optional[List[str]] = None,
     max_attempts: int = 50,
-    auth_type: str = "form"
+    auth_type: str = "form",
+    cookies: Optional[Dict[str, str]] = None,
+    headers: Optional[Dict[str, str]] = None,
+    auth_token: Optional[str] = None
 ) -> Dict[str, Any]:
     """弱口令/登录爆破扫描工具，检测目标URL是否存在弱口令漏洞
     
@@ -53,6 +56,8 @@ def weakpass_scan(
             config["passwords"] = passwords
         
         scanner = WeakPassScanner(target, config)
+        if cookies or headers or auth_token:
+            scanner.set_authentication(cookies=cookies, headers=headers, auth_token=auth_token)
         result = scanner.scan()
         
         vulnerabilities = []

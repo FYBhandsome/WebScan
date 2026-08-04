@@ -143,6 +143,11 @@ def get_llm() -> ChatOpenAI:
     return llm_client.get_llm()
 
 
+def invoke_llm(messages: List[BaseMessage], timeout: Optional[float] = None) -> BaseMessage:
+    """通过统一重试与熔断策略调用模型。"""
+    return llm_client.invoke(messages, timeout=timeout)
+
+
 def is_llm_available() -> bool:
     """检查LLM服务是否可用"""
     return llm_client.is_available()

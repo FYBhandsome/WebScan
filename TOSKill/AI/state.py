@@ -12,9 +12,11 @@ class ScanState(TypedDict, total=False):
     """扫描状态"""
     target: str
     task_id: str
+    run_id: str
     mode: str
     planned_tasks: List[str]
     completed_tasks: List[str]
+    failed_tasks: List[str]
     tool_results: Dict[str, Any]
     vulnerabilities: List[Dict[str, Any]]
     target_context: Dict[str, Any]
@@ -93,11 +95,13 @@ class ScanState(TypedDict, total=False):
     confirmation_message: NotRequired[str]
     confirmation_options: NotRequired[List[Dict]]
     confirmed: NotRequired[bool]
+    authorized_task: NotRequired[str]
     
     # 风险控制
     highest_risk_level: NotRequired[str]
     risk_summary: NotRequired[Dict[str, int]]
     skip_remaining_tasks: NotRequired[bool]
+    current_task_vulnerabilities: NotRequired[List[Dict[str, Any]]]
 
 
 def create_initial_state(target: str, task_id: str = None, mode: str = "info_collection") -> ScanState:
@@ -108,9 +112,11 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
     return ScanState(
         target=target,
         task_id=task_id or str(uuid.uuid4())[:8],
+        run_id="",
         mode=mode,
         planned_tasks=[],
         completed_tasks=[],
+        failed_tasks=[],
         tool_results={},
         vulnerabilities=[],
         target_context={},
@@ -186,6 +192,8 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         tool_confirm_required=False,
         confirm_target="",
         confirm_tool="",
+        authorized_task="",
+        current_task_vulnerabilities=[],
     )
 
 

@@ -62,9 +62,13 @@ class WSManager {
 
             try {
                 const rawUrl = this.url || API.getWebSocketUrl();
-                const targetUrl = rawUrl.includes(API.WS_PATH)
+                let targetUrl = rawUrl.includes(API.WS_PATH)
                     ? rawUrl
                     : rawUrl.replace(/\/$/, '') + API.WS_PATH;
+                if (this.sessionId) {
+                    const separator = targetUrl.includes('?') ? '&' : '?';
+                    targetUrl += `${separator}session_id=${encodeURIComponent(this.sessionId)}`;
+                }
                 this.ws = new WebSocket(targetUrl);
 
                 this.ws.onopen = () => {
@@ -214,10 +218,13 @@ class WSManager {
         console.log('[WS] startScan 发送结果:', result);
         return result;
     }
-    sendConfirm(choice = 'confirm') { return this.send('user_choice', { choice }); }
-    sendToolConfirm(confirmed = true) {
-        if (confirmed) { return this.send('tool_confirmed', { confirmed: true }); } 
-        else { return this.send('tool_rejected', { confirmed: false }); }
+    sendConfirm(choice = 'confirm', interactionId = null) {
+        return this.send('user_choice', { choice, ...(interactionId ? { interaction_id: interactionId } : {}) });
+    }
+    sendToolConfirm(confirmed = true, interactionId = null) {
+        const interaction = interactionId ? { interaction_id: interactionId } : {};
+        if (confirmed) { return this.send('tool_confirmed', { confirmed: true, ...interaction }); }
+        else { return this.send('tool_rejected', { confirmed: false, ...interaction }); }
     }
     sendAlternativeChoice(choiceIndex, choiceLabel) {
         return this.send('alternative_selected', { choice_index: choiceIndex, choice_label: choiceLabel });

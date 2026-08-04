@@ -1,6 +1,3 @@
-# ======================
-# 后端 Web 核心依赖
-# ======================
 fastapi>=0.115.0
 uvicorn>=0.34.0
 pydantic>=2.10.0
@@ -8,9 +5,6 @@ pydantic-settings>=2.0.0
 python-multipart>=0.0.9
 python-dotenv>=1.0.0
 
-# ======================
-# AI 应用框架
-# ======================
 langchain>=0.3.0
 langgraph>=1.2.0
 langgraph-checkpoint-sqlite>=3.0.0
@@ -19,18 +13,12 @@ openai>=1.59.0
 langchain-openai>=0.2.0
 tiktoken>=0.7.0
 
-# ======================
-# RAG 知识库
-# ======================
 llama-index>=0.11.0
 llama-index-embeddings-huggingface>=0.3.0
 huggingface-hub>=0.20.0
 sentence-transformers>=3.0.0
 torch>=2.2.0
 
-# ======================
-# 安全扫描 & 网络基础
-# ======================
 requests>=2.32.0
 httpx>=0.27.0
 aiohttp>=3.9.0
@@ -39,38 +27,20 @@ beautifulsoup4>=4.12.0
 lxml>=5.1.0
 python-nmap>=0.7.0
 
-# ======================
-# DNS / 网络分析
-# ======================
 dnspython>=2.6.0
 geoip2>=4.8.0
 python-whois>=0.9.0
 
-# ======================
-# SSL/TLS 安全分析
-# ======================
 pyOpenSSL>=24.0
 cryptography>=42.0
 
-# ======================
-# 数据库连接（弱口令爆破）
-# ======================
 paramiko>=3.4.0
 pymysql>=1.1.0
 pymongo>=4.7.0
 redis>=5.0.0
 
-# ======================
-# 反检测 / 匿名化
-# ======================
 fake-useragent>=1.5.0
 
-# ======================
-# Web Fuzz 增强
-# ======================
 wfuzz>=3.1.0
 
-# ======================
-# 外部 API 聚合（可选）
-# ======================
 shodan>=1.31.0

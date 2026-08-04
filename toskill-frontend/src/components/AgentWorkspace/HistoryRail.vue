@@ -31,11 +31,11 @@ const emit = defineEmits(['navigate'])
 // 当前激活的区块 ID
 const activeId = ref(null)
 
-// 从工作区的 block 列表中提取关键里程碑
+// 只保留用户输入和完整运行，日志与交互在运行节点内原地更新。
 const nodes = computed(() => {
   const filtered = props.blocks.filter(b => 
     b.type === 'user_command' || 
-    b.type === 'agent_action_request' || 
+    b.type === 'agent_run' ||
     (b.type === 'agent_text' && b.reportUrl)
   )
   
@@ -55,7 +55,7 @@ const getLabel = (node) => {
   if (node.type === 'user_command') {
     return node.content.length > 8 ? node.content.slice(0, 8) + '...' : node.content
   }
-  if (node.type === 'agent_action_request') return '操作确认'
+  if (node.type === 'agent_run') return node.status === 'completed' ? '扫描完成' : '智能体扫描'
   if (node.reportUrl) return '扫描报告'
   return '对话节点'
 }

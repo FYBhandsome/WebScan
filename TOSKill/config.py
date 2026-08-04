@@ -30,6 +30,12 @@ class TOSKillSettings(BaseSettings):
     LLM_TEMPERATURE: float = 0.1
     
     RAG_ENABLED: bool = True
+    RAG_INIT_ON_STARTUP: bool = True
+    RAG_EMBED_MODEL: str = "BAAI/bge-small-zh-v1.5"
+    RAG_MODEL_CACHE_DIR: str = str(Path.home() / ".cache" / "huggingface")
+    RAG_ALLOW_DOWNLOAD: bool = True
+    RAG_MODEL_LOAD_TIMEOUT: int = 60
+    RAG_KEYWORD_FALLBACK: bool = True
     SCAN_TIMEOUT: int = 300
     MAX_CONCURRENT_SCANS: int = 5
     

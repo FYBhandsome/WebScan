@@ -6,17 +6,15 @@
         <ChatArea 
           :blocks="workspaceBlocks" 
           :is-typing="isTyping"
-          :scan-progress="scanProgress"
+          :current-thinking="currentThinking"
+          :is-thinking="isThinking"
           @action="handleBlockAction"
           @submit-input="handleInputResponse"
-          @select-mode="handleModeSelect"
-          @scan-confirm="handleScanConfirm"
-          @scan-cancel="handleScanCancel"
         />
         <CommandInput 
           v-show="!inputCollapsed"
           v-model="inputText"
-          :disabled="isTyping || waitingForChoice"
+          :disabled="isTyping && !waitingForChoice"
           :is-active="scanActive"
           @send="sendMessage"
           @stop="handleStop"
@@ -28,7 +26,7 @@
         class="floating-rail"
         :style="{ bottom: inputCollapsed ? '60px' : '90px' }"
         :blocks="workspaceBlocks" 
-        @navigate="handleBlockAction" 
+        @navigate="handleHistoryNavigate"
       />
       
     </div>
@@ -66,21 +64,24 @@ const onExpandInput = () => {
   inputCollapsed.value = false
 }
 
+const handleHistoryNavigate = (id) => {
+  const blockElement = document.querySelector(`[data-block-id="${id}"]`)
+  blockElement?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
 const {
   inputText,
   workspaceBlocks,
   isTyping,
+  currentThinking,
+  isThinking,
   waitingForChoice,
   sendMessage,
   handleQuickAction,
   handleBlockAction,
-  scanProgress,
   handleInputResponse,
   scanActive,
   handleStop,
-  handleModeSelect,
-  handleScanConfirm,
-  handleScanCancel
 } = useAgentChat()
 </script>
 

@@ -1,6 +1,5 @@
 <template>
-  <header class="app-header">
-
+<header class="app-header">
 <div class="brand" style="display: flex; align-items: center; gap: 14px;">
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink: 0;">
     <path d="M4 10V4H10" stroke="#000000" stroke-width="2.5" stroke-linecap="square"/>
@@ -24,20 +23,54 @@
   </div>
 </div>
 
+    <div v-if="showScanProgress && hasProgress" class="header-scan-progress">
+      <div class="header-progress-copy">
+        <span>{{ progressLabel }}</span>
+        <span>{{ scanProgress.current || 0 }} / {{ scanProgress.total || 0 }}</span>
+      </div>
+      <div class="header-progress-track">
+        <div class="header-progress-fill" :style="{ width: `${progressPercent}%` }"></div>
+      </div>
+    </div>
+    <div v-else class="header-center-placeholder"></div>
+
     <div class="system-status">
-      <div class="status-dot online"></div>
-      <span class="status-text">已连接</span>
+      <div class="status-dot" :class="{ online: status === '已连接' }"></div>
+      <span class="status-text">{{ status }}</span>
     </div>
   </header>
 </template>
 
 <script setup>
-import { ShieldCheck } from 'lucide-vue-next'
-defineProps({
+import { computed } from 'vue'
+
+const props = defineProps({
   status: {
     type: String,
     default: '未连接'
-  }
+  },
+  scanProgress: {
+    type: Object,
+    default: () => ({ current: 0, total: 0, activeTool: '' })
+  },
+  scanStatus: {
+    type: String,
+    default: 'idle'
+  },
+  showScanProgress: Boolean
+})
+
+const hasProgress = computed(() => props.scanProgress?.total > 0)
+const progressPercent = computed(() => {
+  if (!props.scanProgress?.total) return 0
+  return Math.min(100, Math.round(((props.scanProgress.current || 0) / props.scanProgress.total) * 100))
+})
+const progressLabel = computed(() => {
+  if (props.scanStatus === 'completed') return '扫描完成'
+  if (props.scanStatus === 'error') return '扫描异常'
+  if (props.scanStatus === 'waiting') return '等待用户确认'
+  if (props.scanStatus === 'idle') return '扫描已停止'
+  return props.scanProgress?.activeTool ? `正在执行：${props.scanProgress.activeTool}` : '扫描准备中'
 })
 </script>
 
@@ -45,8 +78,8 @@ defineProps({
 @import url('https://fonts.font.im/css2?family=Montserrat:wght@900&family=Orbitron:wght@900&family=Space+Grotesk:wght@700&display=swap');
 /* 顶栏容器：去除阴影，仅保留 1px 极细底边 */
 .app-header {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(280px, 620px) minmax(180px, 1fr);
   align-items: center;
   height: 64px;
   padding: 0 40px;
@@ -54,6 +87,36 @@ defineProps({
   border-bottom: 1px solid #eaeaea; /* 极简的灵魂在此 */
   /* box-shadow: none !important; 确保没有任何阴影 */
 }
+
+.header-scan-progress {
+  width: 100%;
+  justify-self: center;
+  font-family: var(--font-family);
+}
+
+.header-progress-copy {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 5px;
+  color: #52525b;
+  font-size: 12px;
+}
+
+.header-progress-track {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: #e4e4e7;
+}
+
+.header-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #10b981, #0ea5e9);
+  transition: width .3s ease;
+}
+
+.header-center-placeholder { min-width: 0; }
 
 /* 品牌标识区 */
 .brand {
@@ -91,6 +154,7 @@ defineProps({
   display: flex;
   align-items: center;
   gap: 8px; /* 圆点和文字的间距 */
+  justify-self: end;
   /* 彻底删除 background, border, padding, border-radius */
 }
 
@@ -99,9 +163,11 @@ defineProps({
   width: 6px; 
   height: 6px;
   border-radius: 50%;
-  background-color: #10B981; /* 你的主打绿 */
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.8); /* 纯净的霓虹辉光，代替原来那个脏脏的圈 */
+  background-color: #a1a1aa;
+  box-shadow: none;
 }
+
+.status-dot.online { background-color: #10B981; box-shadow: 0 0 8px rgba(16, 185, 129, .8); }
 
 /* 降噪的专业排版 */
 .status-text {
@@ -152,5 +218,10 @@ defineProps({
     transform: scale(0.95);
     box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
   }
+}
+
+@media (max-width: 820px) {
+  .app-header { grid-template-columns: auto minmax(150px, 1fr) auto; gap: 16px; padding: 0 18px; }
+  .header-progress-copy { font-size: 11px; }
 }
 </style>

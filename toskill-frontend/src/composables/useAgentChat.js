@@ -1,6 +1,6 @@
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { ws } from '../services/websocket.js'
-import { showToast, globalState } from '../store.js'
+import { showToast, globalState, scanProgressState, scanStatusState } from '../store.js'
 import { API } from '../services/api.js'
 import { addLog } from './useLogBus.js'
 
@@ -12,9 +12,9 @@ export function useAgentChat() {
   const currentThinking = ref('')
   const isThinking = ref(false)
   const thinkingExpanded = ref(true)
-  const scanProgress = ref({ current: 0, total: 0, activeTool: '' })
+  const scanProgress = scanProgressState
   const pendingInputRequest = ref(null)
-  const scanStatus = ref('idle')
+  const scanStatus = scanStatusState
 
   const scanActive = ref(false)
   const pendingModeSelect = ref(null)
@@ -109,6 +109,161 @@ export function useAgentChat() {
     })
   }
 
+  const findInteraction = (interactionId) => {
+    if (!interactionId) return null
+    for (const run of workspaceBlocks.value.filter(block => block.type === 'agent_run')) {
+      for (const step of run.steps || []) {
+        if (step.interaction?.interactionId === interactionId) return step.interaction
+      }
+    }
+    return null
+  }
+
+  const hasOpenInteraction = (interactionId) => Boolean(
+    findInteraction(interactionId) && !findInteraction(interactionId).resolved
+  )
+
+  const lastRunSequences = new Map()
+
+  const getRunId = (payload = {}) => {
+    if (payload.run_id) return payload.run_id
+    const activeRun = [...workspaceBlocks.value].reverse().find(
+      block => block.type === 'agent_run' && !['completed', 'failed', 'cancelled'].includes(block.status)
+    )
+    return activeRun?.runId || ws.getSessionId() || 'active-run'
+  }
+
+  const acceptRunEvent = (payload = {}) => {
+    const sequence = Number(payload.sequence)
+    if (!Number.isFinite(sequence)) return true
+    const runId = getRunId(payload)
+    const lastSequence = lastRunSequences.get(runId) || 0
+    if (sequence <= lastSequence) return false
+    lastRunSequences.set(runId, sequence)
+    return true
+  }
+
+  const ensureRunBlock = (payload = {}) => {
+    const runId = getRunId(payload)
+    let run = workspaceBlocks.value.find(block => block.type === 'agent_run' && block.runId === runId)
+    if (!run && payload.run_id) {
+      run = [...workspaceBlocks.value].reverse().find(
+        block => block.type === 'agent_run' && block.provisional && !['completed', 'failed', 'cancelled'].includes(block.status)
+      )
+      if (run) {
+        run.runId = runId
+        run.id = `run:${runId}`
+        run.provisional = false
+      }
+    }
+    if (!run) {
+      run = {
+        id: `run:${runId}`,
+        timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
+        type: 'agent_run',
+        runId,
+        provisional: !payload.run_id,
+        title: '智能体扫描',
+        target: payload.target || globalState.currentTarget || '',
+        mode: payload.mode || '',
+        status: 'running',
+        completed: 0,
+        total: 0,
+        steps: [],
+        summary: ''
+      }
+      workspaceBlocks.value.push(run)
+    }
+    if (payload.target) run.target = payload.target
+    if (payload.mode) run.mode = payload.mode
+    return run
+  }
+
+  const updateRun = (payload = {}, patch = {}) => {
+    const run = ensureRunBlock(payload)
+    Object.assign(run, patch)
+    return run
+  }
+
+  const upsertRunStep = (payload = {}, patch = {}) => {
+    const run = ensureRunBlock(payload)
+    const stepId = payload.step_id || patch.stepId || payload.tool || payload.node || payload.event || 'workflow'
+    let step = run.steps.find(item => item.stepId === stepId)
+    if (!step) {
+      step = {
+        stepId,
+        title: patch.title || payload.tool || payload.node || stepId,
+        status: 'pending',
+        message: '',
+        analysis: '',
+        logs: [],
+        rawResult: null
+      }
+      run.steps.push(step)
+    }
+    Object.assign(step, patch)
+    return step
+  }
+
+  const attachRunInteraction = (payload = {}, interaction = {}) => {
+    const interactionId = interaction.interactionId || payload.interaction_id ||
+      `local:${interaction.actionSource || interaction.type || 'action'}:${payload.step_id || payload.next_task || payload.tool || Date.now()}`
+    const existing = findInteraction(interactionId)
+    if (existing) {
+      Object.assign(existing, interaction)
+      return existing
+    }
+
+    const stepId = interaction.stepId || payload.step_id ||
+      (payload.next_task ? `decision:${payload.next_task}` : `interaction:${interactionId}`)
+    const step = upsertRunStep({ ...payload, step_id: stepId }, {
+      title: interaction.stepTitle || interaction.title || payload.next_task || payload.tool || '等待用户操作',
+      status: 'waiting',
+      message: interaction.description || ''
+    })
+    step.interaction = {
+      type: interaction.type || 'actions',
+      ...interaction,
+      interactionId,
+      resolved: false,
+      selectedChoice: ''
+    }
+    updateRun(payload, { status: 'waiting' })
+    scanStatus.value = 'waiting'
+    return step.interaction
+  }
+
+  const resolveRunInteraction = (interaction, choiceLabel = '') => {
+    if (!interaction) return
+    interaction.resolved = true
+    interaction.selectedChoice = choiceLabel
+    for (const run of workspaceBlocks.value.filter(block => block.type === 'agent_run')) {
+      const step = (run.steps || []).find(item => item.interaction === interaction)
+      if (step) {
+        step.status = choiceLabel.includes('停止') || choiceLabel.includes('终止') ? 'cancelled' : 'completed'
+        break
+      }
+    }
+    scanStatus.value = choiceLabel.includes('停止') || choiceLabel.includes('取消') ? 'idle' : 'scanning'
+  }
+
+  const appendRunLog = (payload = {}) => {
+    const step = upsertRunStep(payload, {
+      title: payload.tool || payload.node || payload.step_id || '执行过程',
+      status: payload.status === 'failed' ? 'failed' : 'running'
+    })
+    const entry = {
+      id: payload.id || `${payload.sequence || Date.now()}:${payload.message || ''}`,
+      level: String(payload.level || 'info').toLowerCase(),
+      message: payload.message || '',
+      timestamp: payload.timestamp || new Date().toISOString()
+    }
+    if (!step.logs.some(item => item.id === entry.id)) {
+      step.logs.push(entry)
+      if (step.logs.length > 100) step.logs.splice(0, step.logs.length - 100)
+    }
+  }
+
   const addStreamText = (content) => {
     const lastBlock = workspaceBlocks.value[workspaceBlocks.value.length - 1]
     if (lastBlock && lastBlock.streaming && lastBlock.type === 'agent_text') {
@@ -126,7 +281,14 @@ export function useAgentChat() {
   }
 
   const addInfoBlock = (message) => {
-    addBlock('agent_info', { content: message })
+    const activeRun = [...workspaceBlocks.value].reverse().find(
+      block => block.type === 'agent_run' && !['completed', 'failed', 'cancelled'].includes(block.status)
+    )
+    if (activeRun) {
+      appendRunLog({ run_id: activeRun.runId, step_id: 'workflow', node: '工作流', message, level: 'info' })
+    } else {
+      addBlock('agent_text', { content: message, tone: 'info' })
+    }
   }
 
   const addErrorBlock = (message, errorData = {}) => {
@@ -154,9 +316,24 @@ export function useAgentChat() {
     if (suggestion) {
       fullMessage = `${fullMessage}\n💡 建议: ${suggestion}`
     }
+
+    const activeRun = [...workspaceBlocks.value].reverse().find(
+      block => block.type === 'agent_run' && !['completed', 'failed', 'cancelled'].includes(block.status)
+    )
+    if (activeRun) {
+      appendRunLog({
+        run_id: activeRun.runId,
+        step_id: 'workflow',
+        node: '工作流',
+        message: fullMessage,
+        level: 'error'
+      })
+      return
+    }
     
-    addBlock('agent_error', { 
+    addBlock('agent_text', {
       content: fullMessage,
+      tone: 'error',
       code,
       source,
       category,
@@ -204,17 +381,23 @@ export function useAgentChat() {
           pendingScanConfirm.value = { target, mode, confidence, explanation }
           showScanConfirm.value = true
           
-          addBlock('agent_scan_confirm', {
-            target,
-            mode,
-            confidence,
-            explanation,
-            modes: [
-              { key: 'info', label: '信息收集', desc: '端口扫描、子域名发现等', icon: 'target' },
-              { key: 'vuln', label: '漏洞扫描', desc: 'XSS、SQL注入检测等', icon: 'shield' },
-              { key: 'full', label: '完整扫描', desc: '信息收集+漏洞扫描', icon: 'layers' }
-            ],
-            resolved: false
+          attachRunInteraction({ target, step_id: 'scan-setup' }, {
+            type: 'actions',
+            actionSource: 'scan_confirm',
+            stepTitle: '确认扫描方案',
+            title: 'AI 解析结果',
+            description: explanation || `已识别目标 ${target}，请选择扫描模式。`,
+            params: {
+              目标: target,
+              推荐模式: mode === 'info' ? '信息收集' : mode === 'vuln' ? '漏洞扫描' : '完整扫描',
+              置信度: `${Math.round(confidence * 100)}%`
+            },
+            options: [
+              { key: 'info', label: '信息收集' },
+              { key: 'vuln', label: '漏洞扫描' },
+              { key: 'full', label: '完整扫描', primary: true },
+              { key: 'cancel', label: '取消', danger: true }
+            ]
           })
           
           isTyping.value = false
@@ -269,7 +452,7 @@ export function useAgentChat() {
   const handleScanConfirm = async (block, selectedMode) => {
     console.log('[handleScanConfirm] 开始执行', { block, selectedMode })
     
-    block.resolved = true
+    resolveRunInteraction(block, selectedMode === 'info' ? '信息收集' : selectedMode === 'vuln' ? '漏洞扫描' : '完整扫描')
     showScanConfirm.value = false
     
     const { target, mode } = pendingScanConfirm.value || {}
@@ -283,18 +466,16 @@ export function useAgentChat() {
     
     console.log('[handleScanConfirm] 确认扫描:', { target, finalMode, selectedMode, mode })
     
-    addBlock('user_command', { content: `[确认执行] 目标: ${target} | 模式: ${finalMode === 'info' ? '信息收集' : finalMode === 'vuln' ? '漏洞扫描' : '完整扫描'}` })
-    
     if (!ws.isConnected()) {
       console.log('[handleScanConfirm] WebSocket 未连接，尝试重新连接...')
-      addBlock('agent_text', { content: '正在重新建立连接...' })
+      addInfoBlock('正在重新建立连接...')
       
       try {
         await ws.connect()
         console.log('[handleScanConfirm] WebSocket 重新连接成功')
       } catch (connError) {
         console.error('[handleScanConfirm] WebSocket 连接失败:', connError)
-        addBlock('agent_error', { content: '无法建立连接，请刷新页面重试' })
+        addErrorBlock('无法建立连接，请刷新页面重试', { source: 'websocket' })
         isTyping.value = false
         return
       }
@@ -313,21 +494,25 @@ export function useAgentChat() {
     
     if (!sent) {
       console.error('[handleScanConfirm] startScan 发送失败')
-      addBlock('agent_error', { content: '发送扫描请求失败，请重试' })
+      addErrorBlock('发送扫描请求失败，请重试', { source: 'websocket' })
       isTyping.value = false
       scanActive.value = false
       return
     }
     
-    addBlock('agent_text', { content: `正在启动扫描...` })
+    upsertRunStep({ target, step_id: 'scan-setup' }, {
+      title: '扫描准备',
+      status: 'completed',
+      message: `已选择${finalMode === 'info' ? '信息收集' : finalMode === 'vuln' ? '漏洞扫描' : '完整扫描'}模式，正在启动扫描。`
+    })
     pendingScanConfirm.value = null
   }
   
   const handleScanCancel = (block) => {
-    block.resolved = true
+    resolveRunInteraction(block, '取消')
     showScanConfirm.value = false
     pendingScanConfirm.value = null
-    addBlock('agent_text', { content: '已取消扫描' })
+    updateRun({}, { status: 'cancelled', summary: '已取消扫描' })
     isTyping.value = false
   }
 
@@ -354,7 +539,6 @@ export function useAgentChat() {
     showModeSelect.value = false
     const target = pendingModeSelect.value?.target || ''
     pendingModeSelect.value = null
-    addBlock('user_command', { content: `[选择模式]: ${mode === 'info' ? '信息收集' : mode === 'vuln' ? '漏洞扫描' : '完整扫描'} | 目标: ${target}` })
     isTyping.value = true
     scanActive.value = true
     currentThinking.value = ''
@@ -400,9 +584,16 @@ export function useAgentChat() {
     const script = scriptQueue.value[currentScriptIndex.value]
     script.status = 'confirming'
     isTyping.value = false
-    addBlock('agent_action_request', {
+    attachRunInteraction({
+      target: script.target,
+      tool: script.tool_name,
+      step_id: `script:${currentScriptIndex.value}:${script.tool_name}`
+    }, {
+      type: 'actions',
       actionSource: 'script_confirm',
-      title: `确认执行: ${script.tool_name}`,
+      interactionId: `script:${currentScriptIndex.value}:${script.tool_name}`,
+      stepTitle: script.tool_name,
+      title: `确认执行：${script.tool_name}`,
       description: `目标: ${script.target}`,
       params: {
         'Script': script.tool_name,
@@ -422,8 +613,10 @@ export function useAgentChat() {
   }
 
   const showUploadScriptForm = (block) => {
-    addBlock('agent_input_request', {
-      type: 'agent_input_request',
+    attachRunInteraction({ step_id: `upload-script:${Date.now()}` }, {
+      type: 'input',
+      actionSource: 'input_request',
+      stepTitle: '上传自定义脚本',
       title: '上传自定义脚本',
       description: '请粘贴你的 Python 脚本代码。脚本必须包含 `run(target: str)` 函数并返回 `Dict` 类型结果。系统将自动进行安全审查。',
       fields: [{
@@ -447,13 +640,15 @@ export function useAgentChat() {
       }],
       resolved: false,
       context: 'upload_script',
-      sourceBlock: block
+      sourceInteraction: block
     })
   }
 
   const showGenerateScriptForm = (block) => {
-    addBlock('agent_input_request', {
-      type: 'agent_input_request',
+    attachRunInteraction({ step_id: `generate-script:${Date.now()}` }, {
+      type: 'input',
+      actionSource: 'input_request',
+      stepTitle: 'AI 生成扫描脚本',
       title: 'AI 生成扫描脚本',
       description: '请描述你需要的脚本功能，AI 将自动生成对应的 Python 扫描脚本。',
       fields: [{
@@ -468,7 +663,7 @@ export function useAgentChat() {
       }],
       resolved: false,
       context: 'generate_script',
-      sourceBlock: block
+      sourceInteraction: block
     })
   }
 
@@ -479,14 +674,20 @@ export function useAgentChat() {
     isThinking.value = false
     showModeSelect.value = false
     ws.send('stop_scan', {})
-    addBlock('agent_info', { content: '已发送停止请求' })
+    updateRun({}, { status: 'cancelled', summary: '已发送停止请求' })
   }
 
   // === 交互卡片事件分发 ===
   const handleBlockAction = (block, choiceKey, choiceLabel) => {
-    block.resolved = true
-    addBlock('user_command', { content: `[授权决策]: ${choiceLabel}` })
+    resolveRunInteraction(block, choiceLabel)
     isTyping.value = true
+    updateRun({}, { status: 'running' })
+
+    if (block.actionSource === 'scan_confirm') {
+      if (choiceKey === 'cancel') handleScanCancel(block)
+      else handleScanConfirm(block, choiceKey)
+      return
+    }
 
     if (!ws.isConnected()) {
         isTyping.value = false
@@ -496,13 +697,15 @@ export function useAgentChat() {
     switch (block.actionSource) {
       case 'interaction_required':
         waitingForChoice.value = false
-        ws.sendConfirm(choiceKey)
+        ws.sendConfirm(choiceKey, block.interactionId)
         break
       case 'high_risk':
-        ws.send('high_risk_confirm', { choice: choiceKey })
+        waitingForChoice.value = false
+        ws.send('high_risk_confirm', { choice: choiceKey, interaction_id: block.interactionId })
         break
       case 'tool_confirm':
-        ws.sendToolConfirm(choiceKey === 'approve')
+        waitingForChoice.value = false
+        ws.sendToolConfirm(choiceKey === 'approve', block.interactionId)
         break
       case 'alternative_options':
         ws.sendAlternativeSelected(choiceKey, choiceLabel)
@@ -512,23 +715,34 @@ export function useAgentChat() {
           const script = scriptQueue.value[currentScriptIndex.value]
           script.status = 'running'
           isTyping.value = true
-          addBlock('agent_info', { content: `正在执行脚本: ${script.tool_name}` })
+          upsertRunStep({ tool: script.tool_name, target: script.target }, {
+            title: script.tool_name,
+            status: 'running',
+            message: `正在执行脚本：${script.tool_name}`
+          })
           ws.send('execute_tool', { tool_name: script.tool_name, target: script.target })
         } else if (choiceKey === 'skip') {
+          const skippedScript = scriptQueue.value[currentScriptIndex.value]
           currentScriptIndex.value++
-          addBlock('agent_info', { content: `已跳过: ${scriptQueue.value[currentScriptIndex.value - 1]?.tool_name || '-'}` })
+          upsertRunStep({ tool: skippedScript?.tool_name, target: skippedScript?.target }, {
+            title: skippedScript?.tool_name || '脚本',
+            status: 'skipped',
+            message: '用户已跳过'
+          })
           triggerScriptConfirm()
         } else if (choiceKey === 'stop_loop') {
           scriptLoopActive.value = false
           scanActive.value = false
           isTyping.value = false
-          addBlock('agent_info', { content: '脚本循环已终止' })
+          updateRun({}, { status: 'cancelled', summary: '脚本循环已终止' })
         } else if (choiceKey === 'upload_script') {
           pendingUploadScript.value = true
           showUploadScriptForm(block)
+          updateRun({}, { status: 'waiting' })
         } else if (choiceKey === 'generate_script') {
           pendingGenerateScript.value = true
           showGenerateScriptForm(block)
+          updateRun({}, { status: 'waiting' })
         }
         break
     }
@@ -536,21 +750,20 @@ export function useAgentChat() {
 
   const submitBlockInput = (block, val) => {
     if (!val) return showToast('内容不能为空', 'warning')
-    block.resolved = true
-    addBlock('user_command', { content: `[参数输入]: ${val}` })
+    resolveRunInteraction(block, '已提交')
     isTyping.value = true
     ws.send('input_response', { field: block.payload.field, value: val })
   }
 
   const handleInputResponse = (block, value) => {
-    if (block.type === 'agent_input_request' && Array.isArray(value)) {
+    if (Array.isArray(value)) {
       const fields = value
       for (const field of fields) {
         if (field.required && !field.value) {
           return showToast(`${field.label} 为必填项`, 'warning')
         }
       }
-      block.resolved = true
+      resolveRunInteraction(block, '已提交')
       pendingInputRequest.value = null
 
       if (block.context === 'upload_script') {
@@ -558,21 +771,17 @@ export function useAgentChat() {
         const scriptName = fields.find(f => f.field === 'script_name')?.value || null
         const scriptContent = fields.find(f => f.field === 'script_content')?.value || ''
         const name = scriptName || `custom_${Date.now().toString(36)}`
-        addBlock('user_command', { content: `[上传脚本]: ${name}` })
         isTyping.value = true
         ws.send('script_content', { script_content: scriptContent, script_name: name })
         return
       } else if (block.context === 'generate_script') {
         pendingGenerateScript.value = false
         const description = fields.find(f => f.field === 'script_description')?.value || ''
-        addBlock('user_command', { content: `[生成脚本]: ${description}` })
         isTyping.value = true
         ws.send('script_description', { description: description })
         return
       }
 
-      const fieldLabels = fields.map(f => `${f.label}=${f.value}`).join(', ')
-      addBlock('user_command', { content: `[参数提交]: ${fieldLabels}` })
       isTyping.value = true
       for (const field of fields) {
         if (field.value) {
@@ -582,9 +791,8 @@ export function useAgentChat() {
       return
     }
     if (!value && block.required) return showToast('此字段为必填项', 'warning')
-    block.resolved = true
+    resolveRunInteraction(block, '已提交')
     pendingInputRequest.value = null
-    addBlock('user_command', { content: `[参数提交]: ${block.label} = ${value}` })
     isTyping.value = true
     ws.send('input_response', { field: block.field, value })
   }
@@ -595,7 +803,11 @@ export function useAgentChat() {
 
     switch (data.type) {
       case 'connected':
-        addBlock('agent_text', { content: `已连接到 AI Agent 引擎\nSession: ${data.payload?.session_id || 'Active'}\n可用工具: ${data.payload?.available_tools?.length || 0} 个` })
+        addLog({
+          level: 'INFO',
+          message: `已连接到 AI Agent 引擎 (${data.payload?.session_id || 'Active'})`,
+          timestamp: new Date().toISOString()
+        })
         break
 
       case 'ai_thinking_start':
@@ -620,25 +832,47 @@ export function useAgentChat() {
         currentThinking.value = ''
         break
 
-      case 'interaction_required':
+      case 'interaction_required': {
         isTyping.value = false
         waitingForChoice.value = true
-        addBlock('agent_action_request', {
+        const interactionId = data.payload?.interaction_id || data.interaction_id
+        if (hasOpenInteraction(interactionId)) break
+        updateRun(data.payload || {}, { status: 'waiting' })
+        attachRunInteraction(data.payload || {}, {
+          type: 'actions',
           actionSource: 'interaction_required',
+          interactionId,
+          stepId: `decision:${data.payload?.next_task || interactionId}`,
+          stepTitle: data.payload?.next_task ? `下一步：${data.payload.next_task}` : '等待用户操作',
           title: '需要进一步指令',
           description: `目标: ${data.payload.target} | 规划节点: ${data.payload.next_task}`,
-          options: data.payload.options.map(opt => ({ key: opt.key, label: opt.label, style: 'btn-secondary' })),
+          options: (data.payload.options || []).map(opt => ({
+            key: opt.key,
+            label: opt.label,
+            primary: String(opt.key) === '1',
+            danger: String(opt.key) === '2'
+          })),
           resolved: false
         })
         break
+      }
 
-      case 'high_risk_vulnerability_detected':
+      case 'high_risk_vulnerability_detected': {
         isTyping.value = false
-        addBlock('agent_action_request', {
+        waitingForChoice.value = true
+        const highRiskPayload = data.payload || data
+        const interactionId = highRiskPayload.interaction_id || data.interaction_id
+        if (hasOpenInteraction(interactionId)) break
+        updateRun(highRiskPayload, { status: 'waiting' })
+        attachRunInteraction(highRiskPayload, {
+          type: 'actions',
           actionSource: 'high_risk',
+          interactionId,
+          stepId: `decision:high-risk:${interactionId}`,
+          stepTitle: '高危漏洞处置',
           title: '高危漏洞确认 (CRITICAL)',
-          description: data.payload.message || '系统检测到高危漏洞，请指示下一步动作。',
-          params: { 'Vuln count': data.payload.vulnerabilities?.length || 1, 'Severity': 'HIGH' },
+          description: highRiskPayload.message || '系统检测到高危漏洞，请指示下一步动作。',
+          params: { 'Vuln count': highRiskPayload.vulnerabilities?.length || 1, 'Severity': highRiskPayload.highest_risk_level?.toUpperCase() || 'HIGH' },
           options: [
             { key: 'continue', label: '继续扫描', style: 'btn-primary' },
             { key: 'poc_verify', label: 'POC验证', style: 'btn-secondary' },
@@ -647,99 +881,147 @@ export function useAgentChat() {
           resolved: false
         })
         break
+      }
 
       case 'scan_started':
+        if (!acceptRunEvent(data.payload || {})) break
         scanStatus.value = 'scanning'
-        addInfoBlock(`扫描已启动 | 目标: ${data.payload?.target || '-'}`)
+        isThinking.value = false
+        currentThinking.value = ''
+        scanProgress.value = { current: 0, total: data.payload?.total_tasks || 0, activeTool: '' }
+        updateRun(data.payload || {}, {
+          title: '智能体扫描',
+          target: data.payload?.target || '',
+          status: 'running'
+        })
         break
 
       case 'scan_flow_started':
+        if (!acceptRunEvent(data.payload || {})) break
         scanProgress.value = { current: 0, total: data.payload?.total_tasks || 0, activeTool: '' }
-        addInfoBlock(`工作流启动 | 模式: ${data.payload?.mode || '-'} | 计划任务: ${data.payload?.total_tasks || 0} 个`)
+        updateRun(data.payload || {}, {
+          mode: data.payload?.mode || '',
+          total: data.payload?.total_tasks || 0,
+          status: 'running'
+        })
         break
 
       case 'scan_completed':
+        if (!acceptRunEvent(data.payload || {})) break
         scanStatus.value = 'completed'
+        scanProgress.value.activeTool = ''
+        scanActive.value = false
         isTyping.value = false
+        isThinking.value = false
         const tasks = data.payload?.completed_tasks || []
         const vulnCount = data.payload?.vulnerabilities_count ?? 0
         let summary = `扫描完成\n目标: ${data.payload?.target || '-'}\n已完成工具: ${tasks.length} 个\n发现漏洞: ${vulnCount} 个`
         if (data.payload?.report) summary += `\n报告: ${data.payload.report}`
-        addBlock('agent_text', { content: summary })
+        const completedRun = updateRun(data.payload || {}, { status: 'completed', completed: tasks.length, summary })
+        const workflowStep = completedRun.steps.find(step => step.stepId === 'workflow')
+        if (workflowStep?.status === 'running') workflowStep.status = 'completed'
         break
 
       case 'scan_cancelled':
+        if (!acceptRunEvent(data.payload || {})) break
         scanStatus.value = 'idle'
+        scanProgress.value.activeTool = ''
+        scanActive.value = false
         isTyping.value = false
-        addInfoBlock('扫描已取消')
+        updateRun(data.payload || {}, { status: 'cancelled', summary: '扫描已取消' })
         break
 
       case 'scan_terminated':
+        if (!acceptRunEvent(data.payload || {})) break
         scanStatus.value = 'error'
+        scanProgress.value.activeTool = ''
+        scanActive.value = false
         isTyping.value = false
-        addErrorBlock(`扫描终止 | 原因: ${data.payload?.reason || '-'} | 建议: ${data.payload?.suggestion || '-'}`)
+        updateRun(data.payload || {}, { status: 'failed', summary: `扫描终止：${data.payload?.reason || '未知原因'}` })
         break
 
       case 'workflow_progress':
+        if (!acceptRunEvent(data.payload || {})) break
         scanProgress.value.current = data.payload?.completed ?? scanProgress.value.current
         scanProgress.value.total = data.payload?.total ?? scanProgress.value.total
-        addInfoBlock(`进度: ${data.payload?.stage || '...'} (${data.payload?.completed || 0}/${data.payload?.total || 0})`)
+        updateRun(data.payload || {}, {
+          completed: data.payload?.completed ?? scanProgress.value.current,
+          total: data.payload?.total ?? scanProgress.value.total,
+          status: data.payload?.status === 'completed' ? 'completed' : 'running'
+        })
         break
 
       case 'task_started':
+        if (!acceptRunEvent(data.payload || {})) break
         scanProgress.value.activeTool = data.payload?.tool || ''
-        addInfoBlock(`执行工具: ${data.payload?.tool || '-'} → ${data.payload?.target || '-'}`)
+        isTyping.value = true
+        isThinking.value = false
+        currentThinking.value = ''
+        updateRun(data.payload || {}, { status: 'running' })
+        upsertRunStep(data.payload || {}, {
+          title: data.payload?.tool || '扫描工具',
+          status: 'running',
+          message: `正在扫描 ${data.payload?.target || ''}`,
+          startedAt: data.payload?.timestamp || new Date().toISOString()
+        })
         break
 
       case 'task_completed':
+        if (!acceptRunEvent(data.payload || {})) break
         isTyping.value = false
         const analysis = data.payload?.analysis || ''
         const vuln = data.payload?.vulnerable ? '发现漏洞' : '未发现漏洞'
         const auth = data.payload?.auth_obtained ? ' | 已获取认证' : ''
+        upsertRunStep(data.payload || {}, {
+          title: data.payload?.tool || '扫描工具',
+          status: 'completed',
+          message: `${vuln}${auth}`,
+          analysis,
+          rawResult: data.payload?.raw_result || {},
+          completedAt: data.payload?.timestamp || new Date().toISOString()
+        })
         if (scriptLoopActive.value && currentScriptIndex.value < scriptQueue.value.length) {
           const script = scriptQueue.value[currentScriptIndex.value]
           script.status = 'completed'
-          addBlock('agent_script_result', {
-            tool_name: data.payload?.tool || script.tool_name,
-            target: script.target,
-            status: 'completed',
-            vulnerable: data.payload?.vulnerable || false,
-            analysis: analysis,
-            raw_result: data.payload?.raw_result || {},
-            auth_obtained: data.payload?.auth_obtained || false,
-            timestamp: data.payload?.timestamp || new Date().toISOString()
-          })
           currentScriptIndex.value++
           setTimeout(() => triggerScriptConfirm(), 800)
-        } else {
-          addBlock('agent_text', { content: `工具完成: ${data.payload?.tool || '-'}\n${vuln}${auth}\n${analysis}` })
         }
         break
 
+      case 'task_analysis_updated':
+        if (!acceptRunEvent(data.payload || {})) break
+        upsertRunStep(data.payload || {}, { analysis: data.payload?.analysis || '' })
+        break
+
       case 'task_error':
+        if (!acceptRunEvent(data.payload || {})) break
         isTyping.value = false
         const taskError = data.payload || {}
-        addErrorBlock(
-          `工具执行失败: ${taskError.tool || '-'}`,
-          {
-            source: 'tool',
-            suggestion: taskError.suggestion || '请检查目标是否可达，或尝试其他工具',
-            details: { 
-              tool: taskError.tool,
-              error: taskError.error,
-              target: taskError.target
-            }
-          }
-        )
+        upsertRunStep(taskError, {
+          title: taskError.tool || '扫描工具',
+          status: 'failed',
+          message: taskError.error || '工具执行失败',
+          analysis: taskError.ai_analysis || taskError.suggestion || ''
+        })
         break
 
       case 'task_skipped':
-        addInfoBlock(`跳过工具: ${data.payload?.tool || '-'} | 原因: ${data.payload?.reason || '-'}`)
+        if (!acceptRunEvent(data.payload || {})) break
+        upsertRunStep(data.payload || {}, {
+          title: data.payload?.tool || '扫描工具',
+          status: 'skipped',
+          message: data.payload?.reason || '已跳过'
+        })
         break
 
       case 'ai_decision':
-        const reactInfo = data.payload?.react_selected ? ` | ReACT: ${data.payload?.react_thought || ''}` : ''
-        addInfoBlock(`AI 决策: ${data.payload?.next_task || '-'} | 进度: ${data.payload?.progress || ''}${reactInfo}`)
+        if (!acceptRunEvent(data.payload || {})) break
+        upsertRunStep(data.payload || {}, {
+          title: '智能体决策',
+          status: 'completed',
+          message: `下一步：${data.payload?.next_task || '-'}`,
+          analysis: data.payload?.react_thought || ''
+        })
         break
 
       case 'ai_decision_complete':
@@ -757,8 +1039,11 @@ export function useAgentChat() {
       case 'input_request':
         isTyping.value = false
         const field = data.payload
-        const inputBlock = {
-          type: 'agent_input_request',
+        const inputBlock = attachRunInteraction(field, {
+          type: 'input',
+          actionSource: 'input_request',
+          interactionId: field.interaction_id || `input:${field.field}`,
+          stepTitle: '参数输入',
           title: '参数输入',
           description: field.description || '请补充以下信息',
           fields: [{
@@ -772,9 +1057,8 @@ export function useAgentChat() {
             value: ''
           }],
           resolved: false
-        }
-        addBlock('agent_input_request', inputBlock)
-        pendingInputRequest.value = workspaceBlocks.value[workspaceBlocks.value.length - 1]
+        })
+        pendingInputRequest.value = inputBlock
         break
 
       case 'multi_field_input_request':
@@ -789,21 +1073,29 @@ export function useAgentChat() {
           options: f.options || [],
           value: ''
         }))
-        const multiBlock = {
-          type: 'agent_input_request',
+        const multiBlock = attachRunInteraction(data.payload || {}, {
+          type: 'input',
+          actionSource: 'input_request',
+          interactionId: data.payload?.interaction_id || `input:multi:${Date.now()}`,
+          stepTitle: '参数输入',
           title: '参数输入',
           description: data.payload?.message || '请补充以下信息',
           fields: multiFields,
           resolved: false
-        }
-        addBlock('agent_input_request', multiBlock)
-        pendingInputRequest.value = workspaceBlocks.value[workspaceBlocks.value.length - 1]
+        })
+        pendingInputRequest.value = multiBlock
         break
 
-      case 'tool_confirm_required':
+      case 'tool_confirm_required': {
         isTyping.value = false
-        addBlock('agent_action_request', {
+        const interactionId = data.payload?.interaction_id || data.interaction_id
+        if (hasOpenInteraction(interactionId)) break
+        attachRunInteraction(data.payload || {}, {
+          type: 'actions',
           actionSource: 'tool_confirm',
+          interactionId,
+          stepId: `decision:${data.payload?.tool_name || interactionId}`,
+          stepTitle: data.payload?.tool_name || '工具确认',
           title: `确认执行: ${data.payload?.tool_name || '-'}`,
           description: data.payload?.description || `目标: ${data.payload?.target || '-'}`,
           params: { 'Tool': data.payload?.tool_name || '-', 'Target': data.payload?.target || '-' },
@@ -814,12 +1106,17 @@ export function useAgentChat() {
           resolved: false
         })
         break
+      }
 
       case 'tool_not_found':
         isTyping.value = false
         const notFoundOpts = (data.payload?.options || []).map(o => ({ key: o.key, label: o.label, style: 'btn-secondary' }))
-        addBlock('agent_action_request', {
+        attachRunInteraction(data.payload || {}, {
+          type: 'actions',
           actionSource: 'interaction_required',
+          interactionId: data.payload?.interaction_id || `tool-not-found:${data.payload?.tool_name || 'unknown'}`,
+          stepId: `decision:tool-not-found:${data.payload?.tool_name || 'unknown'}`,
+          stepTitle: '选择替代工具',
           title: `工具未找到: ${data.payload?.tool_name || '-'}`,
           description: data.payload?.message || '请选择替代工具',
           options: notFoundOpts,
@@ -836,25 +1133,49 @@ export function useAgentChat() {
         break
 
       case 'direct_tool_started':
-        addInfoBlock(`直接执行工具: ${data.payload?.tool || '-'} → ${data.payload?.target || '-'}`)
+        if (!acceptRunEvent(data.payload || {})) break
+        isTyping.value = true
+        upsertRunStep(data.payload || {}, {
+          title: data.payload?.tool || '直接工具',
+          status: 'running',
+          message: `正在扫描 ${data.payload?.target || ''}`
+        })
         break
 
       case 'direct_tool_completed':
+        if (!acceptRunEvent(data.payload || {})) break
         isTyping.value = false
-        addBlock('agent_text', { content: `直接执行完成: ${data.payload?.tool || '-'}\n${data.payload?.formatted_result || data.payload?.analysis || ''}` })
+        upsertRunStep(data.payload || {}, {
+          title: data.payload?.tool || '直接工具',
+          status: 'completed',
+          message: data.payload?.formatted_result || '执行完成',
+          analysis: data.payload?.analysis || '',
+          rawResult: data.payload?.raw_result || null
+        })
         break
 
       case 'direct_tool_error':
+        if (!acceptRunEvent(data.payload || {})) break
         isTyping.value = false
-        addErrorBlock(`直接执行失败 | ${data.payload?.tool || '-'}: ${data.payload?.error || '未知错误'}`)
+        upsertRunStep(data.payload || {}, {
+          title: data.payload?.tool || '直接工具',
+          status: 'failed',
+          message: data.payload?.error || '未知错误'
+        })
         break
 
       case 'report_generation_started':
+        if (!acceptRunEvent(data.payload || {})) break
         isTyping.value = true
-        addInfoBlock(`报告生成中... | 工具数: ${data.payload?.tool_count || 0} | 漏洞数: ${data.payload?.vulnerability_count || 0}`)
+        upsertRunStep(data.payload || {}, {
+          title: '生成扫描报告',
+          status: 'running',
+          message: `正在汇总 ${data.payload?.tool_count || 0} 个工具、${data.payload?.vulnerability_count || 0} 个漏洞`
+        })
         break
 
       case 'report_generated':
+        if (!acceptRunEvent(data.payload || {})) break
         isTyping.value = false
         const reportUrl = data.payload?.report_url || ''
         const htmlReportUrl = data.payload?.html_report_url || ''
@@ -869,19 +1190,59 @@ export function useAgentChat() {
         if (preview) {
           reportContent += `\n\n${preview}`
         }
-        addBlock('agent_text', { content: reportContent })
+        upsertRunStep(data.payload || {}, {
+          title: '生成扫描报告',
+          status: 'completed',
+          message: reportContent,
+          analysis: preview
+        })
         break
 
       case 'report_error':
+        if (!acceptRunEvent(data.payload || {})) break
         isTyping.value = false
-        addErrorBlock(`报告生成失败: ${data.payload?.error || '未知错误'}`)
+        upsertRunStep(data.payload || {}, {
+          title: '生成扫描报告',
+          status: 'failed',
+          message: data.payload?.error || '未知错误'
+        })
         break
+
+      case 'run_snapshot': {
+        if (!acceptRunEvent(data.payload || {})) break
+        const snapshot = data.payload || {}
+        const completedTasks = snapshot.completed_tasks || []
+        const failedTasks = snapshot.failed_tasks || []
+        updateRun(snapshot, {
+          target: snapshot.target || '',
+          mode: snapshot.mode || '',
+          status: snapshot.is_complete ? 'completed' : 'running',
+          completed: completedTasks.length,
+          total: snapshot.total_tasks || scanProgress.value.total || 0
+        })
+        completedTasks.forEach(tool => upsertRunStep({ ...snapshot, step_id: `tool:${tool}`, tool }, {
+          title: tool,
+          status: 'completed',
+          rawResult: snapshot.tool_results?.[tool] || null
+        }))
+        failedTasks.forEach(tool => upsertRunStep({ ...snapshot, step_id: `tool:${tool}`, tool }, {
+          title: tool,
+          status: 'failed',
+          message: '此前执行失败'
+        }))
+        ;(snapshot.logs || []).forEach(entry => appendRunLog({ ...snapshot, ...entry }))
+        break
+      }
 
       case 'alternative_options':
         isTyping.value = false
         const altOpts = (data.payload?.alternatives || []).map(a => ({ key: a.action, label: a.label, style: 'btn-secondary' }))
-        addBlock('agent_action_request', {
+        attachRunInteraction(data.payload || {}, {
+          type: 'actions',
           actionSource: 'alternative_options',
+          interactionId: data.payload?.interaction_id || `alternative:${data.payload?.rejected_tool || Date.now()}`,
+          stepId: `decision:alternative:${data.payload?.rejected_tool || 'tool'}`,
+          stepTitle: '选择替代方案',
           title: `替代方案 (已拒绝: ${data.payload?.rejected_tool || '-'})`,
           description: '请选择一个替代方案',
           options: altOpts,
@@ -1028,10 +1389,7 @@ export function useAgentChat() {
         break
 
       case 'history':
-        const historyItems = data.payload?.history || []
-        if (historyItems.length > 0) {
-          addInfoBlock(`加载了 ${historyItems.length} 条历史记录`)
-        }
+        addLog({ level: 'INFO', message: `已同步 ${(data.payload?.history || []).length} 条历史记录` })
         break
 
       case 'status':
@@ -1039,7 +1397,7 @@ export function useAgentChat() {
         if (state) {
           scanStatus.value = state.is_complete ? 'completed' : 'scanning'
           scanProgress.value.current = (state.completed_tasks || []).length
-          scanProgress.value.total = state.completed_tasks?.length || 0
+          scanProgress.value.total = state.total_tasks || state.planned_tasks?.length || state.completed_tasks?.length || 0
           addInfoBlock(`会话状态: ${scanStatus.value === 'completed' ? '已完成' : '扫描中'}`)
         } else {
           addInfoBlock('会话状态: 空闲')
@@ -1053,6 +1411,7 @@ export function useAgentChat() {
       case 'workflow_error':
         isTyping.value = false
         isThinking.value = false
+        scanStatus.value = 'error'
         addErrorBlock(`工作流错误: ${data.payload?.error || '未知错误'}`, {
           source: 'backend',
           category: data.payload?.code || 'WORKFLOW_ERROR',
@@ -1111,6 +1470,16 @@ export function useAgentChat() {
           message: data.payload?.message || '',
           timestamp: data.payload?.timestamp || data.timestamp || null
         })
+        if (acceptRunEvent(data.payload || {})) appendRunLog(data.payload || {})
+        break
+
+      case 'tool_progress':
+        addLog({
+          level: data.payload?.level || 'INFO',
+          message: data.payload?.message || '',
+          timestamp: data.payload?.timestamp || data.timestamp || null
+        })
+        if (acceptRunEvent(data.payload || {})) appendRunLog(data.payload || {})
         break
 
       default:
@@ -1122,26 +1491,21 @@ export function useAgentChat() {
     ws.on('*', handleWSMessage)
     
     ws.onConnect(() => {
-      addInfoBlock('✅ WebSocket 连接成功')
+      addLog({ level: 'INFO', message: 'WebSocket 连接成功', timestamp: new Date().toISOString() })
     })
     
     ws.onDisconnect((event) => {
       const reason = event?.reason || '连接已关闭'
-      addErrorBlock(`WebSocket 连接断开: ${reason}`, { 
-        source: 'websocket',
-        suggestion: '正在尝试重新连接...'
-      })
+      addLog({ level: 'WARNING', message: `WebSocket 连接断开，正在重连：${reason}`, timestamp: new Date().toISOString() })
     })
     
     ws.onError((error) => {
-      addErrorBlock('WebSocket 连接错误', { 
-        source: 'websocket',
-        suggestion: '请检查网络连接，或刷新页面重试'
-      })
+      addLog({ level: 'ERROR', message: `WebSocket 连接错误：${error?.message || '未知错误'}`, timestamp: new Date().toISOString() })
     })
     
     ws.onReconnect((sessionId) => {
-      addInfoBlock('🔄 WebSocket 重新连接成功')
+      addLog({ level: 'INFO', message: `WebSocket 已恢复：${sessionId}`, timestamp: new Date().toISOString() })
+      ws.sendGetHistory()
     })
   })
 

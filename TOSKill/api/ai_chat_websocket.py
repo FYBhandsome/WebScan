@@ -27,6 +27,15 @@ logger = logging.getLogger(__name__)
 
 SCAN_MODE_MAP = {"info": "info_collection", "vuln": "vuln_scan", "full": "full_scan"}
 
+RUN_EVENT_TYPES = {
+    "scan_started", "scan_flow_started", "scan_completed", "scan_cancelled", "scan_terminated",
+    "workflow_progress", "workflow_log", "tool_progress", "ai_decision", "ai_decision_complete",
+    "task_started", "task_completed", "task_analysis_updated", "task_error", "task_skipped",
+    "direct_tool_started", "direct_tool_completed", "direct_tool_error",
+    "report_generation_started", "report_generated", "report_error", "run_snapshot",
+    "interaction_required", "high_risk_vulnerability_detected", "tool_confirm_required",
+}
+
 
 class AIChatManager:
     """AI对话连接管理器"""
@@ -35,6 +44,9 @@ class AIChatManager:
         self.connections: Dict[str, WebSocket] = {}
         self.tasks: Dict[str, asyncio.Task] = {}
         self.llm = None
+        self._event_sequences: Dict[str, int] = {}
+        self._run_events: Dict[str, List[Dict]] = {}
+        self._disconnect_cleanup: Dict[str, asyncio.Task] = {}
     
     def _get_llm(self):
         if not self.llm:
@@ -44,26 +56,124 @@ class AIChatManager:
     async def connect(self, websocket: WebSocket, session_id: str = None) -> str:
         await websocket.accept()
         session_id = session_id or str(uuid4())[:8]
+        existing_state = memory_store.get_session(session_id)
+        resumed = existing_state is not None
         self.connections[session_id] = websocket
-        memory_store.save_session(session_id, create_initial_state(target="", task_id=session_id))
+        cleanup_task = self._disconnect_cleanup.pop(session_id, None)
+        if cleanup_task and not cleanup_task.done():
+            cleanup_task.cancel()
+        if not resumed:
+            memory_store.save_session(session_id, create_initial_state(target="", task_id=session_id))
         
         log_info("WebSocket连接建立", category="api", node="ai_chat", session_id=session_id,
                  details={"client_ip": websocket.client.host if websocket.client else "unknown"})
         
         await self._send(session_id, {
             "type": "connected",
-            "payload": {"session_id": session_id, "available_tools": get_all_tool_names()}
+            "payload": {
+                "session_id": session_id,
+                "available_tools": get_all_tool_names(),
+                "resumed": resumed,
+            }
         })
+        if resumed:
+            run_id = existing_state.get("run_id") or session_id
+            for event in self._run_events.get(run_id, [])[-200:]:
+                await websocket.send_json(event)
+            await self._send_run_snapshot(session_id, existing_state)
+            pending = memory_store.get_pending_interaction(session_id)
+            if pending:
+                await websocket.send_json(pending)
         return session_id
     
-    def disconnect(self, session_id: str):
+    def disconnect(self, session_id: str, websocket: WebSocket = None):
+        if websocket is not None and self.connections.get(session_id) is not websocket:
+            return
         self.connections.pop(session_id, None)
-        if session_id in self.tasks:
-            task = self.tasks.pop(session_id)
-            if not task.done():
-                task.cancel()
+        running_task = self.tasks.get(session_id)
+        if running_task and not running_task.done():
+            cleanup = asyncio.create_task(self._cancel_disconnected_task(session_id, 60))
+            self._disconnect_cleanup[session_id] = cleanup
+
+    async def _cancel_disconnected_task(self, session_id: str, grace_seconds: int):
+        try:
+            await asyncio.sleep(grace_seconds)
+            if session_id not in self.connections:
+                task = self.tasks.pop(session_id, None)
+                if task and not task.done():
+                    task.cancel()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._disconnect_cleanup.pop(session_id, None)
+
+    def _decorate_run_event(self, session_id: str, message: Dict) -> Dict:
+        message_type = message.get("type")
+        if message_type not in RUN_EVENT_TYPES:
+            return message
+
+        state = memory_store.get_session(session_id) or {}
+        payload = dict(message.get("payload") or {})
+        run_id = payload.get("run_id") or state.get("run_id") or session_id
+        self._event_sequences[run_id] = self._event_sequences.get(run_id, 0) + 1
+
+        tool = payload.get("tool") or payload.get("tool_name")
+        if not tool and message_type == "workflow_log" and payload.get("node") == "execute_task":
+            tool = state.get("next_task")
+        if message_type.startswith("task_") or message_type.startswith("direct_tool_") or message_type == "tool_progress":
+            step_id = f"tool:{tool or 'unknown'}"
+        elif message_type.startswith("report_"):
+            step_id = "report"
+        elif message_type == "ai_decision":
+            step_id = f"decision:{payload.get('next_task') or 'next'}"
+        elif message_type == "workflow_log":
+            step_id = f"tool:{tool}" if tool else f"workflow:{payload.get('node') or 'log'}"
+        else:
+            step_id = payload.get("step_id") or "scan"
+
+        status_map = {
+            "scan_completed": "completed", "scan_cancelled": "cancelled", "scan_terminated": "failed",
+            "task_started": "running", "task_completed": "completed", "task_error": "failed",
+            "task_skipped": "skipped", "direct_tool_started": "running",
+            "direct_tool_completed": "completed", "direct_tool_error": "failed",
+            "report_generation_started": "running", "report_generated": "completed", "report_error": "failed",
+            "interaction_required": "waiting", "high_risk_vulnerability_detected": "waiting",
+            "tool_confirm_required": "waiting",
+        }
+        payload.update({
+            "run_id": run_id,
+            "step_id": payload.get("step_id") or step_id,
+            "sequence": self._event_sequences[run_id],
+            "event": message_type,
+            "status": payload.get("status") or status_map.get(message_type, "running"),
+            "timestamp": payload.get("timestamp") or datetime.now().isoformat(),
+        })
+        decorated = {**message, "payload": payload}
+        if message_type != "run_snapshot":
+            history = self._run_events.setdefault(run_id, [])
+            history.append(decorated)
+            if len(history) > 500:
+                del history[:-500]
+        return decorated
+
+    async def _send_run_snapshot(self, session_id: str, state: Dict):
+        await self._send(session_id, {
+            "type": "run_snapshot",
+            "payload": {
+                "run_id": state.get("run_id") or session_id,
+                "target": state.get("target", ""),
+                "mode": state.get("mode", ""),
+                "completed_tasks": state.get("completed_tasks", []),
+                "failed_tasks": state.get("failed_tasks", []),
+                "tool_results": state.get("tool_results", {}),
+                "is_complete": state.get("is_complete", False),
+                "total_tasks": len(state.get("planned_tasks", [])),
+                "logs": log_collector.get_logs(session_id)[-100:],
+            },
+        })
     
     async def _send(self, session_id: str, message: Dict):
+        message = self._decorate_run_event(session_id, message)
         if ws := self.connections.get(session_id):
             try:
                 await ws.send_json(message)
@@ -86,6 +196,18 @@ class AIChatManager:
                 }
             }
         await self._send(session_id, error_response)
+
+    def _matches_pending_interaction(self, session_id: str, payload: Dict, expected_type: str) -> bool:
+        pending = memory_store.get_pending_interaction(session_id)
+        if not pending or pending.get("type") != expected_type:
+            logger.warning(f"[{session_id}] 忽略过期交互响应: expected={expected_type}, pending={pending and pending.get('type')}")
+            return False
+        interaction_id = payload.get("interaction_id")
+        pending_id = pending.get("interaction_id")
+        if interaction_id and pending_id and interaction_id != pending_id:
+            logger.warning(f"[{session_id}] 忽略交互ID不匹配的响应: {interaction_id} != {pending_id}")
+            return False
+        return True
     
     async def handle_message(self, session_id: str, message: Dict):
         msg_type = message.get("type")
@@ -135,7 +257,7 @@ class AIChatManager:
         orchestrator = get_agent_orchestrator()
         await orchestrator._ensure_initialized()
         
-        if orchestrator.has_pending_interaction(session_id):
+        if self._matches_pending_interaction(session_id, payload, "interaction_required"):
             logger.info(f"[{session_id}] 用户确认交互，选择: {choice}")
             
             memory_store.append_chat(session_id, "system", f"用户选择: {choice}")
@@ -170,11 +292,6 @@ class AIChatManager:
             except Exception as e:
                 logger.error(f"[{session_id}] 恢复工作流失败: {e}")
                 await self._send_error(session_id, f"恢复工作流失败: {str(e)}")
-        else:
-            state = memory_store.get_session(session_id)
-            if state:
-                memory_store.save_session(session_id, update_state(state, user_choice="1" if choice == "confirm" else "2"))
-            memory_store.append_chat(session_id, "system", f"用户选择: {choice}")
     
     async def _handle_start_scan(self, session_id: str, payload: Dict):
         target = payload.get("target", "")
@@ -208,6 +325,7 @@ class AIChatManager:
         
         state = create_initial_state(target=target, task_id=session_id, mode=mode)
         state["websocket_session_id"] = session_id
+        state["run_id"] = f"{session_id}:{uuid4().hex[:8]}"
         memory_store.save_session(session_id, state)
         
         logger.info(f"[{session_id}] 创建扫描任务，目标: {target}, 模式: {mode}")
@@ -562,6 +680,9 @@ class AIChatManager:
     async def _handle_high_risk_confirm(self, session_id: str, payload: Dict):
         """处理高危漏洞确认"""
         choice = payload.get("choice", "continue")
+
+        if not self._matches_pending_interaction(session_id, payload, "high_risk_vulnerability_detected"):
+            return
         
         state = memory_store.get_session(session_id)
         if not state:
@@ -584,17 +705,16 @@ class AIChatManager:
         orchestrator = get_agent_orchestrator()
         await orchestrator._ensure_initialized()
 
-        if orchestrator.has_pending_interaction(session_id):
+        if self._matches_pending_interaction(session_id, payload, "tool_confirm_required"):
             logger.info(f"[{session_id}] 用户确认执行工具")
             memory_store.append_chat(session_id, "system", "用户确认执行工具")
 
             try:
+                await self._send(session_id, {
+                    "type": "tool_execution_proceed",
+                    "payload": {"status": "executing"}
+                })
                 result = await orchestrator.resume_workflow(session_id, {"confirmed": True})
-                if result:
-                    await self._send(session_id, {
-                        "type": "tool_execution_proceed",
-                        "payload": {"status": "executing"}
-                    })
             except Exception as e:
                 logger.error(f"[{session_id}] 恢复工作流失败: {e}")
                 await self._send_error(session_id, f"恢复工作流失败: {str(e)}")
@@ -603,7 +723,7 @@ class AIChatManager:
         orchestrator = get_agent_orchestrator()
         await orchestrator._ensure_initialized()
 
-        if orchestrator.has_pending_interaction(session_id):
+        if self._matches_pending_interaction(session_id, payload, "tool_confirm_required"):
             logger.info(f"[{session_id}] 用户拒绝执行工具")
             memory_store.append_chat(session_id, "system", "用户拒绝执行工具，等待替代方案")
 
@@ -689,7 +809,8 @@ manager = AIChatManager()
 async def websocket_endpoint(websocket: WebSocket):
     session_id = None
     try:
-        session_id = await manager.connect(websocket)
+        requested_session_id = websocket.query_params.get("session_id")
+        session_id = await manager.connect(websocket, requested_session_id)
         while True:
             try:
                 data = await websocket.receive_json()
@@ -704,4 +825,4 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"WebSocket错误: {e}")
     finally:
         if session_id:
-            manager.disconnect(session_id)
+            manager.disconnect(session_id, websocket)

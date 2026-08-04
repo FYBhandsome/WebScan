@@ -4,6 +4,7 @@ RAG 引擎 - LlamaIndex 高级检索实现
 与 LangGraph 工作流解耦，推理交给 AI 节点
 """
 import os
+import json
 import logging
 import hashlib
 import threading
@@ -26,11 +27,13 @@ from llama_index.core import (
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.schema import NodeWithScore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
 _STORAGE_DIR = Path(__file__).parent / "storage"
 _KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
+_MANIFEST_PATH = _STORAGE_DIR / "index_manifest.json"
 
 TOOL_KNOWLEDGE_MAP = {
     "baseinfo_scan": ["信息收集", "资产发现", "HTTP头", "SSL证书", "技术栈识别"],
@@ -76,7 +79,7 @@ class TOSKillRAGEngine:
     """LlamaIndex RAG 引擎 - 高级检索模式"""
 
     _instance: Optional["TOSKillRAGEngine"] = None
-    MODEL_LOAD_TIMEOUT = 30
+    MODEL_LOAD_TIMEOUT = settings.RAG_MODEL_LOAD_TIMEOUT
     FALLBACK_MODELS = [
         "BAAI/bge-small-zh-v1.5",
         "sentence-transformers/all-MiniLM-L6-v2",
@@ -93,7 +96,8 @@ class TOSKillRAGEngine:
         self._document_count = 0
         self._embed_model = None
         self._model_load_error: Optional[str] = None
-        self._initialize_rag()
+        if settings.RAG_ENABLED:
+            self._initialize_rag()
 
     @classmethod
     def get_instance(cls) -> "TOSKillRAGEngine":
@@ -137,7 +141,7 @@ class TOSKillRAGEngine:
 
     def _check_model_cached(self, model_name: str, cache_folder: str) -> bool:
         """检查模型是否已在本地缓存"""
-        model_dir_name = model_name.replace("/", "_")
+        model_dir_name = model_name.replace("/", "--")
         model_cache_path = Path(cache_folder) / "hub" / f"models--{model_dir_name}"
         if model_cache_path.exists():
             snapshots_path = model_cache_path / "snapshots"
@@ -150,19 +154,25 @@ class TOSKillRAGEngine:
         return False
 
     def _try_load_embed_model(self) -> Optional[HuggingFaceEmbedding]:
-        """尝试加载嵌入模型，只使用本地缓存，不下载"""
-        cache_folder = str(Path.home() / ".cache" / "huggingface")
+        """优先加载本地模型，并按配置允许首次下载主模型。"""
+        cache_folder = settings.RAG_MODEL_CACHE_DIR
         
         if not os.path.exists(cache_folder):
             os.makedirs(cache_folder, exist_ok=True)
             logger.info(f"创建模型缓存目录: {cache_folder}")
         
-        for model_name in self.FALLBACK_MODELS:
-            if not self._check_model_cached(model_name, cache_folder):
+        model_names = list(dict.fromkeys([settings.RAG_EMBED_MODEL, *self.FALLBACK_MODELS]))
+        for model_name in model_names:
+            is_cached = self._check_model_cached(model_name, cache_folder)
+            can_download = settings.RAG_ALLOW_DOWNLOAD and model_name == settings.RAG_EMBED_MODEL
+            if not is_cached and not can_download:
                 logger.info(f"跳过未缓存模型: {model_name}")
                 continue
-            
-            logger.info(f"尝试加载本地缓存模型: {model_name}")
+
+            if is_cached:
+                logger.info(f"尝试加载本地缓存模型: {model_name}")
+            else:
+                logger.info(f"本地未缓存，尝试下载嵌入模型: {model_name}")
             embed_model = self._load_embed_model_with_timeout(
                 model_name=model_name,
                 cache_folder=cache_folder,
@@ -177,6 +187,46 @@ class TOSKillRAGEngine:
         
         logger.error("没有可用的本地缓存模型，RAG功能不可用")
         return None
+
+    def initialize(self, force: bool = False) -> bool:
+        """初始化或重新初始化 RAG 引擎。"""
+        if force:
+            self.index = None
+            self.retriever = None
+            self._initialized = False
+            self._embed_model = None
+            self._model_load_error = None
+            self._query_cache.clear()
+        self._initialize_rag()
+        return self.is_ready
+
+    def _knowledge_fingerprint(self) -> str:
+        digest = hashlib.sha256(settings.RAG_EMBED_MODEL.encode("utf-8"))
+        for md_file in sorted(_KNOWLEDGE_DIR.glob("*.md")):
+            digest.update(md_file.name.encode("utf-8"))
+            digest.update(md_file.read_bytes())
+        return digest.hexdigest()
+
+    def _manifest_matches(self) -> bool:
+        if not _MANIFEST_PATH.exists():
+            return False
+        try:
+            manifest = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+            return (
+                manifest.get("embed_model") == settings.RAG_EMBED_MODEL
+                and manifest.get("knowledge_fingerprint") == self._knowledge_fingerprint()
+            )
+        except Exception as e:
+            logger.warning(f"读取RAG索引清单失败，将重建索引: {e}")
+            return False
+
+    def _write_manifest(self):
+        manifest = {
+            "embed_model": settings.RAG_EMBED_MODEL,
+            "knowledge_fingerprint": self._knowledge_fingerprint(),
+            "document_count": self._document_count,
+        }
+        _MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _initialize_rag(self):
         if self._initialized:
@@ -195,11 +245,12 @@ class TOSKillRAGEngine:
             _STORAGE_DIR.mkdir(parents=True, exist_ok=True)
             _KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
 
-            index_files = list(_STORAGE_DIR.glob("*.json"))
-            if index_files:
+            index_exists = (_STORAGE_DIR / "docstore.json").exists()
+            if index_exists and self._manifest_matches():
                 try:
                     storage_context = StorageContext.from_defaults(persist_dir=str(_STORAGE_DIR))
                     self.index = load_index_from_storage(storage_context)
+                    self._document_count = len(list(_KNOWLEDGE_DIR.glob("*.md")))
                     logger.info(f"RAG 索引加载成功: {_STORAGE_DIR}")
                 except Exception as e:
                     logger.warning(f"索引加载失败，将重建: {e}")
@@ -248,6 +299,7 @@ class TOSKillRAGEngine:
         self.index = VectorStoreIndex.from_documents(documents, show_progress=True)
         self.index.storage_context.persist(persist_dir=str(_STORAGE_DIR))
         self._document_count = len(documents)
+        self._write_manifest()
         logger.info(f"RAG 索引创建成功: {self._document_count} 个文档")
 
     def _build_retrieval_query(
@@ -334,6 +386,9 @@ class TOSKillRAGEngine:
             str: 检索到的专业知识上下文
         """
         if not self.retriever:
+            if settings.RAG_KEYWORD_FALLBACK:
+                logger.warning("RAG向量检索器未初始化，使用关键词知识库检索")
+                return self._retrieve_keyword_strategy(current_task, completed_tasks, last_result)
             logger.warning("RAG检索器未初始化，返回空结果")
             return ""
 
@@ -394,6 +449,30 @@ class TOSKillRAGEngine:
             logger.error(f"RAG 检索失败: {e}")
             return ""
 
+    def _retrieve_keyword_strategy(
+        self,
+        current_task: str,
+        completed_tasks: List[str],
+        last_result: Dict[str, Any]
+    ) -> str:
+        query = self._build_retrieval_query("", current_task, completed_tasks, last_result)
+        keywords = [word.lower() for word in query.split() if len(word) > 1]
+        matches = []
+        for md_file in _KNOWLEDGE_DIR.glob("*.md"):
+            try:
+                content = md_file.read_text(encoding="utf-8")
+                lowered = content.lower()
+                score = sum(lowered.count(keyword) for keyword in keywords)
+                if score:
+                    matches.append((score, md_file.name, content))
+            except Exception as e:
+                logger.warning(f"关键词检索读取失败 {md_file}: {e}")
+        if not matches:
+            return ""
+        matches.sort(key=lambda item: item[0], reverse=True)
+        parts = [f"[知识{i + 1}] 来源:{name}\n{content[:600]}" for i, (_, name, content) in enumerate(matches[:3])]
+        return "【关键词知识库检索结果】\n\n" + "\n\n---\n\n".join(parts)
+
     def rebuild_index(self) -> bool:
         """重建向量索引（知识库更新后调用）"""
         try:
@@ -422,6 +501,9 @@ class TOSKillRAGEngine:
             "storage_dir": str(_STORAGE_DIR),
             "embed_model_loaded": self._embed_model is not None,
             "model_load_error": self._model_load_error,
+            "embed_model": settings.RAG_EMBED_MODEL,
+            "model_cache_dir": settings.RAG_MODEL_CACHE_DIR,
+            "keyword_fallback_enabled": settings.RAG_KEYWORD_FALLBACK,
         }
 
     @property

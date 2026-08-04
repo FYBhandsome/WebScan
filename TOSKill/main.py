@@ -4,6 +4,7 @@ TOSKill FastAPI 主应用入口
 独立的安全扫描服务，监听 8081 端口。
 """
 import sys
+import asyncio
 from pathlib import Path
 
 current_dir = Path(__file__).parent
@@ -47,6 +48,24 @@ async def lifespan(app: FastAPI):
         logger.info(f"AI模型已连接: {result['message']} ({result['latency_ms']}ms)")
     else:
         logger.warning(f"AI模型未连接: {result['message']}，扫描功能仍可用但AI决策将使用回退策略")
+
+    if settings.RAG_ENABLED and settings.RAG_INIT_ON_STARTUP:
+        try:
+            from TOSKill.RAG.rag_engine import get_rag_engine
+            rag_engine = await asyncio.to_thread(get_rag_engine)
+            rag_stats = rag_engine.get_stats()
+            if rag_engine.is_ready:
+                logger.info(
+                    f"RAG已就绪: model={settings.RAG_EMBED_MODEL}, "
+                    f"documents={rag_stats['document_count']}"
+                )
+            else:
+                logger.warning(
+                    f"RAG向量检索不可用，将使用关键词降级检索: "
+                    f"{rag_stats.get('model_load_error') or '未知原因'}"
+                )
+        except Exception as e:
+            logger.warning(f"RAG启动初始化失败，将使用关键词降级检索: {e}")
     
     yield
     logger.info("服务关闭")

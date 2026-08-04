@@ -12,6 +12,10 @@ export const globalState = reactive({
   }
 })
 
+// 控制台与顶部栏共享同一份扫描状态，避免各组件重复维护进度。
+export const scanProgressState = ref({ current: 0, total: 0, activeTool: '' })
+export const scanStatusState = ref('idle')
+
 // 2. Toast 提示系统
 let toastIdCounter = 0
 export const showToast = (message, type = 'info') => {

@@ -283,6 +283,7 @@ onUnmounted(() => {
   outline: none; 
   padding: 8px 0; 
   font-size: 15px; 
+  font-family: var(--font-family);
   background: transparent;
   color: #111;
 }

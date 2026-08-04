@@ -273,6 +273,32 @@ def wrap_tool_result(
     )
 
 
+def normalize_scanner_result(
+    raw_result: Any,
+    auth_info: Optional[Dict[str, Any]] = None
+) -> ToolResult:
+    """将底层扫描器结果展开为统一 ToolResult，避免嵌套 success 状态。"""
+    if not isinstance(raw_result, dict):
+        return wrap_tool_result(True, {"result": raw_result}, auth_info=auth_info)
+
+    success = raw_result.get("success", True)
+    data = raw_result.get("data", {})
+    error = raw_result.get("error")
+
+    if not isinstance(success, bool):
+        return wrap_tool_result(False, {}, error="扫描器返回的 success 字段不是布尔值")
+    if data is None:
+        data = {}
+    elif not isinstance(data, dict):
+        data = {"result": data}
+
+    metadata = raw_result.get("metadata")
+    if isinstance(metadata, dict) and "metadata" not in data:
+        data = {**data, "metadata": metadata}
+
+    return wrap_tool_result(success, data, error=error, auth_info=auth_info)
+
+
 def clean_target(target: str) -> str:
     """URL 自动清洗 - 类比 demo.py"""
     import re
@@ -348,7 +374,15 @@ def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None) 
             if auth_token:
                 params["auth_token"] = auth_token
     
-    return tool.invoke(params)
+    result = tool.invoke(params)
+    if not validate_tool_result(result):
+        logger.error(f"工具 {getattr(tool, 'name', 'unknown')} 返回格式不符合 ToolResult 规范")
+        return wrap_tool_result(
+            success=False,
+            data={},
+            error="工具返回格式不符合 ToolResult 规范"
+        )
+    return result
 
 
 def extract_auth_from_result(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -657,13 +691,17 @@ def cms_detect_scan(target: str) -> ToolResult:
             - error: 错误信息（如有）
             - timestamp: 执行时间戳
     """
-    t = clean_target(target)
+    t = target.strip()
     logger.info(f"[+] 执行CMS识别：{t}")
     try:
         raw_result = cms_detect(t)
+        raw_success = raw_result.get("success", False) if isinstance(raw_result, dict) else True
+        raw_data = raw_result.get("data") if isinstance(raw_result, dict) else {"result": raw_result}
+        raw_error = raw_result.get("error") if isinstance(raw_result, dict) else None
         return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
+            success=raw_success,
+            data=raw_data if isinstance(raw_data, dict) else {},
+            error=raw_error
         )
     except Exception as e:
         logger.error(f"CMS识别失败: {e}")
@@ -835,7 +873,7 @@ def sqli_scan(
     Note:
         认证参数命名统一: cookies, headers, auth_token
     """
-    t = clean_target(target)
+    t = target.strip()
     logger.info(f"[+] 执行SQL注入扫描：{t} (认证: {bool(cookies or auth_token)})")
     params = {"target": t}
     if cookies:
@@ -845,11 +883,15 @@ def sqli_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = sqli(params)
+        raw_result = sqli(**params)
         auth_extracted = extract_auth_from_result(raw_result) if isinstance(raw_result, dict) else None
+        raw_success = raw_result.get("success", False) if isinstance(raw_result, dict) else True
+        raw_data = raw_result.get("data") if isinstance(raw_result, dict) else {"result": raw_result}
+        raw_error = raw_result.get("error") if isinstance(raw_result, dict) else None
         return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result},
+            success=raw_success,
+            data=raw_data if isinstance(raw_data, dict) else {},
+            error=raw_error,
             auth_info=auth_extracted.get("auth_info") if auth_extracted else None
         )
     except Exception as e:
@@ -888,7 +930,7 @@ def xss_scan(
     Note:
         认证参数命名统一: cookies, headers, auth_token
     """
-    t = clean_target(target)
+    t = target.strip()
     logger.info(f"[+] 执行XSS扫描：{t} (认证: {bool(cookies or auth_token)})")
     params = {"target": t}
     if cookies:
@@ -898,11 +940,8 @@ def xss_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = xss(params)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        raw_result = xss(**params)
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"XSS扫描失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -938,7 +977,7 @@ def csrf_scan(
     Note:
         认证参数命名统一: cookies, headers, auth_token
     """
-    t = clean_target(target)
+    t = target.strip()
     logger.info(f"[+] 执行CSRF扫描：{t} (认证: {bool(cookies or auth_token)})")
     params = {"target": t}
     if cookies:
@@ -948,11 +987,8 @@ def csrf_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = csrf(params)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        raw_result = csrf(**params)
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"CSRF扫描失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -989,7 +1025,7 @@ def fileupload_scan(
     Note:
         认证参数命名统一: cookies, headers, auth_token
     """
-    t = clean_target(target)
+    t = target.strip()
     logger.info(f"[+] 执行文件上传扫描：{t} (认证: {bool(cookies or auth_token)})")
     params = {"target": t}
     if cookies:
@@ -999,11 +1035,8 @@ def fileupload_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = fileupload(params)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        raw_result = fileupload(**params)
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"文件上传扫描失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -1040,7 +1073,7 @@ def cmdi_scan(
     Note:
         认证参数命名统一: cookies, headers, auth_token
     """
-    t = clean_target(target)
+    t = target.strip()
     logger.info(f"[+] 执行命令注入扫描：{t} (认证: {bool(cookies or auth_token)})")
     params = {"target": t}
     if cookies:
@@ -1050,11 +1083,8 @@ def cmdi_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = cmdi(params)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        raw_result = cmdi(**params)
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"命令注入扫描失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -1091,7 +1121,7 @@ def ssrf_scan(
     Note:
         认证参数命名统一: cookies, headers, auth_token
     """
-    t = clean_target(target)
+    t = target.strip()
     logger.info(f"[+] 执行SSRF扫描：{t} (认证: {bool(cookies or auth_token)})")
     params = {"target": t}
     if cookies:
@@ -1101,11 +1131,8 @@ def ssrf_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = ssrf(params)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        raw_result = ssrf(**params)
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"SSRF扫描失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -1142,7 +1169,7 @@ def lfi_scan(
     Note:
         认证参数命名统一: cookies, headers, auth_token
     """
-    t = clean_target(target)
+    t = target.strip()
     logger.info(f"[+] 执行LFI扫描：{t} (认证: {bool(cookies or auth_token)})")
     params = {"target": t}
     if cookies:
@@ -1152,11 +1179,8 @@ def lfi_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = lfi(params)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        raw_result = lfi(**params)
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"LFI扫描失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -1197,7 +1221,7 @@ def weakpass_scan(
         认证参数命名统一: cookies, headers, auth_token
         此工具返回的auth_info可用于后续认证扫描
     """
-    t = clean_target(target)
+    t = target.strip()
     logger.info(f"[+] 执行弱口令扫描：{t}")
     params = {"target": t}
     if cookies:
@@ -1207,11 +1231,10 @@ def weakpass_scan(
     if auth_token:
         params["auth_token"] = auth_token
     try:
-        raw_result = weakpass(params)
+        raw_result = weakpass(**params)
         auth_extracted = extract_auth_from_result(raw_result) if isinstance(raw_result, dict) else None
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result},
+        return normalize_scanner_result(
+            raw_result,
             auth_info=auth_extracted.get("auth_info") if auth_extracted else None
         )
     except Exception as e:

@@ -15,22 +15,22 @@
 
 </div>
 
----
+***
 
 ## 目录
+
 - [项目简介](#-项目简介)
 - [项目版本说明](#-项目版本说明)
 - [功能特性](#-功能特性)
-- [技术栈](#-技术栈)
-- [快速开始](#-快速开始)
+- [技术栈](#-技术栈)[快速开始](#-快速开始)
 - [项目结构](#-项目结构)
 - [配置说明](#-配置说明)
-- [API文档](#-api文档)
+- [API文档  ](#-api文档)
 - [开发指南](#-开发指南)
 - [部署指南](#-部署指南)
 - [常见问题](#-常见问题)
 
----
+***
 
 ## 项目简介
 
@@ -46,7 +46,7 @@ WebScan AI Security Platform 是一个基于AI技术的Web应用安全扫描平�
 - **易于扩展** - 模块化设计，支持自定义扫描插件和规则
 - **实时通信** - WebSocket实时推送扫描进度和结果
 
----
+***
 
 ## 项目版本说明
 
@@ -54,12 +54,13 @@ WebScan AI Security Platform 是一个基于AI技术的Web应用安全扫描平�
 
 ### 新版项目（推荐使用）
 
-| 项目 | 目录 | 描述 | 端口 |
-|------|------|------|------|
-| **TOSKill** | `TOSKill/` | 重构版后端项目，基于LangGraph的AI驱动安全扫描服务 | 8081 |
-| **TOSKillfront** | `TOSKillfront/` | 重构版前端项目，轻量级原生JavaScript实现 | 静态文件 |
+| 项目               | 目录              | 描述                             | 端口   |
+| ---------------- | --------------- | ------------------------------ | ---- |
+| **TOSKill**      | `TOSKill/`      | 重构版后端项目，基于LangGraph的AI驱动安全扫描服务 | 8081 |
+| **TOSKillfront** | `TOSKillfront/` | 重构版前端项目，轻量级原生JavaScript实现      | 静态文件 |
 
 **新版特点：**
+
 - 基于LangGraph的ReACT推理框架
 - RAG知识库增强的智能决策
 - WebSocket实时通信
@@ -70,30 +71,30 @@ WebScan AI Security Platform 是一个基于AI技术的Web应用安全扫描平�
 
 ### 旧版项目（已废弃）
 
-| 项目 | 目录 | 描述 | 端口 |
-|------|------|------|------|
-| **backend** | `backend/` | 旧版后端项目，功能较重，依赖较多 | 8888 |
-| **front** | `front/` | 旧版前端项目，Vue 3 + Element Plus | 5173 |
+| 项目          | 目录         | 描述                          | 端口   |
+| ----------- | ---------- | --------------------------- | ---- |
+| **backend** | `backend/` | 旧版后端项目，功能较重，依赖较多            | 8888 |
+| **front**   | `front/`   | 旧版前端项目，Vue 3 + Element Plus | 5173 |
 
 > **注意**: 旧版项目（backend/front）已不再维护，建议使用新版项目（TOSKill/TOSKillfront）。
 
----
+***
 
 ## 功能特性
 
 ### 核心功能
 
-| 功能模块 | 描述 | 状态 |
-|---------|------|------|
-| **信息收集** | 端口扫描、子域名枚举、CMS识别、WAF检测、CDN检测等 | ✅ 已实现 |
-| **漏洞扫描** | SQL注入、XSS、命令注入、文件上传、SSRF、CSRF、LFI等 | ✅ 已实现 |
-| **POC验证** | Struts2、ThinkPHP、Weblogic等框架漏洞POC | ✅ 已实现 |
-| **AI Agent扫描** | 基于LangGraph的智能代理自动化扫描 | ✅ 已实现 |
-| **RAG知识库** | LlamaIndex驱动的专业知识检索增强 | ✅ 已实现 |
-| **AI对话** | 智能安全咨询和漏洞分析 | ✅ 已实现 |
-| **脚本管理** | 自定义脚本上传、AI脚本生成、安全审查 | ✅ 已实现 |
-| **扫描报告** | 生成详细的扫描报告，支持Markdown格式 | ✅ 已实现 |
-| **实时监控** | WebSocket实时推送扫描进度和结果 | ✅ 已实现 |
+| 功能模块           | 描述                                 | 状态    |
+| -------------- | ---------------------------------- | ----- |
+| **信息收集**       | 端口扫描、子域名枚举、CMS识别、WAF检测、CDN检测等      | ✅ 已实现 |
+| **漏洞扫描**       | SQL注入、XSS、命令注入、文件上传、SSRF、CSRF、LFI等 | ✅ 已实现 |
+| **POC验证**      | Struts2、ThinkPHP、Weblogic等框架漏洞POC  | ✅ 已实现 |
+| **AI Agent扫描** | 基于LangGraph的智能代理自动化扫描              | ✅ 已实现 |
+| **RAG知识库**     | LlamaIndex驱动的专业知识检索增强              | ✅ 已实现 |
+| **AI对话**       | 智能安全咨询和漏洞分析                        | ✅ 已实现 |
+| **脚本管理**       | 自定义脚本上传、AI脚本生成、安全审查                | ✅ 已实现 |
+| **扫描报告**       | 生成详细的扫描报告，支持Markdown格式             | ✅ 已实现 |
+| **实时监控**       | WebSocket实时推送扫描进度和结果               | ✅ 已实现 |
 
 ### 高级特性
 
@@ -104,7 +105,7 @@ WebScan AI Security Platform 是一个基于AI技术的Web应用安全扫描平�
 - **脚本安全审查** - 上传和生成的脚本自动进行安全检查
 - **会话状态管理** - 支持TTL过期清理、版本控制、状态恢复
 
----
+***
 
 ## 技术栈
 
@@ -148,7 +149,7 @@ RAG知识库:
   - reports.js                # 报告管理
 ```
 
----
+***
 
 ## 快速开始
 
@@ -188,24 +189,24 @@ pip install -r requirements.txt
 python main.py
 ```
 
-后端服务将运行在：http://localhost:8081
+后端服务将运行在：<http://localhost:8081>
 
 #### 3. 访问前端
 
 新版前端由后端直接提供静态文件服务，启动后端后直接访问：
 
-http://localhost:8081/frontend
+<http://localhost:8081/frontend>
 
 或使用首页跳转：
 
-http://localhost:8081 → 点击"前端页面"
+<http://localhost:8081> → 点击"前端页面"
 
 #### 4. API文档
 
 启动后端后，访问以下地址查看自动生成的API文档：
 
-- **Swagger UI**: http://localhost:8081/docs
-- **ReDoc**: http://localhost:8081/redoc
+- **Swagger UI**: <http://localhost:8081/docs>
+- **ReDoc**: <http://localhost:8081/redoc>
 
 ### 旧版项目启动（已废弃）
 
@@ -223,7 +224,7 @@ npm install
 npm run dev  # 端口 5173
 ```
 
----
+***
 
 ## 项目结构
 
@@ -319,7 +320,7 @@ AI_WebSecurity/
 └── .gitignore                    # Git忽略文件
 ```
 
----
+***
 
 ## 配置说明
 
@@ -385,36 +386,40 @@ LOG_FILE=logs/toskill.log
 
 ### WebSocket配置
 
-| 配置项 | 默认值 | 说明 |
-|-------|--------|------|
+| 配置项           | 默认值                                  | 说明            |
+| ------------- | ------------------------------------ | ------------- |
 | WebSocket URL | `ws://localhost:8081/api/ai-chat/ws` | WebSocket连接地址 |
-| 重连次数 | 5 | 最大自动重连次数 |
-| 重连延迟 | 1-30秒 | 指数退避重连策略 |
-| 心跳间隔 | 30秒 | 心跳检测间隔 |
+| 重连次数          | 5                                    | 最大自动重连次数      |
+| 重连延迟          | 1-30秒                                | 指数退避重连策略      |
+| 心跳间隔          | 30秒                                  | 心跳检测间隔        |
 
----
+***
 
 ## API文档
 
 ### 新版API端点 (TOSKill)
 
 启动后端服务后，访问：
-- **Swagger UI**: http://localhost:8081/docs
-- **ReDoc**: http://localhost:8081/redoc
+
+- **Swagger UI**: <http://localhost:8081/docs>
+- **ReDoc**: <http://localhost:8081/redoc>
 
 ### 主要API端点
 
 #### 健康检查
+
 ```http
 GET /health
 ```
 
 #### WebSocket连接
+
 ```http
 WebSocket /api/ai-chat/ws
 ```
 
 #### 开始扫描
+
 ```http
 WebSocket消息:
 {
@@ -427,6 +432,7 @@ WebSocket消息:
 ```
 
 #### 执行工具
+
 ```http
 WebSocket消息:
 {
@@ -439,6 +445,7 @@ WebSocket消息:
 ```
 
 #### AI对话
+
 ```http
 WebSocket消息:
 {
@@ -451,23 +458,23 @@ WebSocket消息:
 
 ### WebSocket消息类型
 
-| 类型 | 方向 | 描述 |
-|------|------|------|
-| `connected` | 服务端→客户端 | 连接成功，返回session_id |
-| `start_scan` | 客户端→服务端 | 开始扫描任务 |
-| `scan_started` | 服务端→客户端 | 扫描已启动 |
-| `task_started` | 服务端→客户端 | 单个任务开始 |
-| `task_completed` | 服务端→客户端 | 单个任务完成 |
-| `ai_decision` | 服务端→客户端 | AI决策结果 |
-| `interaction_required` | 服务端→客户端 | 需要用户交互 |
-| `user_confirm` | 客户端→服务端 | 用户确认选择 |
-| `workflow_resumed` | 服务端→客户端 | 工作流已恢复 |
-| `scan_completed` | 服务端→客户端 | 扫描完成 |
-| `report_generated` | 服务端→客户端 | 报告已生成 |
+| 类型                     | 方向      | 描述                 |
+| ---------------------- | ------- | ------------------ |
+| `connected`            | 服务端→客户端 | 连接成功，返回session\_id |
+| `start_scan`           | 客户端→服务端 | 开始扫描任务             |
+| `scan_started`         | 服务端→客户端 | 扫描已启动              |
+| `task_started`         | 服务端→客户端 | 单个任务开始             |
+| `task_completed`       | 服务端→客户端 | 单个任务完成             |
+| `ai_decision`          | 服务端→客户端 | AI决策结果             |
+| `interaction_required` | 服务端→客户端 | 需要用户交互             |
+| `user_confirm`         | 客户端→服务端 | 用户确认选择             |
+| `workflow_resumed`     | 服务端→客户端 | 工作流已恢复             |
+| `scan_completed`       | 服务端→客户端 | 扫描完成               |
+| `report_generated`     | 服务端→客户端 | 报告已生成              |
 
-详细API文档请参考：[TOSKill/API_DOCUMENTATION.md](TOSKill/API_DOCUMENTATION.md)
+详细API文档请参考：[TOSKill/API\_DOCUMENTATION.md](TOSKill/API_DOCUMENTATION.md)
 
----
+***
 
 ## 开发指南
 
@@ -519,7 +526,7 @@ pytest
 pytest test_toskill_workflow.py -v
 ```
 
----
+***
 
 ## 部署指南
 
@@ -569,7 +576,7 @@ COPY TOSKill/ .
 CMD ["python", "main.py"]
 ```
 
----
+***
 
 ## 常见问题
 
@@ -578,6 +585,7 @@ CMD ["python", "main.py"]
 **问题**: 端口被占用
 
 **解决方案**:
+
 ```bash
 # Windows
 netstat -ano | findstr :8081
@@ -591,6 +599,7 @@ lsof -i :8081
 **问题**: 前端无法建立WebSocket连接
 
 **解决方案**:
+
 - 检查后端服务是否正常运行
 - 确认WebSocket URL配置正确
 - 检查防火墙设置
@@ -600,6 +609,7 @@ lsof -i :8081
 **问题**: AI决策功能不可用
 
 **解决方案**:
+
 - 检查 `OPENAI_API_KEY` 配置
 - 确认 `OPENAI_BASE_URL` 可访问
 - 查看日志中的错误信息
@@ -609,20 +619,23 @@ lsof -i :8081
 **问题**: 知识库检索返回空结果
 
 **解决方案**:
+
 - 确认 `TOSKill/RAG/knowledge/` 目录下有知识文档
 - 检查向量存储文件是否存在
 - 重新构建向量索引
 
----
+***
 
 ## 相关文档
 
 ### 新版项目文档
+
 - [TOSKill后端文档](TOSKill/README.md)
 - [TOSKill API文档](TOSKill/API_DOCUMENTATION.md)
 - [TOSKill工具文档](TOSKill/TOOLS_DOCUMENTATION.md)
 
 ### 旧版项目文档（已废弃）
+
 - [旧版后端文档](backend/README.md)
 - [旧版前端文档](front/README.md)
 - [AI Agents文档](backend/ai_agents/README.md)
@@ -630,15 +643,16 @@ lsof -i :8081
 - [POC文档](backend/poc/README.md)
 
 ### 其他文档
+
 - [Seebug Agent文档](Seebug_Agent/README.md)
 
----
+***
 
 ## 许可证
 
 本项目采用 MIT 许可证。详见 [LICENSE](LICENSE) 文件。
 
----
+***
 
 ## 贡献指南
 
@@ -660,14 +674,14 @@ lsof -i :8081
 - 使用有意义的变量和函数名
 - 保持代码简洁清晰
 
----
+***
 
 ## 联系方式
 
-- 项目主页: https://github.com/yourusername/webscan-ai
-- 问题反馈: https://github.com/yourusername/webscan-ai/issues
+- 项目主页: <https://github.com/yourusername/webscan-ai>
+- 问题反馈: <https://github.com/yourusername/webscan-ai/issues>
 
----
+***
 
 <div align="center">
 

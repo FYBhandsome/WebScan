@@ -1,6 +1,11 @@
 <template>
   <div class="app-container">
-    <AppHeader :status="connectionStatus" />
+    <AppHeader
+      :status="connectionStatus"
+      :scan-progress="scanProgressState"
+      :scan-status="scanStatusState"
+      :show-scan-progress="currentPage === 'console'"
+    />
 
     <div class="app-body">
       <AppSidebar :currentPage="currentPage" @navigate="handleNavigation" />
@@ -60,7 +65,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ws } from './services/websocket.js'
 import { API } from './services/api.js'
-import { globalState, closeModal } from './store.js'
+import { globalState, closeModal, scanProgressState, scanStatusState } from './store.js'
 
 // 组件引入
 import AppHeader from './components/AppHeader.vue'

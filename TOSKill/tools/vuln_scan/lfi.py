@@ -4,12 +4,15 @@
 封装backend.vulnerability_scan_plugins.lfi模块
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 def lfi_scan(
     target: str,
-    timeout: int = 30
+    timeout: int = 30,
+    cookies: Optional[Dict[str, str]] = None,
+    headers: Optional[Dict[str, str]] = None,
+    auth_token: Optional[str] = None
 ) -> Dict[str, Any]:
     """本地文件包含/目录遍历漏洞扫描工具，检测目标URL是否存在LFI/RFI漏洞
     
@@ -38,6 +41,8 @@ def lfi_scan(
         }
         
         scanner = LfiScanner(target, config)
+        if cookies or headers or auth_token:
+            scanner.set_authentication(cookies=cookies, headers=headers, auth_token=auth_token)
         result = scanner.scan()
         
         vulnerabilities = []
