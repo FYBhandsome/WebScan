@@ -404,7 +404,14 @@ class AIChatManager:
                         "task_id": state.get("task_id", ""),
                         "target": state.get("target", ""),
                         "mode": state.get("mode", ""),
+                        "planned_tasks": state.get("planned_tasks", []),
+                        "total_tasks": len(state.get("planned_tasks", [])),
                         "completed_tasks": state.get("completed_tasks", []),
+                        "failed_tasks": state.get("failed_tasks", []),
+                        "tool_results": state.get("tool_results", {}),
+                        "vulnerabilities": state.get("vulnerabilities", []),
+                        "errors": state.get("errors", []),
+                        "report": state.get("report", ""),
                         "is_complete": state.get("is_complete", False)
                     }
                 }
@@ -421,6 +428,20 @@ class AIChatManager:
         
         try:
             messages = [SystemMessage(content=CHAT_SYSTEM_PROMPT)]
+            state = memory_store.get_session(session_id) or {}
+            scan_context = {
+                "target": state.get("target", ""),
+                "mode": state.get("mode", ""),
+                "completed_tasks": state.get("completed_tasks", []),
+                "vulnerabilities": state.get("vulnerabilities", []),
+                "errors": state.get("errors", []),
+                "report": state.get("report", ""),
+            }
+            if any(scan_context.values()):
+                context_json = json.dumps(scan_context, ensure_ascii=False, default=str)
+                messages.append(SystemMessage(
+                    content=f"当前会话的扫描上下文如下，请结合它回答后续问题：\n{context_json[:6000]}"
+                ))
             for msg in memory_store.get_chat_history(session_id)[-10:]:
                 if msg["role"] == "user":
                     messages.append(HumanMessage(content=msg["content"]))

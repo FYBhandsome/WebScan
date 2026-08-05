@@ -9,6 +9,7 @@
 import json
 import logging
 import asyncio
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List
@@ -27,7 +28,9 @@ def _get_llm():
         model=settings.MODEL_ID,
         temperature=0.3,
         api_key=settings.OPENAI_API_KEY,
-        base_url=settings.OPENAI_BASE_URL
+        base_url=settings.OPENAI_BASE_URL,
+        timeout=settings.REPORT_AI_TIMEOUT,
+        max_retries=1,
     )
 
 
@@ -304,11 +307,12 @@ class ReportManager:
                         self._generate_ai_report_sync,
                         tool_results, vulnerabilities, target, chat_history, task_history
                     )
-                    return future.result()
+                    analysis = future.result()
             else:
-                return self._generate_ai_report_sync(
+                analysis = self._generate_ai_report_sync(
                     tool_results, vulnerabilities, target, chat_history, task_history
                 )
+            return self._combine_markdown_analysis_and_details(analysis, vulnerabilities)
         except Exception as e:
             logger.error(f"AI 生成报告失败: {e}")
             return self._generate_fallback_report(tool_results, vulnerabilities, target)
@@ -334,12 +338,142 @@ class ReportManager:
             Markdown格式的报告内容
         """
         try:
-            return await self._generate_ai_report_async(
-                tool_results, vulnerabilities, target, chat_history, task_history
+            from TOSKill.config import settings
+
+            analysis = await asyncio.wait_for(
+                self._generate_ai_report_async(
+                    tool_results, vulnerabilities, target, chat_history, task_history
+                ),
+                timeout=settings.REPORT_AI_TIMEOUT,
             )
+            return self._combine_markdown_analysis_and_details(analysis, vulnerabilities)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "AI 报告摘要生成超时（%.1fs），使用本地规则报告继续",
+                settings.REPORT_AI_TIMEOUT,
+            )
+            return self._generate_fallback_report(tool_results, vulnerabilities, target)
         except Exception as e:
             logger.error(f"AI 生成报告失败: {e}")
             return self._generate_fallback_report(tool_results, vulnerabilities, target)
+
+    @staticmethod
+    def _markdown_inline(value: Any, default: str = "未提供") -> str:
+        """将扫描结果安全地放入 Markdown 行内文本。"""
+        if value is None or value == "":
+            return default
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False, default=str)
+        text = " ".join(str(value).split())
+        for char in ("\\", "`", "*", "_", "[", "]", "<", ">"):
+            text = text.replace(char, f"\\{char}")
+        return text or default
+
+    @staticmethod
+    def _markdown_code_block(value: Any) -> str:
+        """生成不会被 Payload 内反引号截断的 Markdown 代码块。"""
+        if isinstance(value, (dict, list)):
+            text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
+        else:
+            text = str(value)
+        longest_run = max((len(run) for run in re.findall(r"`+", text)), default=0)
+        fence = "`" * max(3, longest_run + 1)
+        return f"{fence}text\n{text}\n{fence}"
+
+    def _render_vulnerability_details_markdown(
+        self,
+        vulnerabilities: List[Dict[str, Any]],
+    ) -> str:
+        """从结构化扫描结果渲染确定性的漏洞明细。"""
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        severity_labels = {
+            "critical": "严重",
+            "high": "高危",
+            "medium": "中危",
+            "low": "低危",
+            "info": "信息",
+        }
+        valid_vulnerabilities = [item for item in vulnerabilities if isinstance(item, dict)]
+        ordered_vulnerabilities = sorted(
+            valid_vulnerabilities,
+            key=lambda item: severity_order.get(
+                str(item.get("severity") or "info").lower(),
+                severity_order["info"],
+            ),
+        )
+
+        lines = ["## 漏洞明细（按风险优先级排序）", ""]
+        if not ordered_vulnerabilities:
+            lines.extend(["本次扫描未发现漏洞。", ""])
+            return "\n".join(lines)
+
+        lines.extend([f"本次扫描共发现 **{len(ordered_vulnerabilities)}** 个漏洞，具体如下。", ""])
+        for index, vuln in enumerate(ordered_vulnerabilities, 1):
+            severity = str(vuln.get("severity") or "info").lower()
+            severity_label = severity_labels.get(severity, severity.upper())
+            title = (
+                vuln.get("title")
+                or vuln.get("name")
+                or vuln.get("vuln_type")
+                or vuln.get("type")
+                or "未命名漏洞"
+            )
+            vuln_type = vuln.get("vuln_type") or vuln.get("type")
+            url = vuln.get("url") or vuln.get("target")
+            method = vuln.get("method") or vuln.get("http_method")
+            parameter = vuln.get("parameter") or vuln.get("affected_parameter")
+            source = vuln.get("source_tool") or vuln.get("tool") or vuln.get("source")
+            description = vuln.get("description") or vuln.get("details")
+            remediation = vuln.get("remediation") or vuln.get("solution") or vuln.get("recommendation")
+
+            lines.extend([
+                f"### {index}. {self._markdown_inline(title, '未命名漏洞')}",
+                "",
+                f"- **严重程度**：{self._markdown_inline(severity_label)}（{self._markdown_inline(severity.upper())}）",
+            ])
+            for label, value in (
+                ("漏洞类型", vuln_type),
+                ("URL", url),
+                ("请求方法", method),
+                ("受影响参数", parameter),
+                ("来源工具", source),
+                ("漏洞编号", vuln.get("id") or vuln.get("vuln_id")),
+                ("风险评分", vuln.get("risk_score") or vuln.get("cvss") or vuln.get("cvss_score")),
+            ):
+                if value is not None and value != "":
+                    lines.append(f"- **{label}**：{self._markdown_inline(value)}")
+
+            lines.extend([
+                "",
+                "**漏洞描述**",
+                "",
+                self._markdown_inline(description, "未提供漏洞描述。"),
+                "",
+            ])
+
+            for label, value in (("Payload", vuln.get("payload")), ("证据", vuln.get("evidence"))):
+                if value is not None and value != "":
+                    lines.extend([f"**{label}**", "", self._markdown_code_block(value), ""])
+
+            lines.extend([
+                "**修复建议**",
+                "",
+                self._markdown_inline(remediation, "请结合漏洞证据进行人工复核，并参考对应安全最佳实践完成修复。"),
+                "",
+                "---",
+                "",
+            ])
+
+        return "\n".join(lines).rstrip()
+
+    def _combine_markdown_analysis_and_details(
+        self,
+        analysis: str,
+        vulnerabilities: List[Dict[str, Any]],
+    ) -> str:
+        details = self._render_vulnerability_details_markdown(vulnerabilities)
+        analysis = str(analysis or "").rstrip()
+        return f"{analysis}\n\n---\n\n{details}" if analysis else details
     
     def _generate_ai_report_sync(
         self,
@@ -507,6 +641,26 @@ class ReportManager:
         except Exception as e:
             logger.error(f"生成专业AI分析失败: {e}")
             return self._generate_fallback_ai_analysis(vulnerabilities, target)
+
+    def generate_html_analysis(
+        self,
+        vulnerabilities: List[Dict[str, Any]],
+        target: str,
+        report_content: str = "",
+    ) -> Dict[str, Any]:
+        """从扫描结果构建 HTML 分析数据，不再发起第二次 LLM 请求。"""
+        analysis = self._generate_fallback_ai_analysis(vulnerabilities, target)
+
+        if report_content:
+            summary_lines = []
+            for raw_line in str(report_content).splitlines():
+                line = raw_line.strip().lstrip("#>*- ").strip()
+                if line and not line.startswith("生成时间:") and not line.startswith("扫描目标:"):
+                    summary_lines.append(line)
+            if summary_lines:
+                analysis["executive_summary"] = " ".join(summary_lines)[:600]
+
+        return analysis
     
     def _generate_fallback_ai_analysis(
         self,
@@ -725,31 +879,11 @@ class ReportManager:
             report_lines.append(f"```")
             report_lines.append("")
         
-        if vulnerabilities:
-            report_lines.extend([
-                f"---",
-                f"",
-                f"## 3. 漏洞详情",
-                f"",
-            ])
-            
-            for i, vuln in enumerate(vulnerabilities, 1):
-                severity = vuln.get("severity", "unknown")
-                vuln_type = vuln.get("type") or vuln.get("vuln_type", "Unknown")
-                url = vuln.get("url", vuln.get("target", ""))
-                
-                report_lines.append(f"### {i}. {vuln_type}")
-                report_lines.append("")
-                report_lines.append(f"| 属性 | 值 |")
-                report_lines.append(f"|------|-----|")
-                report_lines.append(f"| 严重度 | **{severity.upper()}** |")
-                if url:
-                    report_lines.append(f"| URL | `{url}` |")
-                if vuln.get("description"):
-                    report_lines.append(f"| 描述 | {vuln.get('description')} |")
-                report_lines.append("")
-        
         report_lines.extend([
+            f"---",
+            f"",
+            self._render_vulnerability_details_markdown(vulnerabilities),
+            f"",
             f"---",
             f"",
             f"## 4. 修复建议",

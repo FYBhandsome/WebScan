@@ -217,9 +217,10 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed, onMounted, onUnmounted } from 'vue'
+import { reactive, ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { API } from '../../services/api.js'
 import { ws } from '../../services/websocket.js'
+import { storageService } from '../../services/storageService.js'
 import { showToast, globalState, addScanHistory, getScanHistory } from '../../store.js'
 import { marked } from 'marked'
 
@@ -241,12 +242,52 @@ const completedTasksCount = ref(0)
 const totalTasksCount = ref(0)
 const resultsData = ref({})
 const scanHistory = ref([])
+let persistTimer = null
 
 const taskModal = reactive({
   show: false,
   taskName: '',
   result: ''
 })
+
+const restoreScanState = () => {
+  const saved = storageService.getScanState()
+  if (!saved) return
+
+  form.target = saved.form?.target || ''
+  form.mode = saved.form?.mode || 'info'
+  isScanning.value = Boolean(saved.isScanning)
+  progress.value = Number(saved.progress) || 0
+  statusText.value = saved.statusText || '准备中...'
+  showResults.value = Boolean(saved.showResults)
+  tasks.value = Array.isArray(saved.tasks) ? saved.tasks : []
+  completedTasksCount.value = Number(saved.completedTasksCount) || 0
+  totalTasksCount.value = Number(saved.totalTasksCount) || 0
+  resultsData.value = saved.resultsData || {}
+  if (form.target) globalState.currentTarget = form.target
+}
+
+const persistScanState = () => {
+  storageService.saveScanState({
+    sessionId: ws.getSessionId() || storageService.getActiveSessionId(),
+    form: { ...form },
+    isScanning: isScanning.value,
+    progress: progress.value,
+    statusText: statusText.value,
+    showResults: showResults.value,
+    tasks: tasks.value,
+    completedTasksCount: completedTasksCount.value,
+    totalTasksCount: totalTasksCount.value,
+    resultsData: resultsData.value
+  })
+}
+
+const scheduleScanPersist = () => {
+  if (persistTimer) clearTimeout(persistTimer)
+  persistTimer = setTimeout(persistScanState, 200)
+}
+
+restoreScanState()
 
 const circumference = 2 * Math.PI * 34
 const ringOffset = computed(() => circumference * (1 - progress.value / 100))
@@ -368,10 +409,11 @@ const startScan = async () => {
 
   try {
     let result
+    const sessionId = ws.getSessionId() || storageService.getActiveSessionId() || null
     switch (form.mode) {
-      case 'info': result = await API.startInfoScan(target); break
-      case 'vuln': result = await API.startVulnScan(target); break
-      case 'full': result = await API.startFullScan(target); break
+      case 'info': result = await API.startInfoScan(target, sessionId); break
+      case 'vuln': result = await API.startVulnScan(target, sessionId); break
+      case 'full': result = await API.startFullScan(target, sessionId); break
     }
 
     if (!result || !result.data) {
@@ -487,16 +529,60 @@ const handleWSMessage = (data) => {
       progress.value = Math.round(((dData.completed_tasks?.length || 0) / (dData.total_tasks || 1)) * 100)
       statusText.value = `AI决策: 下一步 ${dData.next_task}`
       break
+
+    case 'status': {
+      const state = data.payload?.state
+      if (!state) break
+      if (state.target) {
+        form.target = state.target
+        globalState.currentTarget = state.target
+      }
+      const modeMap = { info_collection: 'info', vuln_scan: 'vuln', full_scan: 'full' }
+      if (state.target && state.mode && modeMap[state.mode]) form.mode = modeMap[state.mode]
+      if (state.is_complete) {
+        isScanning.value = false
+        progress.value = 100
+        statusText.value = '扫描完成'
+        resultsData.value = {
+          ...resultsData.value,
+          completed_tasks: state.completed_tasks || [],
+          tool_results: state.tool_results || {},
+          vulnerabilities: state.vulnerabilities || [],
+          errors: state.errors || [],
+          report: state.report || ''
+        }
+        showResults.value = Boolean(
+          state.completed_tasks?.length ||
+          Object.keys(state.tool_results || {}).length ||
+          state.vulnerabilities?.length ||
+          state.errors?.length ||
+          state.report
+        )
+      } else if (state.target && !showResults.value) {
+        isScanning.value = true
+        statusText.value = '正在恢复扫描状态...'
+      }
+      break
+    }
   }
 }
+
+watch(
+  [form, isScanning, progress, statusText, showResults, tasks, resultsData],
+  scheduleScanPersist,
+  { deep: true }
+)
 
 onMounted(() => {
   scanHistory.value = getScanHistory()
   ws.on('*', handleWSMessage)
+  if (ws.isConnected()) ws.sendGetStatus()
 })
 
 onUnmounted(() => {
   ws.off('*', handleWSMessage)
+  if (persistTimer) clearTimeout(persistTimer)
+  persistScanState()
 })
 </script>
 

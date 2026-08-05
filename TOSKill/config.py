@@ -23,11 +23,16 @@ class TOSKillSettings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/toskill.log"
 
+    HTTP_PROXY: Optional[str] = None
+    HTTPS_PROXY: Optional[str] = None
+    NO_PROXY: str = "127.0.0.1,localhost"
+
 
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "59fada9c8160545dacd8750420d28d74:M2FkMDU4MDM0OTgwMTZlZDk4NWQ1Nzk3")
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://maas-api.cn-huabei-1.xf-yun.com/v2")
     MODEL_ID: str = os.getenv("MODEL_ID", "xop35qwen2b")
     LLM_TEMPERATURE: float = 0.1
+    REPORT_AI_TIMEOUT: float = 30.0
     
     RAG_ENABLED: bool = True
     RAG_INIT_ON_STARTUP: bool = True
@@ -66,7 +71,10 @@ class TOSKillSettings(BaseSettings):
         return v.strip() if v else v
 
     model_config = ConfigDict(
-        env_file=str(Path(__file__).parent / ".env"),
+        env_file=(
+            str(Path(__file__).parent / ".env"),
+            str(Path(__file__).parent / ".env.proxy"),
+        ),
         env_file_encoding="utf-8",
         case_sensitive=True
     )
@@ -74,3 +82,9 @@ class TOSKillSettings(BaseSettings):
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
 settings = TOSKillSettings()
+
+for proxy_name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+    proxy_value = getattr(settings, proxy_name, None)
+    if proxy_value:
+        os.environ[proxy_name] = proxy_value
+        os.environ[proxy_name.lower()] = proxy_value

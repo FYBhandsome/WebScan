@@ -637,6 +637,14 @@ class MemoryStore:
                 )
             """)
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS pending_interactions (
+                    session_id TEXT PRIMARY KEY,
+                    interaction_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS script_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     tool_name TEXT NOT NULL,
@@ -762,8 +770,12 @@ class MemoryStore:
                 try:
                     with conn:
                         conn.execute(
-                            """INSERT OR REPLACE INTO sessions (session_id, state_json, created_at, updated_at, version)
-                               VALUES (?, ?, ?, ?, ?)""",
+                            """INSERT INTO sessions (session_id, state_json, created_at, updated_at, version)
+                               VALUES (?, ?, ?, ?, ?)
+                               ON CONFLICT(session_id) DO UPDATE SET
+                                   state_json = excluded.state_json,
+                                   updated_at = excluded.updated_at,
+                                   version = excluded.version""",
                             (session_id, state_json, metadata.created_at.isoformat(), 
                              metadata.updated_at.isoformat(), metadata.version)
                         )
@@ -790,19 +802,46 @@ class MemoryStore:
         """更新会话状态的部分字段（带版本控制）"""
         with self._lock:
             state = self.get_session(session_id)
-            if state:
+            if state is not None:
                 now = datetime.now()
                 state = {**state, **kwargs}
-                self._sessions[session_id] = state
-                self._session_timestamps[session_id] = now
-                
-                if session_id in self._session_metadata:
-                    metadata = self._session_metadata[session_id]
+                metadata = self._session_metadata.get(session_id)
+                if metadata:
                     metadata.version += 1
                     metadata.updated_at = now
                     metadata.last_activity = now
-                
-                logger.debug(f"更新会话状态: {session_id}, 版本: {self._session_metadata[session_id].version}")
+                else:
+                    metadata = SessionMetadata(created_at=now, updated_at=now, last_activity=now)
+                    self._session_metadata[session_id] = metadata
+
+                try:
+                    state_json = json.dumps(state, ensure_ascii=False, default=str)
+                except Exception as e:
+                    logger.error(f"JSON序列化失败: {e}")
+                    return None
+
+                conn = self._get_db_conn()
+                if conn:
+                    try:
+                        with conn:
+                            conn.execute(
+                                """INSERT INTO sessions
+                                   (session_id, state_json, created_at, updated_at, version)
+                                   VALUES (?, ?, ?, ?, ?)
+                                   ON CONFLICT(session_id) DO UPDATE SET
+                                       state_json = excluded.state_json,
+                                       updated_at = excluded.updated_at,
+                                       version = excluded.version""",
+                                (session_id, state_json, metadata.created_at.isoformat(),
+                                 metadata.updated_at.isoformat(), metadata.version)
+                            )
+                    except Exception as e:
+                        logger.error(f"SQLite 更新会话失败: {e}")
+                        return None
+
+                self._sessions[session_id] = state
+                self._session_timestamps[session_id] = now
+                logger.debug(f"更新会话状态: {session_id}, 版本: {metadata.version}")
             return state
     
     def delete_session(self, session_id: str):
@@ -845,6 +884,14 @@ class MemoryStore:
                 self._websocket_callbacks.pop(sid, None)
                 self._session_timestamps.pop(sid, None)
                 self._session_metadata.pop(sid, None)
+
+            conn = self._get_db_conn()
+            if conn and expired:
+                try:
+                    with conn:
+                        conn.executemany("DELETE FROM sessions WHERE session_id = ?", [(sid,) for sid in expired])
+                except Exception as e:
+                    logger.error(f"SQLite 清理过期会话失败: {e}")
         
         if expired_count > 0:
             logger.info(f"[清理] 本次清理过期会话数: {expired_count}, 剩余活跃会话: {len(self._sessions)}")
@@ -912,13 +959,13 @@ class MemoryStore:
             self._cleanup_expired_data_on_startup(max_age_hours=2.0)
             
             cursor = conn.execute(
-                "SELECT session_id, state_json, updated_at FROM sessions"
+                "SELECT session_id, state_json, created_at, updated_at, version FROM sessions"
             )
             loaded_count = 0
             now = datetime.now()
             
             for row in cursor.fetchall():
-                session_id, state_json, updated_at_str = row
+                session_id, state_json, created_at_str, updated_at_str, version = row
                 try:
                     state = json.loads(state_json)
                     
@@ -929,12 +976,17 @@ class MemoryStore:
                         updated_at = datetime.fromisoformat(updated_at_str)
                     except Exception:
                         updated_at = now
+
+                    try:
+                        created_at = datetime.fromisoformat(created_at_str)
+                    except Exception:
+                        created_at = updated_at
                     
                     self._sessions[session_id] = state
                     self._session_timestamps[session_id] = updated_at
                     self._session_metadata[session_id] = SessionMetadata(
-                        version=state.get("_version", 1),
-                        created_at=updated_at,
+                        version=version or 1,
+                        created_at=created_at,
                         updated_at=updated_at,
                         last_activity=updated_at
                     )
@@ -952,6 +1004,16 @@ class MemoryStore:
                 self._chat_histories[sid].append({
                     "role": role, "content": content, "timestamp": ts
                 })
+
+            pending_cursor = conn.execute(
+                "SELECT session_id, interaction_json FROM pending_interactions"
+            )
+            for sid, interaction_json in pending_cursor.fetchall():
+                if sid in self._sessions:
+                    try:
+                        self._pending_interactions[sid] = json.loads(interaction_json)
+                    except Exception as e:
+                        logger.warning(f"恢复待交互状态 {sid} 失败: {e}")
             
             if loaded_count > 0:
                 logger.info(f"从 SQLite 恢复了 {loaded_count} 个会话")
@@ -1151,6 +1213,18 @@ class MemoryStore:
     def set_pending_interaction(self, session_id: str, interaction_data: Dict):
         """设置待处理的交互请求"""
         self._pending_interactions[session_id] = interaction_data
+        conn = self._get_db_conn()
+        if conn:
+            try:
+                with conn:
+                    conn.execute(
+                        """INSERT OR REPLACE INTO pending_interactions
+                           (session_id, interaction_json, updated_at) VALUES (?, ?, ?)""",
+                        (session_id, json.dumps(interaction_data, ensure_ascii=False, default=str),
+                         datetime.now().isoformat())
+                    )
+            except Exception as e:
+                logger.error(f"SQLite 保存待交互状态失败: {e}")
     
     def get_pending_interaction(self, session_id: str) -> Optional[Dict]:
         """获取待处理的交互请求"""
@@ -1159,6 +1233,13 @@ class MemoryStore:
     def clear_pending_interaction(self, session_id: str):
         """清除待处理的交互请求"""
         self._pending_interactions.pop(session_id, None)
+        conn = self._get_db_conn()
+        if conn:
+            try:
+                with conn:
+                    conn.execute("DELETE FROM pending_interactions WHERE session_id = ?", (session_id,))
+            except Exception as e:
+                logger.error(f"SQLite 清除待交互状态失败: {e}")
     
     def set_websocket_callback(self, session_id: str, callback: Callable):
         """设置 WebSocket 回调函数"""
@@ -2978,12 +3059,14 @@ async def report_generation(state: ScanState) -> ScanState:
         
         logger.info(f"Markdown报告已保存: {report_info.get('download_url')}")
         
-        ai_analysis = report_manager.generate_professional_ai_analysis(
-            tool_results=tool_results,
+        log_collector.add_log(session_id, "report_generation", "info", "报告摘要已完成，正在生成HTML报告")
+
+        ai_analysis = report_manager.generate_html_analysis(
             vulnerabilities=vulnerabilities,
-            target=target
+            target=target,
+            report_content=report,
         )
-        logger.info(f"AI分析完成: 风险等级={ai_analysis.get('risk_assessment', {}).get('overall_risk', 'unknown')}")
+        logger.info(f"HTML分析数据已生成: 风险等级={ai_analysis.get('risk_assessment', {}).get('overall_risk', 'unknown')}")
         
         html_report_info = report_manager.save_html_report(
             session_id=session_id,

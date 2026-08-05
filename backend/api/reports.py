@@ -115,10 +115,17 @@ async def create_report(report: ReportCreate):
             "id": v.id,
             "title": v.title,
             "name": v.title,
+            "vuln_type": v.vuln_type,
             "severity": v.severity,
             "url": v.url,
             "description": v.description,
-            "remediation": v.remediation
+            "payload": v.payload,
+            "evidence": v.evidence,
+            "remediation": v.remediation,
+            "risk_score": v.risk_score,
+            "fix_priority": v.fix_priority,
+            "status": v.status,
+            "source": v.source
         } for v in vulns]
         
         report_data = await report_service.generate_report(
@@ -330,7 +337,10 @@ async def export_report(
             target=content.get("target", ""),
             scan_time=content.get("scan_time", ""),
             generated_at=content.get("generated_at", datetime.now().isoformat()),
-            vulnerabilities=content.get("vulnerabilities", [])
+            vulnerabilities=content.get("vulnerabilities", []),
+            execution_history=content.get("execution_history", []),
+            tool_results=content.get("tool_results", {}),
+            target_context=content.get("target_context", {})
         )
         
         if "summary" in content:
@@ -344,6 +354,9 @@ async def export_report(
         if "ai_analysis" in content:
             from backend.services.report_service import AIAnalysisData
             report_data.ai_analysis = AIAnalysisData(**content["ai_analysis"])
+
+        if "workflow" in content:
+            report_data.workflow = report_service._parse_workflow_data(content["workflow"])
         
         format_lower = format.lower()
         
@@ -551,10 +564,18 @@ async def regenerate_report(report_id: int, background_tasks: BackgroundTasks):
         vuln_list = [{
             "id": v.id,
             "title": v.title,
+            "name": v.title,
+            "vuln_type": v.vuln_type,
             "severity": v.severity,
             "url": v.url,
             "description": v.description,
-            "remediation": v.remediation
+            "payload": v.payload,
+            "evidence": v.evidence,
+            "remediation": v.remediation,
+            "risk_score": v.risk_score,
+            "fix_priority": v.fix_priority,
+            "status": v.status,
+            "source": v.source
         } for v in vulns]
         
         existing_content = json.loads(report.content) if report.content else {}

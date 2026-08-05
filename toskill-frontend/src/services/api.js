@@ -86,16 +86,16 @@ class ApiService {
   }
 
   // --- Scan ---
-  async startInfoScan(target) {
-    return this.post('/scan/info', { target });
+  async startInfoScan(target, sessionId = null) {
+    return this.post('/scan/info', { target, ...(sessionId ? { session_id: sessionId } : {}) });
   }
 
-  async startVulnScan(target) {
-    return this.post('/scan/vuln', { target });
+  async startVulnScan(target, sessionId = null) {
+    return this.post('/scan/vuln', { target, ...(sessionId ? { session_id: sessionId } : {}) });
   }
 
-  async startFullScan(target) {
-    return this.post('/scan/full', { target });
+  async startFullScan(target, sessionId = null) {
+    return this.post('/scan/full', { target, ...(sessionId ? { session_id: sessionId } : {}) });
   }
 
   // --- Tools ---

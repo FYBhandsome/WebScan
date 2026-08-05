@@ -9,6 +9,7 @@
 """
 import json
 import logging
+from html import escape
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -609,177 +610,279 @@ class ReportService:
             raise Exception("PDF 生成需要安装 weasyprint 或 reportlab")
     
     def _render_html_template(self, report_data: ReportData, language: Language) -> str:
-        """渲染 HTML 模板"""
+        """按照标准安全分析研判报告模板渲染独立 HTML。"""
         summary = report_data.summary
         risk = report_data.risk_assessment
-        
-        vuln_items_html = self._render_vulnerabilities_html(report_data.vulnerabilities, language)
-        ai_analysis_html = self._render_ai_analysis_html(report_data.ai_analysis, language) if report_data.ai_analysis else ""
-        workflow_html = self._render_workflow_html(report_data.workflow, language) if report_data.workflow else ""
-        
+        is_zh = language == Language.ZH_CN
+
+        def html_text(value: Any) -> str:
+            return escape("" if value is None else str(value))
+
         labels = {
-            "report_title": "安全扫描报告" if language == Language.ZH_CN else "Security Scan Report",
-            "task_name": "任务名称" if language == Language.ZH_CN else "Task Name",
-            "target": "目标" if language == Language.ZH_CN else "Target",
-            "scan_time": "扫描时间" if language == Language.ZH_CN else "Scan Time",
-            "risk_assessment": "风险评估" if language == Language.ZH_CN else "Risk Assessment",
-            "vulnerability_stats": "漏洞统计" if language == Language.ZH_CN else "Vulnerability Statistics",
-            "vulnerability_details": "漏洞详情" if language == Language.ZH_CN else "Vulnerability Details",
-            "ai_analysis": "AI 智能分析" if language == Language.ZH_CN else "AI Analysis"
+            "title": "安全分析研判报告" if is_zh else "Security Analysis Report",
+            "subtitle": "标准化渗透扫描安全评估文书 | 安全合规专项检测" if is_zh else "Standardized penetration testing and security assessment",
+            "report_no": "报告编号" if is_zh else "Report ID",
+            "task": "任务名称" if is_zh else "Task",
+            "target": "扫描目标" if is_zh else "Target",
+            "scan_time": "扫描执行时间" if is_zh else "Scan Time",
+            "generated_at": "报告生成时间" if is_zh else "Generated At",
+            "total": "漏洞总数量" if is_zh else "Total Findings",
+            "owner": "编制责任人" if is_zh else "Prepared By",
+            "owner_value": "安全审计专员" if is_zh else "Security Audit Team",
+            "risk_overview": "综合风险概览" if is_zh else "Risk Overview",
+            "risk_level": "综合风险等级" if is_zh else "Overall Risk",
+            "details": "漏洞明细（按风险优先级排序）" if is_zh else "Findings by Priority",
+            "attack_chain": "攻击链路研判" if is_zh else "Attack Path Analysis",
+            "compliance": "合规影响说明" if is_zh else "Compliance Impact",
+            "fix_plan": "分层加固整改方案" if is_zh else "Remediation Plan",
+            "appendix": "查看原始扫描完整数据（Payload、证据、服务配置详情）" if is_zh else "View complete raw scan data",
         }
-        
+
+        total = max(summary.total_vulnerabilities, 1)
+        severity_rows = [
+            ("critical", "严重漏洞" if is_zh else "Critical", summary.critical_count),
+            ("high", "高危漏洞" if is_zh else "High", summary.high_count),
+            ("medium", "中危漏洞" if is_zh else "Medium", summary.medium_count),
+            ("low", "低危漏洞" if is_zh else "Low", summary.low_count),
+            ("info", "信息类配置缺陷" if is_zh else "Informational", summary.info_count),
+        ]
+        risk_bars = "".join(
+            f'<div class="risk-bar-item"><div class="bar-label">{label}</div>'
+            f'<div class="bar-outer"><div class="bar-inner bar-{level}" style="width:{count / total * 100:.1f}%"></div></div>'
+            f'<div class="bar-count">{count}</div></div>'
+            for level, label, count in severity_rows
+        )
+
+        ordered_vulns = sorted(
+            report_data.vulnerabilities,
+            key=lambda item: SEVERITY_CONFIG.get(str(item.get("severity", "info")).lower(), SEVERITY_CONFIG["info"])["order"]
+        )
+        vuln_items_html = self._render_vulnerabilities_html(ordered_vulns, language)
+        workflow_html = self._render_workflow_html(report_data.workflow, language) if report_data.workflow else ""
+        ai_analysis_html = self._render_ai_analysis_html(report_data.ai_analysis, language) if report_data.ai_analysis else ""
+
+        count_parts = [f"{count}{'项' if is_zh else ''}{label}" for _, label, count in severity_rows if count]
+        top_vuln = ordered_vulns[0].get("title", ordered_vulns[0].get("name", "")) if ordered_vulns else ""
+        if is_zh:
+            risk_summary = (
+                f"本次资产扫描共检出 {summary.total_vulnerabilities} 项安全风险"
+                + (f"，其中{'、'.join(count_parts)}" if count_parts else "")
+                + "。"
+            )
+            if top_vuln:
+                risk_summary += f"当前最高优先级问题为“{top_vuln}”，建议优先完成验证与加固。"
+        else:
+            risk_summary = f"The scan identified {summary.total_vulnerabilities} finding(s)."
+            if top_vuln:
+                risk_summary += f" The highest-priority finding is {top_vuln}."
+
+        attack_items = []
+        if report_data.ai_analysis and report_data.ai_analysis.risks:
+            attack_items.extend(report_data.ai_analysis.risks[:3])
+        elif ordered_vulns:
+            names = [v.get("title", v.get("name", "Unknown")) for v in ordered_vulns[:3]]
+            attack_items.append(("重点风险路径：" if is_zh else "Priority path: ") + " -> ".join(names))
+            attack_items.append("应结合漏洞证据和业务边界复核组合利用可能性。" if is_zh else "Validate exploit chaining against evidence and business boundaries.")
+        else:
+            attack_items.append("本次扫描未形成可研判的漏洞攻击链。" if is_zh else "No attack path was identified in this scan.")
+
+        compliance_items = [
+            (f"共发现 {summary.critical_count + summary.high_count} 项严重或高危问题，应纳入优先整改范围。" if is_zh else f"{summary.critical_count + summary.high_count} critical or high finding(s) require priority remediation."),
+            ("扫描结果应结合适用的等保、数据安全及行业规范进行人工复核。" if is_zh else "Review findings against applicable regulatory and industry controls."),
+            ("配置类问题应纳入持续监测和基线核查机制。" if is_zh else "Configuration findings should be tracked through continuous baseline reviews."),
+        ]
+
+        def list_html(items: List[Any]) -> str:
+            return "".join(f"<li>{escape(str(item))}</li>" for item in items if item)
+
+        urgent = []
+        deadline = []
+        long_term = []
+        for vuln in ordered_vulns:
+            title = vuln.get("title", vuln.get("name", "Unknown"))
+            remediation = vuln.get("remediation") or ("复核并修复该漏洞" if is_zh else "Validate and remediate this finding")
+            item = f"{title}：{remediation}"
+            severity = str(vuln.get("severity", "info")).lower()
+            if severity in {"critical", "high"}:
+                urgent.append(item)
+            elif severity == "medium":
+                deadline.append(item)
+            else:
+                long_term.append(item)
+        if report_data.ai_analysis:
+            long_term.extend(report_data.ai_analysis.recommendations)
+        urgent = urgent or (["暂无严重或高危漏洞，持续复核新增风险。"] if is_zh else ["No critical or high findings; continue monitoring."])
+        deadline = deadline or (["复核中危漏洞与业务影响，按计划完成整改。"] if is_zh else ["Review medium findings and remediate on schedule."])
+        long_term = long_term or (["建立周期性扫描、补丁更新与安全基线核查机制。"] if is_zh else ["Maintain recurring scans, patching, and baseline reviews."])
+
+        appendix_rows = []
+        for index, vuln in enumerate(ordered_vulns, 1):
+            details = [
+                f"URL: {vuln.get('url') or 'N/A'}",
+                f"Payload: {vuln.get('payload') or 'N/A'}",
+                f"{'证据' if is_zh else 'Evidence'}: {vuln.get('evidence') or 'N/A'}",
+            ]
+            appendix_rows.append(
+                f'<div class="appendix-entry"><strong>{index}. {escape(str(vuln.get("title", vuln.get("name", "Unknown"))))}</strong>'
+                + "".join(f"<p>{escape(str(detail))}</p>" for detail in details)
+                + "</div>"
+            )
+        if report_data.tool_results:
+            appendix_rows.append(
+                f'<div class="appendix-entry"><strong>{"工具执行结果" if is_zh else "Tool Results"}</strong>'
+                f'<pre>{escape(json.dumps(report_data.tool_results, ensure_ascii=False, indent=2, default=str))}</pre></div>'
+            )
+        if not appendix_rows:
+            appendix_rows.append(f'<p>{"暂无原始漏洞数据。" if is_zh else "No raw finding data."}</p>')
+
+        safe_task_id = "".join(ch for ch in str(report_data.task_id) if ch.isalnum() or ch in "-_") or "NA"
+        date_token = "".join(ch for ch in str(report_data.generated_at)[:10] if ch.isdigit()) or datetime.now().strftime("%Y%m%d")
+        report_no = f"SEC-{date_token}-{safe_task_id}"
+        risk_level = str(risk.level or "info").lower()
+        risk_color = SEVERITY_CONFIG.get(risk_level, SEVERITY_CONFIG["info"])["color"]
+        try:
+            risk_score = float(risk.score)
+        except (TypeError, ValueError):
+            risk_score = 0.0
+
+        styles = """
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --gap-sm: 10px; --gap-md: 12px; --gap-lg: 24px; --gap-xl: 24px; --radius: 4px; --border: #e5e7eb; --primary: #165dff; --critical: #d93025; --high: #e67e22; --medium: #d4a017; --low: #165dff; --info: #888; }
+        body { background: #f7f8fa; padding: 32px; color: #222; line-height: 1.8; font-family: "Source Han Sans CN", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
+        .report-shell { width: min(1440px, 100%); margin: 0 auto; }
+        .card, .report-header, .appendix-card { background: #fff; border: 1px solid var(--border); border-radius: var(--radius); padding: var(--gap-lg); }
+        .report-header, .risk-overview, .two-col-container, .fix-plan-container, .workflow-section, .ai-section { margin-bottom: var(--gap-xl); }
+        .header-top, .module-title { display: flex; align-items: center; gap: var(--gap-sm); font-weight: 700; }
+        .header-top { font-size: 22px; margin-bottom: var(--gap-sm); }
+        .header-subtitle { font: 13px "Source Han Serif CN", SimSun, serif; color: #666; margin-bottom: var(--gap-lg); }
+        .icon-svg { width: 20px; height: 20px; fill: var(--primary); flex: 0 0 20px; }
+        .meta-wrap { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--gap-md); }
+        .meta-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .meta-label { font-weight: 500; color: #444; }
+        .text-body, .text-tip { font-family: "Source Han Serif CN", SimSun, serif; color: #333; overflow-wrap: anywhere; }
+        .text-body { font-size: 14px; text-align: justify; }
+        .text-tip { font-size: 13px; color: #666; }
+        .module-title { font-size: 18px; padding-bottom: var(--gap-sm); border-bottom: 1px solid var(--border); margin-bottom: var(--gap-lg); }
+        .risk-head-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--gap-lg); margin-bottom: var(--gap-md); }
+        .risk-score-box { display: flex; align-items: baseline; gap: var(--gap-sm); }
+        .score-num { font-size: 24px; font-weight: 700; }
+        .score-desc { font-size: 14px; font-weight: 600; }
+        .risk-bar-group { display: flex; gap: var(--gap-md); flex: 1; min-width: 520px; }
+        .risk-bar-item { flex: 1; text-align: center; min-width: 72px; }
+        .bar-label { min-height: 24px; font-size: 12px; color: #666; }
+        .bar-outer { height: 6px; background: #eee; border-radius: 3px; overflow: hidden; }
+        .bar-inner { height: 100%; } .bar-critical { background: var(--critical); } .bar-high { background: var(--high); } .bar-medium { background: var(--medium); } .bar-low { background: var(--low); } .bar-info { background: var(--info); }
+        .bar-count { margin-top: 4px; font-size: 13px; font-weight: 600; }
+        .risk-desc-block p + p { margin-top: var(--gap-sm); }
+        .two-col-container { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--gap-lg); align-items: stretch; }
+        .right-col { display: flex; flex-direction: column; gap: var(--gap-lg); }
+        .right-col > .card { flex: 1; }
+        .vuln-list-wrap { display: flex; flex-direction: column; gap: var(--gap-md); }
+        .vuln-item { border: 1px solid var(--border); border-radius: var(--radius); padding: var(--gap-md); }
+        .vuln-item summary { cursor: pointer; list-style: none; }
+        .vuln-item summary::-webkit-details-marker { display: none; }
+        .vuln-title-row { display: flex; align-items: center; gap: var(--gap-sm); font-size: 15px; font-weight: 600; }
+        .risk-tag { flex: 0 0 auto; min-width: 46px; padding: 2px 8px; border-radius: 2px; color: #fff; text-align: center; font-size: 12px; }
+        .tag-critical { background: var(--critical); } .tag-high { background: var(--high); } .tag-medium { background: var(--medium); } .tag-low { background: var(--low); } .tag-info { background: var(--info); }
+        .vuln-tip-text { margin-top: 6px; font: 13px "Source Han Serif CN", SimSun, serif; color: #555; overflow-wrap: anywhere; }
+        .vuln-detail { margin-top: var(--gap-md); padding-top: var(--gap-md); border-top: 1px dashed var(--border); }
+        .vuln-detail p + p { margin-top: 6px; }
+        .list-uniform { list-style: none; }
+        .list-uniform li { display: flex; gap: var(--gap-sm); margin-bottom: var(--gap-sm); font: 14px "Source Han Serif CN", SimSun, serif; overflow-wrap: anywhere; }
+        .list-uniform li::before { content: "-"; color: #666; flex: 0 0 auto; }
+        .fix-three-col { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap-lg); }
+        .fix-block { padding: var(--gap-lg); border-radius: var(--radius); }
+        .fix-emergency { background: #fef2f2; } .fix-deadline { background: #fffbeb; } .fix-longterm { background: #f9fafb; }
+        .fix-block-title { margin-bottom: var(--gap-md); font-size: 15px; font-weight: 700; }
+        .ai-grid, .workflow-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--gap-md); }
+        .analysis-block, .workflow-stat { padding: var(--gap-md); background: #f9fafb; border: 1px solid var(--border); border-radius: var(--radius); }
+        .analysis-block h3 { margin-bottom: 8px; font-size: 15px; }
+        .workflow-stat { text-align: center; } .workflow-stat .value { font-size: 22px; font-weight: 700; color: var(--primary); } .workflow-stat .label { font-size: 12px; color: #666; }
+        .execution-timeline, .task-plans { margin-top: var(--gap-lg); }
+        .timeline-item, .plan-item { display: flex; gap: var(--gap-md); padding: var(--gap-md); margin-top: var(--gap-sm); background: #f9fafb; border-left: 3px solid var(--primary); }
+        .timeline-step, .plan-priority { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; background: var(--primary); color: #fff; font-size: 12px; font-weight: 700; }
+        .timeline-content, .plan-info { min-width: 0; flex: 1; } .timeline-title, .plan-name { font-weight: 600; } .timeline-meta, .timeline-duration { font-size: 12px; color: #666; }
+        .plan-status { align-self: center; padding: 2px 8px; border: 1px solid var(--border); font-size: 11px; }
+        .progress-bar { width: 100%; height: 6px; margin-top: var(--gap-md); background: #eee; overflow: hidden; } .progress-fill { height: 100%; background: var(--primary); }
+        .appendix-summary { display: flex; align-items: center; gap: var(--gap-sm); cursor: pointer; font-size: 14px; color: var(--primary); }
+        .appendix-content { margin-top: var(--gap-md); padding-top: var(--gap-md); border-top: 1px dashed var(--border); font: 13px "Source Han Serif CN", SimSun, serif; color: #555; }
+        .appendix-entry + .appendix-entry { margin-top: var(--gap-md); padding-top: var(--gap-md); border-top: 1px solid var(--border); }
+        pre { max-height: 360px; overflow: auto; margin-top: 8px; padding: 12px; background: #f7f8fa; border: 1px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; font: 12px Consolas, monospace; }
+        .empty-state { padding: 24px; color: #666; text-align: center; }
+        .footer { padding: 20px; color: #666; text-align: center; font-size: 12px; }
+        @media (max-width: 900px) { body { padding: 16px; } .two-col-container, .fix-three-col { grid-template-columns: 1fr; } .risk-bar-group { min-width: 100%; overflow-x: auto; } }
+        @media (max-width: 560px) { body { padding: 10px; } .card, .report-header, .appendix-card { padding: 16px; } .meta-wrap { grid-template-columns: 1fr; } .risk-bar-group { display: grid; grid-template-columns: repeat(2, 1fr); } }
+        @media print { @page { size: A4; margin: 12mm; } body { padding: 0; background: #fff; } .report-shell { width: 100%; } .card, .report-header, .appendix-card { break-inside: avoid; } details { display: block; } details > .appendix-content { display: block; } }
+        """
+
+        icon = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>'
+
         return f"""<!DOCTYPE html>
 <html lang="{'zh-CN' if language == Language.ZH_CN else 'en'}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{report_data.task_name}</title>
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft YaHei', sans-serif; line-height: 1.6; color: #333; background: #f5f5f5; }}
-        .container {{ max-width: 1200px; margin: 0 auto; padding: 20px; }}
-        
-        .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 40px; border-radius: 10px; margin-bottom: 30px; }}
-        .header h1 {{ font-size: 28px; margin-bottom: 10px; }}
-        .header .meta {{ font-size: 14px; opacity: 0.9; }}
-        
-        .risk-gauge {{ background: white; border-radius: 10px; padding: 30px; margin-bottom: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-        .risk-gauge h2 {{ color: #333; margin-bottom: 20px; }}
-        .gauge-container {{ display: flex; align-items: center; gap: 30px; flex-wrap: wrap; }}
-        .gauge {{ width: 200px; height: 200px; position: relative; }}
-        .gauge-value {{ position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 48px; font-weight: bold; }}
-        .risk-details {{ flex: 1; min-width: 300px; }}
-        .risk-level {{ font-size: 24px; font-weight: bold; margin-bottom: 10px; }}
-        
-        .summary-cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 20px; margin-bottom: 30px; }}
-        .card {{ background: white; border-radius: 10px; padding: 20px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-        .card .count {{ font-size: 36px; font-weight: bold; margin: 10px 0; }}
-        .card .label {{ font-size: 14px; color: #666; }}
-        
-        .section {{ background: white; border-radius: 10px; padding: 30px; margin-bottom: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-        .section h2 {{ color: #333; border-bottom: 2px solid #667eea; padding-bottom: 10px; margin-bottom: 20px; }}
-        
-        .vuln-item {{ border: 1px solid #eee; border-radius: 8px; padding: 20px; margin-bottom: 15px; }}
-        .vuln-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 10px; }}
-        .vuln-title {{ font-size: 18px; font-weight: bold; }}
-        .vuln-severity {{ padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; color: white; }}
-        .severity-critical {{ background: #c0392b; }}
-        .severity-high {{ background: #e74c3c; }}
-        .severity-medium {{ background: #f39c12; }}
-        .severity-low {{ background: #3498db; }}
-        .severity-info {{ background: #95a5a6; }}
-        
-        .ai-analysis {{ background: #e8f4fd; border-left: 4px solid #3498db; padding: 20px; border-radius: 8px; }}
-        .ai-analysis h3 {{ color: #3498db; margin-bottom: 15px; }}
-        
-        .workflow-section {{ background: white; border-radius: 10px; padding: 30px; margin-bottom: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-        .workflow-section h2 {{ color: #333; border-bottom: 2px solid #10b981; padding-bottom: 10px; margin-bottom: 20px; }}
-        
-        .workflow-overview {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 25px; }}
-        .workflow-stat {{ background: #f8fafc; padding: 15px; border-radius: 8px; text-align: center; }}
-        .workflow-stat .value {{ font-size: 24px; font-weight: bold; color: #10b981; }}
-        .workflow-stat .label {{ font-size: 12px; color: #64748b; margin-top: 5px; }}
-        
-        .execution-timeline {{ margin-top: 20px; }}
-        .timeline-item {{ display: flex; gap: 15px; margin-bottom: 15px; padding: 15px; background: #f8fafc; border-radius: 8px; border-left: 3px solid #10b981; }}
-        .timeline-item.success {{ border-left-color: #10b981; }}
-        .timeline-item.failed {{ border-left-color: #ef4444; }}
-        .timeline-item.running {{ border-left-color: #3b82f6; }}
-        .timeline-item.pending {{ border-left-color: #94a3b8; }}
-        .timeline-step {{ min-width: 30px; height: 30px; background: #10b981; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; }}
-        .timeline-content {{ flex: 1; }}
-        .timeline-title {{ font-weight: 600; margin-bottom: 5px; }}
-        .timeline-meta {{ font-size: 12px; color: #64748b; }}
-        .timeline-duration {{ font-size: 12px; color: #10b981; font-weight: 500; }}
-        
-        .task-plans {{ margin-top: 20px; }}
-        .plan-item {{ display: flex; align-items: center; gap: 15px; padding: 12px 15px; background: #f8fafc; border-radius: 8px; margin-bottom: 10px; }}
-        .plan-priority {{ min-width: 30px; height: 30px; background: #667eea; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; }}
-        .plan-info {{ flex: 1; }}
-        .plan-name {{ font-weight: 600; }}
-        .plan-status {{ padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 500; }}
-        .status-completed {{ background: #d1fae5; color: #065f46; }}
-        .status-running {{ background: #dbeafe; color: #1e40af; }}
-        .status-pending {{ background: #f1f5f9; color: #475569; }}
-        .status-failed {{ background: #fee2e2; color: #991b1b; }}
-        
-        .progress-bar {{ width: 100%; height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin-top: 10px; }}
-        .progress-fill {{ height: 100%; background: linear-gradient(90deg, #10b981, #34d399); transition: width 0.3s; }}
-        
-        .footer {{ text-align: center; padding: 20px; color: #666; font-size: 12px; }}
-        
-        @media print {{
-            body {{ background: white; }}
-            .section, .card, .vuln-item, .workflow-section {{ box-shadow: none; border: 1px solid #ddd; }}
-        }}
-    </style>
+    <title>{html_text(report_data.task_name or labels['title'])}</title>
+    <style>{styles}</style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🔒 {labels['report_title']}</h1>
-            <div class="meta">
-                <p>{labels['task_name']}: {report_data.task_name}</p>
-                <p>{labels['target']}: {report_data.target}</p>
-                <p>{labels['scan_time']}: {report_data.scan_time}</p>
+    <main class="report-shell">
+        <header class="report-header">
+            <h1 class="header-top">{icon}{labels['title']}</h1>
+            <div class="header-subtitle">{labels['subtitle']}</div>
+            <div class="meta-wrap">
+                <div class="meta-item"><span class="meta-label">{labels['report_no']}：</span><span class="text-body">{html_text(report_no)}</span></div>
+                <div class="meta-item"><span class="meta-label">{labels['task']}：</span><span class="text-body">{html_text(report_data.task_name)}</span></div>
+                <div class="meta-item"><span class="meta-label">{labels['target']}：</span><span class="text-body">{html_text(report_data.target)}</span></div>
+                <div class="meta-item"><span class="meta-label">{labels['scan_time']}：</span><span class="text-body">{html_text(report_data.scan_time)}</span></div>
+                <div class="meta-item"><span class="meta-label">{labels['generated_at']}：</span><span class="text-body">{html_text(report_data.generated_at)}</span></div>
+                <div class="meta-item"><span class="meta-label">{labels['total']}：</span><span class="text-body">{summary.total_vulnerabilities} {'项' if is_zh else ''}</span></div>
+                <div class="meta-item"><span class="meta-label">{labels['owner']}：</span><span class="text-body">{labels['owner_value']}</span></div>
+            </div>
+        </header>
+
+        <section class="card risk-overview">
+            <h2 class="module-title">{icon}{labels['risk_overview']}</h2>
+            <div class="risk-head-row">
+                <div class="risk-score-box"><span class="score-num" style="color:{risk_color}">{risk_score:g}</span><span class="score-desc" style="color:{risk_color}">{labels['risk_level']}：{html_text(risk.label)} ({html_text(risk_level.upper())})</span></div>
+                <div class="risk-bar-group">{risk_bars}</div>
+            </div>
+            <div class="risk-desc-block text-body"><p>{escape(risk_summary)}</p></div>
+        </section>
+
+        <div class="two-col-container">
+            <section class="card left-col">
+                <h2 class="module-title">{icon}{labels['details']}</h2>
+                <div class="vuln-list-wrap">{vuln_items_html or f'<p class="empty-state">{"未发现漏洞" if is_zh else "No findings"}</p>'}</div>
+            </section>
+            <div class="right-col">
+                <section class="card"><h2 class="module-title">{icon}{labels['attack_chain']}</h2><ul class="list-uniform">{list_html(attack_items)}</ul></section>
+                <section class="card"><h2 class="module-title">{icon}{labels['compliance']}</h2><ul class="list-uniform">{list_html(compliance_items)}</ul></section>
             </div>
         </div>
-        
-        <div class="risk-gauge">
-            <h2>📊 {labels['risk_assessment']}</h2>
-            <div class="gauge-container">
-                <div class="gauge">
-                    <svg viewBox="0 0 200 200">
-                        <circle cx="100" cy="100" r="80" fill="none" stroke="#eee" stroke-width="20"/>
-                        <circle cx="100" cy="100" r="80" fill="none" stroke="{risk.color}" stroke-width="20"
-                            stroke-dasharray="{risk.score * 5.03} 503"
-                            stroke-linecap="round" transform="rotate(-90 100 100)"/>
-                    </svg>
-                    <div class="gauge-value" style="color: {risk.color};">{risk.score}</div>
-                </div>
-                <div class="risk-details">
-                    <div class="risk-level" style="color: {risk.color};">风险等级: {risk.label}</div>
-                    <p>综合风险评分基于漏洞数量、严重程度计算得出。</p>
-                </div>
+
+        <section class="card fix-plan-container">
+            <h2 class="module-title">{icon}{labels['fix_plan']}</h2>
+            <div class="fix-three-col">
+                <div class="fix-block fix-emergency"><h3 class="fix-block-title">{'紧急修复（7日内完成）' if is_zh else 'Urgent (within 7 days)'}</h3><ul class="list-uniform">{list_html(urgent[:6])}</ul></div>
+                <div class="fix-block fix-deadline"><h3 class="fix-block-title">{'限期整改（30日内完成）' if is_zh else 'Scheduled (within 30 days)'}</h3><ul class="list-uniform">{list_html(deadline[:6])}</ul></div>
+                <div class="fix-block fix-longterm"><h3 class="fix-block-title">{'常态化长效优化' if is_zh else 'Continuous improvement'}</h3><ul class="list-uniform">{list_html(long_term[:6])}</ul></div>
             </div>
-        </div>
-        
-        <div class="summary-cards">
-            <div class="card" style="border-top: 4px solid #c0392b;">
-                <div class="label">严重</div>
-                <div class="count" style="color: #c0392b;">{summary.critical_count}</div>
-            </div>
-            <div class="card" style="border-top: 4px solid #e74c3c;">
-                <div class="label">高危</div>
-                <div class="count" style="color: #e74c3c;">{summary.high_count}</div>
-            </div>
-            <div class="card" style="border-top: 4px solid #f39c12;">
-                <div class="label">中危</div>
-                <div class="count" style="color: #f39c12;">{summary.medium_count}</div>
-            </div>
-            <div class="card" style="border-top: 4px solid #3498db;">
-                <div class="label">低危</div>
-                <div class="count" style="color: #3498db;">{summary.low_count}</div>
-            </div>
-            <div class="card" style="border-top: 4px solid #95a5a6;">
-                <div class="label">信息</div>
-                <div class="count" style="color: #95a5a6;">{summary.info_count}</div>
-            </div>
-        </div>
-        
+        </section>
+
         {workflow_html}
-        
-        <div class="section">
-            <h2>🔍 {labels['vulnerability_details']}</h2>
-            {vuln_items_html if vuln_items_html else '<p>未发现漏洞</p>'}
-        </div>
-        
         {ai_analysis_html}
-        
+
+        <section class="appendix-card">
+            <details>
+                <summary class="appendix-summary">{icon}{labels['appendix']}</summary>
+                <div class="appendix-content">{''.join(appendix_rows)}</div>
+            </details>
+        </section>
         <div class="footer">
-            <p>报告由 AI_WebSecurity 自动生成 | 生成时间: {report_data.generated_at}</p>
+            <p>{'报告由 WebScan 自动生成' if is_zh else 'Generated by WebScan'} | {labels['generated_at']}: {html_text(report_data.generated_at)}</p>
         </div>
-    </div>
+    </main>
 </body>
 </html>"""
     
@@ -788,24 +891,30 @@ class ReportService:
         if not vulnerabilities:
             return ""
         
+        is_zh = language == Language.ZH_CN
         html = ""
         for vuln in vulnerabilities:
-            severity = vuln.get("severity", "info").lower()
+            severity = str(vuln.get("severity") or "info").lower()
+            if severity not in SEVERITY_CONFIG:
+                severity = "info"
             config = SEVERITY_CONFIG.get(severity, SEVERITY_CONFIG["info"])
             label = config["label"] if language == Language.ZH_CN else config["label_en"]
-            
+            title = escape(str(vuln.get('title', vuln.get('name', 'Unknown'))))
+            url = escape(str(vuln.get('url') or 'N/A'))
+            description = escape(str(vuln.get('description') or ('暂无描述' if is_zh else 'No description')))
+            remediation = escape(str(vuln.get('remediation') or ('暂无修复建议' if is_zh else 'No remediation guidance')))
+
             html += f"""
-            <div class="vuln-item">
-                <div class="vuln-header">
-                    <span class="vuln-title">{vuln.get('title', vuln.get('name', 'Unknown'))}</span>
-                    <span class="vuln-severity severity-{severity}">{label}</span>
+            <details class="vuln-item">
+                <summary>
+                    <div class="vuln-title-row"><span class="risk-tag tag-{severity}">{label}</span>{title}</div>
+                    <div class="vuln-tip-text">{'风险简述' if is_zh else 'Summary'}：{description}</div>
+                </summary>
+                <div class="vuln-detail text-body">
+                    <p><strong>URL：</strong>{url}</p>
+                    <p><strong>{'修复建议' if is_zh else 'Remediation'}：</strong>{remediation}</p>
                 </div>
-                <p><strong>URL:</strong> {vuln.get('url', 'N/A')}</p>
-                <p><strong>描述:</strong> {vuln.get('description', 'N/A')}</p>
-                <p style="margin-top: 10px; padding: 10px; background: #e8f5e9; border-radius: 4px;">
-                    <strong>修复建议:</strong> {vuln.get('remediation', 'N/A')}
-                </p>
-            </div>
+            </details>
             """
         
         return html
@@ -814,63 +923,54 @@ class ReportService:
         """渲染 AI 分析 HTML"""
         if not ai_analysis:
             return ""
-        
+
+        is_zh = language == Language.ZH_CN
         labels = {
             "ai_analysis": "AI 智能分析" if language == Language.ZH_CN else "AI Analysis",
             "summary": "风险总结" if language == Language.ZH_CN else "Summary",
             "causes": "漏洞成因" if language == Language.ZH_CN else "Causes",
             "risks": "利用风险" if language == Language.ZH_CN else "Risks",
-            "priorities": "修复优先级" if language == Language.ZH_CN else "Priorities"
+            "priorities": "修复优先级" if language == Language.ZH_CN else "Priorities",
+            "recommendations": "综合建议" if language == Language.ZH_CN else "Recommendations",
         }
-        
-        html = f"""
-        <div class="section">
-            <h2>🤖 {labels['ai_analysis']}</h2>
-            <div class="ai-analysis">
-        """
-        
+
+        blocks = []
         if ai_analysis.summary:
-            html += f"""
-                <h3>{labels['summary']}</h3>
-                <p>{ai_analysis.summary}</p>
-            """
-        
+            blocks.append(f'<div class="analysis-block"><h3>{labels["summary"]}</h3><p class="text-body">{escape(str(ai_analysis.summary))}</p></div>')
+
         if ai_analysis.causes:
-            html += f"""
-                <h3 style="margin-top: 20px;">{labels['causes']}</h3>
-                <ul>
-                    {''.join(f'<li>{cause}</li>' for cause in ai_analysis.causes)}
-                </ul>
-            """
-        
+            items = "".join(f"<li>{escape(str(cause))}</li>" for cause in ai_analysis.causes)
+            blocks.append(f'<div class="analysis-block"><h3>{labels["causes"]}</h3><ul class="list-uniform">{items}</ul></div>')
+
         if ai_analysis.risks:
-            html += f"""
-                <h3 style="margin-top: 20px;">{labels['risks']}</h3>
-                <ul>
-                    {''.join(f'<li>{risk}</li>' for risk in ai_analysis.risks)}
-                </ul>
-            """
-        
+            items = "".join(f"<li>{escape(str(risk))}</li>" for risk in ai_analysis.risks)
+            blocks.append(f'<div class="analysis-block"><h3>{labels["risks"]}</h3><ul class="list-uniform">{items}</ul></div>')
+
         if ai_analysis.priorities:
-            html += f"""
-                <h3 style="margin-top: 20px;">{labels['priorities']}</h3>
-                <ul>
-                    {''.join(f'<li>{p.get("vulnerability", "")}: 优先级 {p.get("priority", 0)}</li>' for p in ai_analysis.priorities)}
-                </ul>
-            """
-        
-        html += """
-            </div>
-        </div>
-        """
-        
-        return html
+            priority_label = "优先级" if is_zh else "Priority"
+            items = "".join(
+                f'<li>{escape(str(p.get("vulnerability", "")))}：{priority_label} {escape(str(p.get("priority", 0)))}'
+                f'{("，" + escape(str(p.get("reason")))) if p.get("reason") else ""}</li>'
+                for p in ai_analysis.priorities
+            )
+            blocks.append(f'<div class="analysis-block"><h3>{labels["priorities"]}</h3><ul class="list-uniform">{items}</ul></div>')
+
+        if ai_analysis.recommendations:
+            items = "".join(f"<li>{escape(str(item))}</li>" for item in ai_analysis.recommendations)
+            blocks.append(f'<div class="analysis-block"><h3>{labels["recommendations"]}</h3><ul class="list-uniform">{items}</ul></div>')
+
+        if not blocks:
+            return ""
+
+        icon = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>'
+        return f'<section class="card ai-section"><h2 class="module-title">{icon}{labels["ai_analysis"]}</h2><div class="ai-grid">{"".join(blocks)}</div></section>'
     
     def _render_workflow_html(self, workflow: WorkflowData, language: Language) -> str:
         """渲染工作流数据 HTML"""
         if not workflow:
             return ""
-        
+
+        is_zh = language == Language.ZH_CN
         labels = {
             "workflow_title": "工作流执行详情" if language == Language.ZH_CN else "Workflow Execution Details",
             "overview": "执行概览" if language == Language.ZH_CN else "Overview",
@@ -924,21 +1024,25 @@ class ReportService:
         if workflow.execution_history:
             for idx, record in enumerate(workflow.execution_history):
                 status_class = record.status if record.status in ["success", "failed", "running", "pending"] else "pending"
-                status_text = status_labels.get(record.status, record.status)
+                status_text = escape(str(status_labels.get(record.status, record.status)))
                 duration_text = f"{record.execution_time:.2f}s" if record.execution_time else "-"
+                record_name = escape(str(record.node_name or record.task or f'{"步骤" if is_zh else "Step"} {idx + 1}'))
+                node_type = escape(str(record.node_type or 'N/A'))
+                tool_name = escape(str(record.tool_name or 'N/A'))
+                error_html = f'<div style="color:#d93025;margin-top:5px;font-size:12px;">{"错误" if is_zh else "Error"}: {escape(str(record.error))}</div>' if record.error else ''
                 
                 timeline_html += f"""
                 <div class="timeline-item {status_class}">
                     <div class="timeline-step">{idx + 1}</div>
                     <div class="timeline-content">
-                        <div class="timeline-title">{record.node_name or record.task or f'步骤 {idx + 1}'}</div>
+                        <div class="timeline-title">{record_name}</div>
                         <div class="timeline-meta">
-                            <span>类型: {record.node_type or 'N/A'}</span>
-                            <span style="margin-left: 15px;">状态: {status_text}</span>
-                            <span style="margin-left: 15px;">工具: {record.tool_name or 'N/A'}</span>
+                            <span>{'类型' if is_zh else 'Type'}: {node_type}</span>
+                            <span style="margin-left:15px;">{labels['status']}: {status_text}</span>
+                            <span style="margin-left:15px;">{'工具' if is_zh else 'Tool'}: {tool_name}</span>
                         </div>
-                        {f'<div class="timeline-duration">耗时: {duration_text}</div>' if record.execution_time else ''}
-                        {f'<div style="color: #ef4444; margin-top: 5px; font-size: 12px;">错误: {record.error}</div>' if record.error else ''}
+                        {f'<div class="timeline-duration">{labels["duration"]}: {duration_text}</div>' if record.execution_time else ''}
+                        {error_html}
                     </div>
                 </div>
                 """
@@ -949,15 +1053,15 @@ class ReportService:
         if workflow.task_plans:
             for plan in sorted(workflow.task_plans, key=lambda x: x.priority, reverse=True):
                 status_class = plan.status if plan.status in ["completed", "running", "pending", "failed"] else "pending"
-                status_text = status_labels.get(plan.status, plan.status)
+                status_text = escape(str(status_labels.get(plan.status, plan.status)))
                 
                 plans_html += f"""
                 <div class="plan-item">
-                    <div class="plan-priority">{plan.priority}</div>
+                    <div class="plan-priority">{escape(str(plan.priority))}</div>
                     <div class="plan-info">
-                        <div class="plan-name">{plan.plan_name}</div>
-                        <div style="font-size: 12px; color: #64748b;">
-                            类型: {plan.plan_type} | ID: {plan.plan_id}
+                        <div class="plan-name">{escape(str(plan.plan_name))}</div>
+                        <div class="timeline-meta">
+                            {'类型' if is_zh else 'Type'}: {escape(str(plan.plan_type))} | ID: {escape(str(plan.plan_id))}
                         </div>
                     </div>
                     <span class="plan-status status-{status_class}">{status_text}</span>
@@ -968,36 +1072,38 @@ class ReportService:
         
         progress_html = ""
         if workflow.progress > 0:
+            progress = max(0, min(100, workflow.progress))
             progress_html = f"""
             <div style="margin-top: 15px;">
                 <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-                    <span style="font-size: 12px; color: #64748b;">执行进度</span>
-                    <span style="font-size: 12px; font-weight: 500;">{workflow.progress}%</span>
+                    <span class="text-tip">{'执行进度' if is_zh else 'Progress'}</span>
+                    <span style="font-size:12px;font-weight:500;">{progress}%</span>
                 </div>
                 <div class="progress-bar">
-                    <div class="progress-fill" style="width: {workflow.progress}%;"></div>
+                    <div class="progress-fill" style="width:{progress}%;"></div>
                 </div>
             </div>
             """
-        
+
+        icon = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>'
         return f"""
-        <div class="workflow-section">
-            <h2>⚡ {labels['workflow_title']}</h2>
+        <section class="card workflow-section">
+            <h2 class="module-title">{icon}{labels['workflow_title']}</h2>
             
             {overview_html}
             
             {progress_html}
             
             <div class="execution-timeline">
-                <h3 style="margin-bottom: 15px; color: #333;">📋 {labels['execution_history']}</h3>
+                <h3>{labels['execution_history']}</h3>
                 {timeline_html}
             </div>
             
             <div class="task-plans">
-                <h3 style="margin-bottom: 15px; color: #333;">📝 {labels['task_plans']}</h3>
+                <h3>{labels['task_plans']}</h3>
                 {plans_html}
             </div>
-        </div>
+        </section>
         """
     
     def _render_markdown_template(self, report_data: ReportData, language: Language) -> str:

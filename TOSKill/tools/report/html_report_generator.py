@@ -11,6 +11,14 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
+from backend.services.report_service import (
+    AIAnalysisData,
+    ReportData,
+    ReportService,
+    ReportSummary,
+    RiskAssessment,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,6 +47,10 @@ class HTMLReportGenerator:
         "low": {"score": 3.0, "color": "#3498db", "label": "低危"},
         "info": {"score": 1.0, "color": "#95a5a6", "label": "信息"}
     }
+
+    def __init__(self):
+        # HTML 渲染方法不依赖 ReportService 的目录和 AI 客户端初始化。
+        self._template_renderer = ReportService.__new__(ReportService)
     
     def generate_report(
         self,
@@ -64,37 +76,114 @@ class HTMLReportGenerator:
         """
         severity_count = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         for v in vulnerabilities:
-            sev = v.get("severity", "info").lower()
+            sev = str(v.get("severity") or "info").lower()
             if sev in severity_count:
                 severity_count[sev] += 1
-        
+
         if ai_analysis:
             risk = ai_analysis.get("risk_assessment", {})
             risk_score = risk.get("risk_score", 50)
-            risk_level = risk.get("overall_risk", "medium")
+            risk_level = str(risk.get("overall_risk", "medium")).lower()
         else:
             risk_score = self._calculate_risk_score(severity_count)
             risk_level = self._determine_risk_level(severity_count)
-        
+
+        if risk_level not in self.SEVERITY_CONFIG:
+            risk_level = self._determine_risk_level(severity_count)
+        try:
+            risk_score = max(0.0, min(100.0, float(risk_score)))
+        except (TypeError, ValueError):
+            risk_score = float(self._calculate_risk_score(severity_count))
+
         risk_color = self.SEVERITY_CONFIG.get(risk_level, self.SEVERITY_CONFIG["medium"])["color"]
-        
-        vulns_html = self._render_vulnerabilities_html(vulnerabilities)
-        ai_html = self._render_ai_analysis_html(ai_analysis) if ai_analysis else ""
-        tools_html = self._render_tool_results_html(tool_results)
-        
-        return self._build_html(
+
+        normalized_vulnerabilities = []
+        for vuln in vulnerabilities:
+            normalized = dict(vuln)
+            normalized["severity"] = str(vuln.get("severity") or "info").lower()
+            normalized["title"] = vuln.get("title") or vuln.get("name") or vuln.get("vuln_type") or "Unknown"
+            normalized["remediation"] = (
+                vuln.get("remediation")
+                or vuln.get("solution")
+                or "请参考安全最佳实践进行修复"
+            )
+            normalized_vulnerabilities.append(normalized)
+
+        converted_ai = self._convert_ai_analysis(ai_analysis) if ai_analysis else None
+        summary = ReportSummary(
+            total_vulnerabilities=len(normalized_vulnerabilities),
+            critical_count=severity_count["critical"],
+            high_count=severity_count["high"],
+            medium_count=severity_count["medium"],
+            low_count=severity_count["low"],
+            info_count=severity_count["info"],
+            vulnerability_rate=(
+                sum(severity_count[level] for level in ("critical", "high", "medium", "low"))
+                / len(normalized_vulnerabilities) * 100
+                if normalized_vulnerabilities else 0.0
+            ),
+        )
+        report_data = ReportData(
+            task_id=session_id,
+            task_name=f"{target} 安全扫描任务",
             target=target,
             scan_time=scan_time,
-            session_id=session_id,
-            severity_count=severity_count,
-            risk_score=risk_score,
-            risk_level=risk_level,
-            risk_color=risk_color,
-            vulns_html=vulns_html,
-            ai_html=ai_html,
-            tools_html=tools_html,
-            vuln_count=len(vulnerabilities),
-            ai_analysis=ai_analysis
+            generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            summary=summary,
+            risk_assessment=RiskAssessment(
+                score=risk_score,
+                level=risk_level,
+                label=self.SEVERITY_CONFIG[risk_level]["label"],
+                color=risk_color,
+            ),
+            vulnerabilities=normalized_vulnerabilities,
+            ai_analysis=converted_ai,
+            tool_results=tool_results or {},
+        )
+
+        return self._template_renderer.generate_html_report(report_data)
+
+    @staticmethod
+    def _convert_ai_analysis(ai_analysis: Dict[str, Any]) -> AIAnalysisData:
+        """将 TOSKill AI 报告结构映射为统一报告模板数据。"""
+        vulnerability_analysis = ai_analysis.get("vulnerability_analysis", []) or []
+        attack_chain = ai_analysis.get("attack_chain_analysis", {}) or {}
+        recommendations = ai_analysis.get("remediation_recommendations", []) or []
+        hardening = ai_analysis.get("security_hardening", {}) or {}
+
+        causes = []
+        for item in vulnerability_analysis[:5]:
+            name = item.get("vuln_name", "Unknown")
+            technical = item.get("technical_analysis") or item.get("business_impact")
+            if technical:
+                causes.append(f"{name}：{technical}")
+
+        risks = list(attack_chain.get("attack_paths", []) or [])[:3]
+        if attack_chain.get("description"):
+            risks.insert(0, attack_chain["description"])
+        if attack_chain.get("lateral_movement_risk"):
+            risks.append(f"横向移动风险：{attack_chain['lateral_movement_risk']}")
+
+        priorities = []
+        for item in recommendations[:5]:
+            priorities.append({
+                "vulnerability": item.get("vulnerability", "Unknown"),
+                "priority": item.get("priority", 0),
+                "reason": item.get("recommendation", ""),
+            })
+
+        hardening_items = []
+        for key in ("short_term", "mid_term", "long_term"):
+            hardening_items.extend(hardening.get(key, []) or [])
+
+        risk = ai_analysis.get("risk_assessment", {}) or {}
+        return AIAnalysisData(
+            summary=ai_analysis.get("executive_summary", ""),
+            risk_level=str(risk.get("overall_risk", "info")).lower(),
+            causes=causes,
+            risks=risks[:5],
+            priorities=priorities,
+            recommendations=hardening_items[:10],
         )
     
     def _calculate_risk_score(self, severity_count: Dict[str, int]) -> int:

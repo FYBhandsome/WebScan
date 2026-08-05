@@ -1,6 +1,7 @@
 class StorageService {
   constructor() {
     this.prefix = 'toskill_'
+    this.maxConsoleBlocks = 200
   }
   
   _getKey(key) {
@@ -102,6 +103,43 @@ class StorageService {
   
   clearSessionData(sessionId) {
     this.remove(`session_${sessionId}`)
+  }
+
+  getActiveSessionId() {
+    return this.get('active_session_id', '') || ''
+  }
+
+  setActiveSessionId(sessionId) {
+    if (sessionId) this.set('active_session_id', sessionId)
+  }
+
+  getConsoleState(sessionId) {
+    if (!sessionId) return null
+    return this.get(`console_${sessionId}`, null)
+  }
+
+  saveConsoleState(sessionId, state) {
+    if (!sessionId || !state) return false
+    const workspaceBlocks = Array.isArray(state.workspaceBlocks)
+      ? state.workspaceBlocks.slice(-this.maxConsoleBlocks)
+      : []
+    return this.set(`console_${sessionId}`, {
+      ...state,
+      workspaceBlocks,
+      savedAt: new Date().toISOString()
+    })
+  }
+
+  getScanState() {
+    return this.get('scan_workspace', null)
+  }
+
+  saveScanState(state) {
+    if (!state) return false
+    return this.set('scan_workspace', {
+      ...state,
+      savedAt: new Date().toISOString()
+    })
   }
   
   getRecentTargets() {

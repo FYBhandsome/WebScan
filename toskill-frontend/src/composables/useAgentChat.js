@@ -1,7 +1,8 @@
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { ws } from '../services/websocket.js'
 import { showToast, globalState, scanProgressState, scanStatusState } from '../store.js'
 import { API } from '../services/api.js'
+import { storageService } from '../services/storageService.js'
 import { addLog } from './useLogBus.js'
 
 export function useAgentChat() {
@@ -27,11 +28,13 @@ export function useAgentChat() {
   const pendingGenerateScript = ref(false)
   const pendingScanConfirm = ref(null)
   const showScanConfirm = ref(false)
+  const activeSessionId = ref(storageService.getActiveSessionId())
   
   const scriptUploadProgress = ref({ stage: '', progress: 0, message: '' })
   const scriptGenerationProgress = ref({ stage: '', progress: 0, message: '' })
   const scriptHistory = ref([])
   const MAX_SCRIPT_SIZE = 500 * 1024
+  let persistTimer = null
   
   const validateScriptFile = (file) => {
     if (!file) return { valid: false, error: '未选择文件' }
@@ -99,14 +102,100 @@ export function useAgentChat() {
     localStorage.setItem('toskill_script_history', JSON.stringify(scriptHistory.value))
   }
 
+  const restoreConsoleState = (sessionId) => {
+    if (!sessionId) return
+    const saved = storageService.getConsoleState(sessionId)
+    if (!saved) return
+
+    workspaceBlocks.value = Array.isArray(saved.workspaceBlocks)
+      ? saved.workspaceBlocks.filter(block => {
+          const emptyRun = block.type === 'agent_run' && !block.target && !block.total && !block.completed
+          const transientStatus = block.type === 'agent_text' && /^会话状态: (空闲|扫描中|已完成)$/.test(block.content || '')
+          return !emptyRun && !transientStatus
+        })
+      : []
+    scanActive.value = Boolean(saved.scanActive)
+    waitingForChoice.value = Boolean(saved.waitingForChoice)
+    pendingScanConfirm.value = saved.pendingScanConfirm || null
+    showScanConfirm.value = Boolean(saved.showScanConfirm && saved.pendingScanConfirm)
+    if (saved.currentTarget) globalState.currentTarget = saved.currentTarget
+    if (saved.scanProgress) scanProgress.value = saved.scanProgress
+    if (saved.scanStatus) scanStatus.value = saved.scanStatus
+  }
+
+  const persistConsoleState = () => {
+    const sessionId = activeSessionId.value || ws.getSessionId()
+    if (!sessionId) return
+    storageService.saveConsoleState(sessionId, {
+      workspaceBlocks: workspaceBlocks.value,
+      scanActive: scanActive.value,
+      waitingForChoice: waitingForChoice.value,
+      pendingScanConfirm: pendingScanConfirm.value,
+      showScanConfirm: showScanConfirm.value,
+      currentTarget: globalState.currentTarget,
+      scanProgress: scanProgress.value,
+      scanStatus: scanStatus.value
+    })
+  }
+
+  const scheduleConsolePersist = () => {
+    if (persistTimer) clearTimeout(persistTimer)
+    persistTimer = setTimeout(persistConsoleState, 200)
+  }
+
+  restoreConsoleState(activeSessionId.value)
+
   // === UI 辅助方法 ===
   const addBlock = (type, data = {}) => {
+    const createdAt = new Date().toISOString()
     workspaceBlocks.value.push({
       id: Date.now() + Math.random(),
-      timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
+      timestamp: new Date(createdAt).toLocaleTimeString('en-US', { hour12: false }),
+      createdAt,
       type,
       ...data
     })
+  }
+
+  const syncChatHistory = (history = []) => {
+    const messages = history.filter(item => ['user', 'assistant'].includes(item?.role) && item?.content)
+    if (!messages.length) return
+
+    const signature = (role, content) => `${role}\u0000${String(content).trim()}`
+    const existingCounts = new Map()
+    for (const block of workspaceBlocks.value) {
+      const role = block.type === 'user_command' ? 'user' : block.type === 'agent_text' ? 'assistant' : null
+      if (!role || !block.content) continue
+      const key = signature(role, block.content)
+      existingCounts.set(key, (existingCounts.get(key) || 0) + 1)
+    }
+
+    const seenCounts = new Map()
+    const missingBlocks = []
+    messages.forEach((message, index) => {
+      const key = signature(message.role, message.content)
+      const occurrence = (seenCounts.get(key) || 0) + 1
+      seenCounts.set(key, occurrence)
+      if (occurrence <= (existingCounts.get(key) || 0)) return
+
+      const createdAt = message.timestamp || new Date().toISOString()
+      missingBlocks.push({
+        id: `history:${createdAt}:${index}`,
+        timestamp: new Date(createdAt).toLocaleTimeString('en-US', { hour12: false }),
+        createdAt,
+        type: message.role === 'user' ? 'user_command' : 'agent_text',
+        content: message.content,
+        restored: true
+      })
+    })
+
+    if (!missingBlocks.length) return
+    const hasLocalChat = workspaceBlocks.value.some(block =>
+      block.type === 'user_command' || block.type === 'agent_text'
+    )
+    workspaceBlocks.value = hasLocalChat
+      ? [...workspaceBlocks.value, ...missingBlocks]
+      : [...missingBlocks, ...workspaceBlocks.value]
   }
 
   const findInteraction = (interactionId) => {
@@ -803,6 +892,16 @@ export function useAgentChat() {
 
     switch (data.type) {
       case 'connected':
+        if (data.payload?.session_id) {
+          const connectedSessionId = data.payload.session_id
+          if (activeSessionId.value !== connectedSessionId) {
+            activeSessionId.value = connectedSessionId
+            restoreConsoleState(connectedSessionId)
+          }
+          storageService.setActiveSessionId(connectedSessionId)
+          ws.sendGetHistory()
+          ws.sendGetStatus()
+        }
         addLog({
           level: 'INFO',
           message: `已连接到 AI Agent 引擎 (${data.payload?.session_id || 'Active'})`,
@@ -1213,6 +1312,7 @@ export function useAgentChat() {
         const snapshot = data.payload || {}
         const completedTasks = snapshot.completed_tasks || []
         const failedTasks = snapshot.failed_tasks || []
+        if (!snapshot.target && !completedTasks.length && !failedTasks.length && !snapshot.total_tasks) break
         updateRun(snapshot, {
           target: snapshot.target || '',
           mode: snapshot.mode || '',
@@ -1384,21 +1484,29 @@ export function useAgentChat() {
       case 'subscribed':
         addInfoBlock(`已订阅会话 | Session: ${data.payload?.session_id || '-'}`)
         if (data.payload?.state) {
-          scanStatus.value = data.payload.state.is_complete ? 'completed' : 'scanning'
+          const subscribedState = data.payload.state
+          const hasScan = Boolean(subscribedState.target || subscribedState.completed_tasks?.length)
+          scanStatus.value = !hasScan ? 'idle' : subscribedState.is_complete ? 'completed' : 'scanning'
+          scanActive.value = scanStatus.value === 'scanning'
         }
         break
 
       case 'history':
+        syncChatHistory(data.payload?.history || [])
         addLog({ level: 'INFO', message: `已同步 ${(data.payload?.history || []).length} 条历史记录` })
         break
 
       case 'status':
         const state = data.payload?.state
         if (state) {
-          scanStatus.value = state.is_complete ? 'completed' : 'scanning'
+          const hasScan = Boolean(state.target || state.planned_tasks?.length || state.completed_tasks?.length)
+          scanStatus.value = !hasScan ? 'idle' : state.is_complete ? 'completed' : 'scanning'
+          scanActive.value = scanStatus.value === 'scanning'
           scanProgress.value.current = (state.completed_tasks || []).length
           scanProgress.value.total = state.total_tasks || state.planned_tasks?.length || state.completed_tasks?.length || 0
-          addInfoBlock(`会话状态: ${scanStatus.value === 'completed' ? '已完成' : '扫描中'}`)
+          if (scanStatus.value !== 'idle') {
+            addInfoBlock(`会话状态: ${scanStatus.value === 'completed' ? '已完成' : '扫描中'}`)
+          }
         } else {
           addInfoBlock('会话状态: 空闲')
         }
@@ -1487,6 +1595,21 @@ export function useAgentChat() {
     }
   }
 
+  watch(
+    [
+      workspaceBlocks,
+      scanActive,
+      waitingForChoice,
+      pendingScanConfirm,
+      showScanConfirm,
+      scanProgress,
+      scanStatus,
+      () => globalState.currentTarget
+    ],
+    scheduleConsolePersist,
+    { deep: true }
+  )
+
   onMounted(() => {
     ws.on('*', handleWSMessage)
     
@@ -1506,11 +1629,14 @@ export function useAgentChat() {
     ws.onReconnect((sessionId) => {
       addLog({ level: 'INFO', message: `WebSocket 已恢复：${sessionId}`, timestamp: new Date().toISOString() })
       ws.sendGetHistory()
+      ws.sendGetStatus()
     })
   })
 
   onUnmounted(() => {
     ws.off('*', handleWSMessage)
+    if (persistTimer) clearTimeout(persistTimer)
+    persistConsoleState()
   })
 
   return {

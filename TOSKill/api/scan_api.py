@@ -207,7 +207,13 @@ async def api_info_collection(request: ScanRequest):
     tool_results = {r["tool"]: r.get("result", r.get("error")) for r in results if r["success"]}
     completed_tasks = [r["tool"] for r in results if r["success"]]
     
-    state = update_state(state, tool_results=tool_results, completed_tasks=completed_tasks, errors=errors)
+    state = update_state(
+        state,
+        tool_results=tool_results,
+        completed_tasks=completed_tasks,
+        errors=errors,
+        is_complete=True,
+    )
     memory_store.save_session(session_id, state)
     
     return APIResponse(
@@ -246,7 +252,14 @@ async def api_vuln_scan(request: ScanRequest):
                     "severity": r["result"].get("severity", "medium")
                 })
     
-    state = update_state(state, tool_results=tool_results, completed_tasks=completed_tasks, errors=errors, vulnerabilities=vulnerabilities)
+    state = update_state(
+        state,
+        tool_results=tool_results,
+        completed_tasks=completed_tasks,
+        errors=errors,
+        vulnerabilities=vulnerabilities,
+        is_complete=True,
+    )
     memory_store.save_session(session_id, state)
     
     return APIResponse(

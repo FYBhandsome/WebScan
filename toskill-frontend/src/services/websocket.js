@@ -1,5 +1,6 @@
 // src/services/websocket.js
 import { API } from './api.js';
+import { storageService } from './storageService.js';
 
 const isDev = import.meta.env.DEV;
 const LOG = {
@@ -25,7 +26,7 @@ class WSManager {
         this.onDisconnectCallback = null;
         this.onErrorCallback = null;
         this.onReconnectCallback = null;
-        this.sessionId = null;
+        this.sessionId = storageService.getActiveSessionId() || null;
         this._firstConnect = true;
         this._shouldReconnect = true;
     }
@@ -91,16 +92,16 @@ class WSManager {
                 this.ws.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
-                        this.handleMessage(data);
-
                         if (data.type === 'connected' && data.payload?.session_id) {
                             this.sessionId = data.payload.session_id;
+                            storageService.setActiveSessionId(this.sessionId);
                             if (this.connectResolve) {
                                 this.connectResolve(this.sessionId);
                                 this.connectResolve = null;
                                 this.connectReject = null;
                             }
                         }
+                        this.handleMessage(data);
                     } catch (error) {
                         LOG.error('Failed to parse WebSocket message:', error);
                     }
@@ -165,7 +166,6 @@ class WSManager {
             this.ws.close();
             this.ws = null;
             this.connected = false;
-            this.sessionId = null;
         }
     }
 
