@@ -32,7 +32,11 @@ ENABLE_KB_INTEGRATION: bool = True
 
 
 def estimate_cvss(vulnerability: Dict[str, Any]) -> Dict[str, Any]:
-    """估算CVSS评分
+    """估算CVSS评分 (FALLBACK - 仅在置信度计算模块不可用时使用)
+
+    注意: 该函数使用硬编码的 CVSS_SCORE_MAP 进行评分估算。
+    主流程现已优先使用 confidence_calculator 模块计算置信度，
+    本函数仅作为 CVSS 评分的回退方案保留。
 
     Args:
         vulnerability: 漏洞数据
@@ -282,17 +286,35 @@ def vuln_analyzer(
         if enable_sort:
             processed_vulns = sort_by_severity(processed_vulns)
             logger.info("已按严重度排序")
-        
+
+        # FALLBACK: estimate_cvss 使用硬编码 CVSS_SCORE_MAP，仅作为 CVSS 评分的回退方案
+        # 主流程的置信度计算已由 confidence_calculator 模块接管 (见下方)
         for vuln in processed_vulns:
             if "cvss_score" not in vuln:
                 cvss_info = estimate_cvss(vuln)
                 vuln["cvss_score"] = cvss_info["cvss_score"]
                 vuln["cvss_vector"] = cvss_info["cvss_vector"]
                 vuln["cvss_severity"] = cvss_info["cvss_severity"]
-        
+
+        # Task 6.1: 使用 confidence_calculator 模块计算综合置信度
+        confidence = None
+        try:
+            from TOSKill.tools.report.confidence_calculator import calculate_confidence
+            state = {
+                "completed_tasks": [],
+                "planned_tasks": [],
+                "execution_history": [],
+                "decision_history": [],
+                "mode": "full_scan"
+            }
+            confidence = calculate_confidence(state, processed_vulns, None)
+        except Exception as e:
+            logger.debug(f"置信度计算失败，回退到 estimate_cvss: {e}")
+            confidence = None
+
         stats = analyze_vulnerability_stats(processed_vulns)
         logger.info(f"统计结果: {stats['summary']}")
-        
+
         return {
             "success": True,
             "data": {
@@ -307,7 +329,8 @@ def vuln_analyzer(
                 "dedup_enabled": enable_dedup,
                 "sort_enabled": enable_sort,
                 "kb_enabled": enable_kb,
-                "severity_distribution": stats["by_severity"]
+                "severity_distribution": stats["by_severity"],
+                "confidence": confidence
             }
         }
     except Exception as e:
@@ -364,21 +387,39 @@ async def vuln_analyzer_async(
         if enable_sort:
             processed_vulns = sort_by_severity(processed_vulns)
             logger.info("已按严重度排序")
-        
+
+        # FALLBACK: estimate_cvss 使用硬编码 CVSS_SCORE_MAP，仅作为 CVSS 评分的回退方案
+        # 主流程的置信度计算已由 confidence_calculator 模块接管 (见下方)
         for vuln in processed_vulns:
             if "cvss_score" not in vuln:
                 cvss_info = estimate_cvss(vuln)
                 vuln["cvss_score"] = cvss_info["cvss_score"]
                 vuln["cvss_vector"] = cvss_info["cvss_vector"]
                 vuln["cvss_severity"] = cvss_info["cvss_severity"]
-        
+
         if enable_kb and ENABLE_KB_INTEGRATION:
             processed_vulns = await enrich_with_kb(processed_vulns)
             logger.info("已完成知识库信息丰富")
-        
+
+        # Task 6.1: 使用 confidence_calculator 模块计算综合置信度
+        confidence = None
+        try:
+            from TOSKill.tools.report.confidence_calculator import calculate_confidence
+            state = {
+                "completed_tasks": [],
+                "planned_tasks": [],
+                "execution_history": [],
+                "decision_history": [],
+                "mode": "full_scan"
+            }
+            confidence = calculate_confidence(state, processed_vulns, None)
+        except Exception as e:
+            logger.debug(f"置信度计算失败，回退到 estimate_cvss: {e}")
+            confidence = None
+
         stats = analyze_vulnerability_stats(processed_vulns)
         logger.info(f"统计结果: {stats['summary']}")
-        
+
         return {
             "success": True,
             "data": {
@@ -393,7 +434,8 @@ async def vuln_analyzer_async(
                 "dedup_enabled": enable_dedup,
                 "sort_enabled": enable_sort,
                 "kb_enabled": enable_kb,
-                "severity_distribution": stats["by_severity"]
+                "severity_distribution": stats["by_severity"],
+                "confidence": confidence
             }
         }
     except Exception as e:

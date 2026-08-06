@@ -21,6 +21,7 @@ from TOSKill.AI.tools import (
     INFO_COLLECTION_TOOLS, VULN_SCAN_TOOLS, clean_target
 )
 from TOSKill.analysis.result_analyzer import get_analyzer
+from TOSKill.AI.task_status_store import get_task_status_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="", tags=["TOSKill API"])
@@ -323,6 +324,28 @@ async def api_full_scan(request: ScanRequest):
     )
 
 
+# ==================== 任务状态轮询接口 ====================
+
+@router.get("/scan/tasks/{task_id}/status")
+async def get_task_status(task_id: str):
+    """获取扫描任务状态（轮询端点，不依赖 WebSocket）
+
+    返回 {task_id, status, progress, stage, waiting_input?, waiting_script?, result?, error?}。
+    任务不存在时返回 200 + status:"unknown"，便于前端轮询判断。
+    """
+    store = get_task_status_store()
+    data = store.get_status(task_id)
+    if data is None:
+        return {
+            "task_id": task_id,
+            "status": "unknown",
+            "progress": 0,
+            "stage": "",
+            "message": "任务不存在或尚未创建",
+        }
+    return data
+
+
 # ==================== 工具执行接口 ====================
 
 @router.get("/tools", response_model=APIResponse)
@@ -365,8 +388,7 @@ async def api_execute_tool(request: ToolExecuteRequest):
                     "tool_title": analysis.tool_title,
                     "target": analysis.target,
                     "success": analysis.success,
-                    "analysis": analysis.analysis,
-                    "summary": analysis.summary,
+                    **analyzer.to_websocket_payload(analysis),
                     "formatted": analyzer.format_display(analysis)
                 }
             except Exception as e:
@@ -397,8 +419,7 @@ async def api_execute_tool(request: ToolExecuteRequest):
                     "tool_title": analysis.tool_title,
                     "target": analysis.target,
                     "success": False,
-                    "analysis": analysis.analysis,
-                    "summary": analysis.summary,
+                    **analyzer.to_websocket_payload(analysis),
                     "formatted": analyzer.format_display(analysis)
                 }
             except Exception as ae:

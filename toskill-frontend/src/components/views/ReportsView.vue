@@ -24,6 +24,13 @@
           <h4>{{ report.name }}</h4>
           <p>大小: {{ formatSize(report.size) }} | 修改时间: {{ formatDate(report.modified_at) }}</p>
         </div>
+        <div v-if="confidenceTotal(report) !== null" class="report-confidence" title="报告置信度">
+          <svg viewBox="0 0 42 42" class="confidence-ring">
+            <circle cx="21" cy="21" r="17" class="confidence-ring-track" />
+            <circle cx="21" cy="21" r="17" class="confidence-ring-value" :style="confidenceRingStyle(report)" />
+          </svg>
+          <span>{{ confidenceTotal(report) }}%</span>
+        </div>
         <div class="report-actions">
           <button class="action-btn" @click="openViewer(report.name)">查看</button>
           <button class="action-btn" @click="download(report.name)">下载</button>
@@ -162,6 +169,19 @@ const deleteReport = async (filename) => {
     showToast('删除失败: ' + error.message, 'error')
   }
 }
+
+const confidenceTotal = (report) => {
+  const confidence = report?.confidence
+  const value = confidence && typeof confidence === 'object'
+    ? confidence.total
+    : typeof report?.confidence_score === 'number' ? report.confidence_score : null
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  return Math.max(0, Math.min(100, Math.round(value)))
+}
+
+const confidenceRingStyle = (report) => ({
+  strokeDasharray: `${confidenceTotal(report) * 1.068} 106.8`
+})
 
 const formatSize = (bytes) => {
   if (bytes == null) return '--'
@@ -439,6 +459,37 @@ const formatDate = (dateStr) => {
 .report-card {
   background: #FAFAFA !important;
   border: 1px solid #EDEDED;
+}
+
+.report-confidence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.confidence-ring {
+  width: 34px;
+  height: 34px;
+  transform: rotate(-90deg);
+}
+
+.confidence-ring-track,
+.confidence-ring-value {
+  fill: none;
+  stroke-width: 4;
+}
+
+.confidence-ring-track {
+  stroke: rgba(22, 160, 133, 0.16);
+}
+
+.confidence-ring-value {
+  stroke: #16a085;
+  stroke-linecap: round;
 }
 
 .html-report-frame {

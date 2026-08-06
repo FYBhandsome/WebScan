@@ -137,7 +137,8 @@ def _init_llm_client() -> tuple:
 def _build_analysis_prompt(
     vulnerabilities: List[Dict[str, Any]],
     tool_results: Dict[str, Any],
-    target_context: Dict[str, Any]
+    target_context: Dict[str, Any],
+    knowledge_context: str = ""
 ) -> str:
     """构建详细分析提示词"""
     vulns_summary = [
@@ -153,11 +154,16 @@ def _build_analysis_prompt(
     ]
     
     tool_summary = {}
+    from TOSKill.analysis.result_analyzer import sanitize_result_for_display
     for tool_name, result in list(tool_results.items())[:10]:
         if isinstance(result, dict):
+            safe_result = sanitize_result_for_display(result)
             tool_summary[tool_name] = {
-                "success": result.get("success", False),
-                "key_findings": result.get("key_findings", [])[:3] if result.get("key_findings") else []
+                "success": result.get("success"),
+                "vulnerable": result.get("vulnerable"),
+                "error": result.get("error"),
+                "key_findings": result.get("key_findings", [])[:5] if result.get("key_findings") else [],
+                "result_excerpt": json.dumps(safe_result, ensure_ascii=False, default=str)[:700],
             }
     
     prompt = f"""作为专业安全分析师，请对以下扫描结果进行全面深入分析。
@@ -172,6 +178,9 @@ def _build_analysis_prompt(
 
 ## 工具执行结果摘要
 {json.dumps(tool_summary, ensure_ascii=False, indent=2)}
+
+## 知识库参考
+{knowledge_context[:2000] if knowledge_context else "无可用知识库参考"}
 
 请输出以下JSON格式的详细分析报告（只输出JSON，不要其他内容）:
 {{
@@ -219,40 +228,60 @@ def _build_analysis_prompt(
 4. remediation_plan要给出具体可操作的修复方案
 5. security_recommendations要给出中长期安全建议
 6. 所有分析要基于实际扫描数据，避免泛泛而谈
+7. 明确区分已证实、疑似、未发现和无法判断；工具成功不代表目标安全
+8. 知识库只用于解释、定级和修复建议，不能作为本次扫描发现漏洞的证据
+9. 禁止补造扫描结果中不存在的端口、URL、CVE、漏洞或业务影响
 """
     return prompt
 
 
-def _parse_llm_response(response_text: str) -> AIAnalysisResult:
+def _parse_llm_response(response_text: str, vulnerabilities: List[Dict[str, Any]] = None) -> AIAnalysisResult:
     """解析详细LLM响应"""
     result = AIAnalysisResult()
     result.summary = "分析结果解析失败"
     result.risk_level = "info"
-    
+
     try:
         logger.debug(f"开始解析LLM响应，响应长度: {len(response_text)}")
-        
+
         json_match = re.search(r'\{[\s\S]*\}', response_text)
         if json_match:
             json_str = json_match.group()
             logger.debug(f"提取到JSON字符串: {json_str[:100]}...")
-            
+
             data = json.loads(json_str)
             logger.info(f"解析JSON数据成功，字段: {list(data.keys())}")
-            
+
             if "summary" in data:
                 result.summary = data["summary"]
                 logger.info(f"风险总结: {result.summary[:100]}...")
-            
+
             if "risk_level" in data:
                 result.risk_level = data["risk_level"]
                 logger.info(f"风险等级: {result.risk_level}")
-            
+
             vuln_analysis = data.get("vulnerability_analysis", [])
+            # Task 6.2: 使用 confidence_calculator 计算置信度，替代硬编码 0.8
+            # 旧的硬编码 confidence=0.8 仅作为 fallback 保留
+            llm_confidence = 0.8  # fallback
+            try:
+                from TOSKill.tools.report.confidence_calculator import calculate_confidence
+                state = {
+                    "completed_tasks": [],
+                    "planned_tasks": [],
+                    "execution_history": [],
+                    "decision_history": [],
+                    "mode": "full_scan"
+                }
+                confidence_result = calculate_confidence(state, vulnerabilities or [], None)
+                llm_confidence = confidence_result.get("total", 80) / 100.0
+            except Exception as e:
+                logger.debug(f"置信度计算失败，使用 fallback 值 0.8: {e}")
+
             for va in vuln_analysis[:10]:
                 result.vulnerability_causes.append(VulnerabilityCause(
                     description=va.get("root_cause", ""),
-                    confidence=0.8,
+                    confidence=llm_confidence,
                     evidence=[
                         va.get("attack_vector", ""),
                         va.get("potential_impact", "")
@@ -317,7 +346,8 @@ def _analyze_with_llm(
     target_context: Dict[str, Any],
     llm_client,
     model_id: str,
-    api_base_url: str
+    api_base_url: str,
+    knowledge_context: str = ""
 ) -> AIAnalysisResult:
     """使用LLM进行分析"""
     result = AIAnalysisResult()
@@ -327,7 +357,9 @@ def _analyze_with_llm(
     logger.info(f"API Base URL: {api_base_url}")
     
     try:
-        prompt = _build_analysis_prompt(vulnerabilities, tool_results, target_context)
+        prompt = _build_analysis_prompt(
+            vulnerabilities, tool_results, target_context, knowledge_context
+        )
         logger.info(f"构建提示词完成，长度: {len(prompt)} 字符")
         logger.debug(f"提示词内容: {prompt[:500]}...")
         
@@ -345,7 +377,7 @@ def _analyze_with_llm(
         logger.info(f"LLM响应成功，响应长度: {len(analysis_text)} 字符")
         logger.info(f"LLM响应内容: {analysis_text[:200]}...")
         
-        result = _parse_llm_response(analysis_text)
+        result = _parse_llm_response(analysis_text, vulnerabilities)
         
         result.analysis_evidence.append("基于LLM的智能分析")
         logger.info("LLM分析完成")
@@ -362,49 +394,66 @@ def _analyze_with_llm(
 def _extract_causes_by_rules(vulnerabilities: List[Dict[str, Any]]) -> List[VulnerabilityCause]:
     """通过规则提取漏洞成因"""
     causes = []
-    
+
+    # Task 6.2: 使用 confidence_calculator 模块计算置信度，替代硬编码值 (0.7/0.8/0.5)
+    # 旧的硬编码 confidence 值仅作为 fallback 保留
+    calculated_confidence = None
+    try:
+        from TOSKill.tools.report.confidence_calculator import calculate_confidence
+        state = {
+            "completed_tasks": [],
+            "planned_tasks": [],
+            "execution_history": [],
+            "decision_history": [],
+            "mode": "full_scan"
+        }
+        confidence_result = calculate_confidence(state, vulnerabilities, None)
+        calculated_confidence = confidence_result.get("total", 0) / 100.0
+    except Exception as e:
+        logger.debug(f"置信度计算失败，将使用 fallback 硬编码值: {e}")
+
     for vuln in vulnerabilities:
         vuln_type = vuln.get("vuln_type", "").lower()
         severity = vuln.get("severity", "")
-        
+
         if "sqli" in vuln_type or "sql" in vuln_type:
             causes.append(VulnerabilityCause(
                 description="可能存在输入验证不足，导致SQL注入漏洞",
-                confidence=0.7,
+                confidence=calculated_confidence if calculated_confidence is not None else 0.7,  # fallback: 0.7
                 evidence=[f"发现{severity}级SQL注入漏洞"]
             ))
         elif "xss" in vuln_type:
             causes.append(VulnerabilityCause(
                 description="可能存在输出编码不足，导致XSS漏洞",
-                confidence=0.7,
+                confidence=calculated_confidence if calculated_confidence is not None else 0.7,  # fallback: 0.7
                 evidence=[f"发现{severity}级XSS漏洞"]
             ))
         elif "rce" in vuln_type or "command" in vuln_type:
             causes.append(VulnerabilityCause(
                 description="可能存在命令执行限制不足，导致远程代码执行漏洞",
-                confidence=0.8,
+                confidence=calculated_confidence if calculated_confidence is not None else 0.8,  # fallback: 0.8
                 evidence=[f"发现{severity}级命令执行漏洞"]
             ))
         elif "lfi" in vuln_type or "file" in vuln_type:
             causes.append(VulnerabilityCause(
                 description="可能存在文件路径限制不足，导致文件包含漏洞",
-                confidence=0.7,
+                confidence=calculated_confidence if calculated_confidence is not None else 0.7,  # fallback: 0.7
                 evidence=[f"发现{severity}级文件包含漏洞"]
             ))
         elif "ssrf" in vuln_type:
             causes.append(VulnerabilityCause(
                 description="可能存在URL白名单验证不足，导致SSRF漏洞",
-                confidence=0.7,
+                confidence=calculated_confidence if calculated_confidence is not None else 0.7,  # fallback: 0.7
                 evidence=[f"发现{severity}级SSRF漏洞"]
             ))
-    
+
     if not causes and vulnerabilities:
         causes.append(VulnerabilityCause(
             description="发现安全漏洞，建议进行人工复核",
-            confidence=0.5,
+            confidence=calculated_confidence if calculated_confidence is not None else 0.5,  # fallback: 0.5
             evidence=[f"共发现{len(vulnerabilities)}个漏洞"]
         ))
-    
+
     return causes
 
 
@@ -552,6 +601,21 @@ def ai_analyzer(
         logger.info(f"目标: {target_context.get('target', 'Unknown')}")
         logger.info(f"漏洞数量: {len(vulnerabilities)}")
         logger.info(f"工具结果数量: {len(tool_results) if tool_results else 0}")
+
+        knowledge_context = ""
+        knowledge_sources: List[str] = []
+        try:
+            from TOSKill.RAG.retriever import extract_knowledge_sources, retrieve_for_report
+            knowledge_context = retrieve_for_report(
+                target_context.get("target", "Unknown"), vulnerabilities
+            ) or ""
+            knowledge_sources = extract_knowledge_sources(knowledge_context)
+            logger.info(
+                "AI分析知识库检索完成: used=%s, sources=%s",
+                bool(knowledge_context), knowledge_sources,
+            )
+        except Exception as e:
+            logger.warning(f"AI分析知识库检索失败，继续无知识库分析: {e}")
         
         llm_client, model_id, api_base_url = _init_llm_client()
         
@@ -559,11 +623,16 @@ def ai_analyzer(
             logger.info("使用LLM进行智能分析...")
             result = _analyze_with_llm(
                 vulnerabilities, tool_results, target_context,
-                llm_client, model_id, api_base_url
+                llm_client, model_id, api_base_url, knowledge_context
             )
         else:
             logger.info("使用规则引擎进行分析...")
             result = _analyze_with_rules(vulnerabilities, tool_results, target_context)
+
+        if knowledge_sources:
+            result.analysis_evidence.append(
+                "知识库参考: " + "、".join(knowledge_sources)
+            )
         
         logger.info(f"AI分析完成，结果: {result.summary}")
         
@@ -576,7 +645,9 @@ def ai_analyzer(
                 "target": target_context.get("target", "Unknown"),
                 "risk_level": result.risk_level,
                 "vulnerability_count": len(vulnerabilities),
-                "analysis_method": "LLM" if llm_client else "Rules"
+                "analysis_method": "LLM" if llm_client else "Rules",
+                "knowledge_used": bool(knowledge_context),
+                "knowledge_sources": knowledge_sources,
             }
         }
     except Exception as e:

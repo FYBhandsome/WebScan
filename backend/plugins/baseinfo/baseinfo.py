@@ -38,6 +38,7 @@
 import logging
 import socket
 import json
+from urllib.parse import urlparse
 from typing import List, Dict, Any
 import requests
 from requests.exceptions import (
@@ -189,15 +190,22 @@ def getbaseinfo(url: str) -> Dict[str, Any]:
     }
     
     # 规范化URL（自动添加协议前缀）
-    from ..common.common import check_url
-    normalized_url = check_url(url)
-    if not normalized_url:
+    raw_url = str(url or "").strip()
+    if not raw_url:
         info["msg"] = "URL格式无效"
         logger.error(f"URL {url} 格式无效")
         return info
+    if not raw_url.startswith(("http://", "https://")):
+        raw_url = "http://" + raw_url
+    parsed = urlparse(raw_url)
+    if not parsed.netloc or parsed.scheme not in ("http", "https"):
+        info["msg"] = "URL格式无效"
+        logger.error(f"URL {url} 格式无效")
+        return info
+    normalized_url = raw_url
     
     # 提取域名
-    domain = get_domain(normalized_url)
+    domain = parsed.hostname or get_domain(normalized_url)
     if not domain:
         info["msg"] = "域名提取失败"
         logger.error(f"URL {url} 提取域名失败")

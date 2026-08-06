@@ -45,7 +45,18 @@ import json
 import logging
 from typing import Dict, List, Set, Union
 import requests
-import chardet
+try:
+    import chardet
+except ModuleNotFoundError:  # charset_normalizer is bundled with requests.
+    from charset_normalizer import from_bytes
+
+    class _CharsetDetector:
+        @staticmethod
+        def detect(data):
+            match = from_bytes(data).best()
+            return {"encoding": match.encoding if match else None}
+
+    chardet = _CharsetDetector()
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry

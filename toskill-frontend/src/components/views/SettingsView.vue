@@ -78,6 +78,52 @@
         </div>
       </div>
 
+      <div class="settings-card rag-card">
+        <div class="card-header">
+          <Database :size="20" class="card-icon" />
+          <span class="card-title">RAG 知识库</span>
+        </div>
+        <div class="card-body">
+          <div v-if="ragError" class="rag-error">{{ ragError }}</div>
+          <div class="rag-status-grid">
+            <div class="rag-status-item"><span>模式</span><strong>{{ ragConfig.mode || '—' }}</strong></div>
+            <div class="rag-status-item"><span>模型已加载</span><strong>{{ ragConfig.model_loaded ? '是' : '否' }}</strong></div>
+            <div class="rag-status-item"><span>索引就绪</span><strong>{{ ragConfig.index_ready ? '是' : '否' }}</strong></div>
+            <div class="rag-status-item"><span>索引状态</span><strong>{{ ragConfig.index_stale ? '已过期' : '最新' }}</strong></div>
+            <div v-if="ragConfig.last_error" class="rag-status-item rag-status-item--error"><span>最近错误</span><strong>{{ ragConfig.last_error }}</strong></div>
+          </div>
+          <div class="rag-actions">
+            <label class="field-label" for="rag-mode">运行模式</label>
+            <select id="rag-mode" class="settings-input rag-mode-select" :value="ragConfig.mode" :disabled="ragLoading || ragModeChanging" @change="changeRagMode">
+              <option v-for="mode in ragConfig.allowed_modes || ['mapping', 'vector']" :key="mode" :value="mode">{{ mode }}</option>
+            </select>
+            <button class="btn-test" :disabled="ragLoading || ragRebuilding" @click="rebuildIndex">
+              <Loader v-if="ragRebuilding" :size="14" class="spinning" />
+              <RefreshCw v-else :size="14" />
+              {{ ragRebuilding ? `重建中（${ragRebuildStatus.status || 'queued'}）` : '重建向量索引' }}
+            </button>
+          </div>
+          <div class="rag-upload">
+            <label class="btn-test upload-label">
+              <Upload :size="14" /> 上传 md/txt 文档
+              <input type="file" accept=".md,.txt,text/markdown,text/plain" hidden @change="uploadDocument" />
+            </label>
+            <span v-if="ragUploading" class="field-hint">上传中...</span>
+          </div>
+          <div class="rag-documents">
+            <div class="rag-documents-header"><strong>知识库文档</strong><button class="link-button" @click="loadRagData">刷新</button></div>
+            <div v-if="!ragDocuments.length" class="field-hint">暂无 md/txt 文档</div>
+            <button v-for="document in ragDocuments" :key="document.filename" class="rag-document" @click="viewDocument(document.filename)">
+              <FileText :size="15" /> <span>{{ document.filename }}</span><small>{{ document.size }} B</small>
+            </button>
+          </div>
+          <div v-if="selectedDocument" class="rag-document-viewer">
+            <div class="rag-documents-header"><strong>{{ selectedDocument.filename }}</strong><button class="link-button" @click="selectedDocument = null">关闭</button></div>
+            <pre>{{ selectedDocument.content }}</pre>
+          </div>
+        </div>
+      </div>
+
       <div class="settings-card">
         <div class="card-body card-body--action">
           <button class="btn-save" @click="save">
@@ -91,8 +137,8 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
-import { Server, Globe, Radio, Clock, Save, Wifi, Loader } from 'lucide-vue-next'
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { Database, FileText, Globe, Clock, Loader, Radio, RefreshCw, Save, Server, Upload, Wifi } from 'lucide-vue-next'
 import { API } from '../../services/api.js'
 import { ws } from '../../services/websocket.js'
 import { showToast } from '../../store.js'
@@ -123,6 +169,110 @@ if (saved) {
 
 const connState = ref('idle')
 const connMessage = ref('')
+const ragConfig = reactive({ allowed_modes: ['mapping', 'vector'] })
+const ragDocuments = ref([])
+const selectedDocument = ref(null)
+const ragError = ref('')
+const ragLoading = ref(false)
+const ragModeChanging = ref(false)
+const ragUploading = ref(false)
+const ragRebuilding = ref(false)
+const ragRebuildStatus = reactive({ status: '', progress: 0 })
+let ragPollTimer = null
+
+const loadRagData = async () => {
+  ragLoading.value = true
+  ragError.value = ''
+  try {
+    const [config, documents] = await Promise.all([API.getRagConfig(), API.getRagDocuments()])
+    Object.assign(ragConfig, config)
+    ragDocuments.value = documents
+  } catch (error) {
+    ragError.value = error.message || '无法加载 RAG 配置'
+  } finally {
+    ragLoading.value = false
+  }
+}
+
+const changeRagMode = async (event) => {
+  const mode = event.target.value
+  ragModeChanging.value = true
+  ragError.value = ''
+  try {
+    Object.assign(ragConfig, await API.setRagMode(mode))
+    showToast(`RAG 模式已切换为 ${mode}`, 'success')
+  } catch (error) {
+    ragError.value = error.message || '切换 RAG 模式失败'
+    event.target.value = ragConfig.mode
+  } finally {
+    ragModeChanging.value = false
+  }
+}
+
+const viewDocument = async (filename) => {
+  ragError.value = ''
+  try {
+    selectedDocument.value = await API.getRagDocument(filename)
+  } catch (error) {
+    ragError.value = error.message || '无法读取文档'
+  }
+}
+
+const uploadDocument = async (event) => {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  ragUploading.value = true
+  ragError.value = ''
+  try {
+    await API.uploadRagDocument(file)
+    await loadRagData()
+    showToast('文档上传成功', 'success')
+  } catch (error) {
+    ragError.value = error.message || '文档上传失败'
+  } finally {
+    ragUploading.value = false
+  }
+}
+
+const stopRagPolling = () => {
+  if (ragPollTimer) {
+    clearTimeout(ragPollTimer)
+    ragPollTimer = null
+  }
+}
+
+const pollRagRebuild = async (operationId) => {
+  try {
+    const status = await API.getRagRebuildStatus(operationId)
+    Object.assign(ragRebuildStatus, status)
+    if (['queued', 'running'].includes(status.status)) {
+      ragPollTimer = setTimeout(() => pollRagRebuild(operationId), 1000)
+    } else {
+      ragRebuilding.value = false
+      await loadRagData()
+      if (status.status === 'completed') showToast('RAG 索引重建完成', 'success')
+      else ragError.value = status.error || 'RAG 索引重建失败'
+    }
+  } catch (error) {
+    ragRebuilding.value = false
+    ragError.value = error.message || '无法获取重建状态'
+  }
+}
+
+const rebuildIndex = async () => {
+  stopRagPolling()
+  ragRebuilding.value = true
+  ragError.value = ''
+  try {
+    const operation = await API.rebuildRagIndex()
+    Object.assign(ragRebuildStatus, operation)
+    pollRagRebuild(operation.operation_id)
+  } catch (error) {
+    ragRebuilding.value = false
+    ragError.value = error.message || '无法触发索引重建'
+  }
+}
 
 const save = () => {
   API.setBaseUrl(settings.apiUrl)
@@ -156,6 +306,9 @@ const testConn = async () => {
     connMessage.value = error.message || '无法连接到服务器'
   }
 }
+
+onMounted(loadRagData)
+onBeforeUnmount(stopRagPolling)
 </script>
 
 <style scoped>
@@ -431,6 +584,154 @@ const testConn = async () => {
 
 .btn-save:active {
   transform: scale(0.98);
+}
+
+.rag-card {
+  max-width: 100%;
+}
+
+.rag-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.rag-status-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px;
+  background: #FFFFFF;
+  border: 1px solid #E4E4E7;
+  font-size: 12px;
+  color: #71717A;
+}
+
+.rag-status-item strong {
+  color: #000000;
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.rag-status-item--error {
+  grid-column: 1 / -1;
+}
+
+.rag-status-item--error strong,
+.rag-error {
+  color: #DC2626;
+}
+
+.rag-error {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  background: #FEF2F2;
+  font-size: 13px;
+}
+
+.rag-actions,
+.rag-upload {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.rag-mode-select {
+  flex: 0 0 130px;
+}
+
+.upload-label {
+  cursor: pointer;
+}
+
+.rag-documents {
+  border-top: 1px solid #E4E4E7;
+  padding-top: 16px;
+}
+
+.rag-documents-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.link-button {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #059669;
+  cursor: pointer;
+  font: inherit;
+}
+
+.rag-document {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: none;
+  border-bottom: 1px solid #F4F4F5;
+  background: #FFFFFF;
+  color: #27272A;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.rag-document:hover {
+  background: #F4F4F5;
+}
+
+.rag-document span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rag-document small {
+  color: #A1A1AA;
+}
+
+.rag-document-viewer {
+  margin-top: 18px;
+  padding: 12px;
+  background: #FFFFFF;
+  border: 1px solid #E4E4E7;
+}
+
+.rag-document-viewer pre {
+  max-height: 280px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #52525B;
+}
+
+@media (max-width: 600px) {
+  .rag-status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rag-actions,
+  .rag-upload {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .rag-mode-select {
+    flex: 1;
+  }
 }
 
 @media (max-width: 768px) {

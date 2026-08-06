@@ -24,6 +24,12 @@ class ApiService {
       headers: { 'Content-Type': 'application/json' },
     };
     const config = { ...defaultOptions, ...options };
+    if (config.body instanceof FormData) {
+      const headers = { ...(config.headers || {}) };
+      delete headers['Content-Type'];
+      delete headers['content-type'];
+      config.headers = headers;
+    }
 
     try {
       const response = await fetch(url, config);
@@ -98,6 +104,22 @@ class ApiService {
     return this.post('/scan/full', { target });
   }
 
+  /**
+   * 获取扫描任务状态（轮询端点，不依赖 WebSocket）。
+   * 对应后端 GET /api/scan/tasks/{task_id}/status。
+   *
+   * @param {string} taskId - 任务 ID
+   * @returns {Promise<Object>} 任务状态对象，结构如：
+   *   { task_id, status, progress, stage,
+   *     waiting_input?: { fields: [{name,type,description,required,default}] },
+   *     waiting_script?: { capability, params: [{name,type,description}] },
+   *     result?, error? }
+   *   status 枚举: queued | planning | waiting_user_input | waiting_script_upload | running | completed | exception
+   */
+  async getTaskStatus(taskId) {
+    return this.get(`/scan/tasks/${taskId}/status`);
+  }
+
   // --- Tools ---
   // 修正：移除多余的 /toskill 前缀
   async getTools() {
@@ -131,6 +153,43 @@ class ApiService {
 
   async deleteReport(filename) {
     return this.delete(`/reports/${filename}`);
+  }
+
+  // --- RAG Knowledge Base ---
+  async getRagConfig() {
+    return this.get('/rag/config');
+  }
+
+  async setRagMode(mode) {
+    return this.request('/rag/config', {
+      method: 'PUT',
+      body: JSON.stringify({ mode }),
+    });
+  }
+
+  async getRagDocuments() {
+    return this.get('/rag/documents');
+  }
+
+  async getRagDocument(filename) {
+    return this.get(`/rag/documents/${encodeURIComponent(filename)}`);
+  }
+
+  async uploadRagDocument(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    return this.request('/rag/documents', {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+  async rebuildRagIndex() {
+    return this.post('/rag/index/rebuild');
+  }
+
+  async getRagRebuildStatus(operationId) {
+    return this.get(`/rag/index/rebuild/${encodeURIComponent(operationId)}`);
   }
 
   // --- System/Other ---

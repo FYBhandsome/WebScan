@@ -33,6 +33,10 @@ class TOSKillSettings(BaseSettings):
     LLM_TEMPERATURE: float = 0.1
     
     RAG_ENABLED: bool = True
+    RAG_MODE: str = "mapping"
+    RAG_ALLOWED_MODES: list = ["mapping", "vector"]
+    RAG_KNOWLEDGE_DIR: str = "knowledge"
+    RAG_UPLOAD_MAX_SIZE: int = 10 * 1024 * 1024
     SCAN_TIMEOUT: int = 300
     MAX_CONCURRENT_SCANS: int = 5
     

@@ -30,6 +30,7 @@
 
 import json
 import logging
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 from urllib.parse import urljoin, urlparse
@@ -168,6 +169,10 @@ def scan_single_url(url: str, key: str, result_store: ThreadSafeResult, session:
             allow_redirects=False,
             verify=VERIFY_SSL
         )
+        baseline = getattr(session, "_infoleak_baseline", "")
+        if baseline and response.status_code == getattr(session, "_infoleak_baseline_status", 0):
+            if SequenceMatcher(None, baseline[:10000], response.text[:10000]).ratio() >= 0.97:
+                return
         # 判断是否命中风险状态码
         if response.status_code in RISK_STATUS_CODES:
             logger.info(f"发现风险链接 | 类型:{key} | URL:{url} | 状态码:{response.status_code}")
@@ -203,6 +208,10 @@ def get_infoleak(target_url: Optional[str]) -> List[Tuple[str, str]]:
 
     # === 修复核心：自动修复URL协议头 ===
     target_url = fix_url(target_url)
+    parsed_target = urlparse(target_url)
+    if not parsed_target.netloc:
+        return []
+    target_url = f"{parsed_target.scheme}://{parsed_target.netloc}/"
 
     # 2. 初始化结果存储
     result_store = ThreadSafeResult()
@@ -231,6 +240,19 @@ def get_infoleak(target_url: Optional[str]) -> List[Tuple[str, str]]:
     # 5. 初始化requests会话(复用连接)
     session = requests.Session()
     session.headers.update({"Connection": "keep-alive"})
+    try:
+        baseline_response = session.get(
+            target_url,
+            headers=get_ua(),
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=False,
+            verify=VERIFY_SSL,
+        )
+        session._infoleak_baseline = baseline_response.text or ""
+        session._infoleak_baseline_status = baseline_response.status_code
+    except RequestException:
+        session._infoleak_baseline = ""
+        session._infoleak_baseline_status = 0
 
     # 6. 多线程扫描(使用ThreadPoolExecutor,更优雅)
     try:

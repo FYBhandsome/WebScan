@@ -116,6 +116,7 @@ async def health_check():
 
 
 from TOSKill.api import ai_chat_router, chat_router, report_router, scan_router, log_ws_router
+from TOSKill.api.rag_api import router as rag_router
 from TOSKill.api.scan_api import script_router
 app.include_router(scan_router, prefix="/api")
 app.include_router(ai_chat_router, prefix="/api")
@@ -123,6 +124,7 @@ app.include_router(report_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(script_router, prefix="/api")
 app.include_router(log_ws_router, prefix="/api")
+app.include_router(rag_router, prefix="/api")
 
 
 if __name__ == "__main__":

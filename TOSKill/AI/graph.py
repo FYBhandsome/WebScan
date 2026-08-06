@@ -27,14 +27,42 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from .state import ScanState, create_initial_state, append_chat, update_state
-from .tools import get_tool_by_name, get_tool_sequence, is_auth_expired, get_auth_remaining_time
+from .tools import get_tool_by_name, get_tool_sequence, is_auth_expired, get_auth_remaining_time, is_tool_exists
 from .llm_client import get_llm, is_llm_available
 from .log_collector import log_collector
+from .task_status_store import get_task_status_store, STATUS_QUEUED, STATUS_PLANNING, STATUS_WAITING_USER_INPUT, STATUS_WAITING_SCRIPT_UPLOAD, STATUS_RUNNING, STATUS_COMPLETED, STATUS_EXCEPTION
 from ..config import settings
-from ..RAG.retriever import get_scan_strategy
+from ..RAG.retriever import extract_knowledge_sources, get_scan_strategy
 from ..utils.log_writer import log_info, log_warn, log_error, log_success, log_debug
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_set_status(task_id: str, status: str, **kwargs) -> None:
+    """容错写入 TaskStatusStore，失败只 logger.warning，不影响主流程"""
+    if not task_id:
+        return
+    try:
+        get_task_status_store().set_status(task_id, status, **kwargs)
+    except Exception as e:
+        logger.warning(f"TaskStatusStore set_status 失败 (task_id={task_id}, status={status}): {e}")
+
+
+def _check_tool_existence(next_task: str) -> Optional[Dict]:
+    """检查工具是否存在，不存在则返回结构化脚本请求；存在返回 None。
+
+    纯函数，便于独立测试。
+    """
+    if not next_task or next_task == "end":
+        return None
+    if not is_tool_exists(next_task):
+        return {
+            "type": "waiting_script_upload",
+            "capability": f"工具 {next_task} 不存在，需要能执行该任务的脚本",
+            "required_params": [{"name": "target", "type": "string", "description": "扫描目标"}],
+        }
+    return None
+
 
 def _parse_chat_response(full_response: str):
     """从LLM完整响应中分离思考过程和最终回复"""
@@ -52,6 +80,25 @@ def _parse_chat_response(full_response: str):
     return thought, content
 
 AUTH_MAX_RETRY_COUNT = 3
+
+
+def _is_dvwa_target(state: ScanState) -> bool:
+    target = str(state.get("target", "") or "").lower()
+    context = state.get("target_context", {}) or {}
+    history = state.get("history_context", {}) or {}
+    return "/setup.php" in target or ":8080" in target or bool(
+        context.get("dvwa") or context.get("is_dvwa") or context.get("dvwa_base_url")
+        or history.get("dvwa") or history.get("is_dvwa") or history.get("dvwa_base_url")
+    )
+
+
+def _dvwa_base_url(state: ScanState) -> str:
+    params = state.get("user_directed_params", {}) or {}
+    extracted = state.get("extracted_params", {}) or {}
+    context = state.get("target_context", {}) or {}
+    history = state.get("history_context", {}) or {}
+    return params.get("dvwa_base_url") or extracted.get("dvwa_base_url") or context.get("dvwa_base_url") or history.get("dvwa_base_url", "")
+
 
 TOOL_MAPPING_MATRIX = {
     "fast": ["xss_scan", "sqli_scan"],
@@ -405,6 +452,9 @@ def with_node_retry(max_retries=3, base_delay=1.0):
             
             errors = state.get("errors", []).copy()
             errors.append(f"{node_func.__name__}: {str(last_exception)}")
+            # TaskStatusStore: 节点重试耗尽，写异常
+            _safe_set_status(state.get("task_id", ""), STATUS_EXCEPTION,
+                             stage=f"节点 {node_func.__name__} 异常", error=str(last_exception))
             return update_state(state, errors=errors, is_complete=True)
         
         return wrapper
@@ -1597,8 +1647,29 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
             logger.error(f"WebSocket推送失败: {e}")
     
     from .tools import ALL_TOOLS
-    
-    prompt = f"用户想执行工具: {tool_name}。请从可用工具中选择最匹配的工具。目标: {target}\n工具名: {tool_name}"
+
+    # =================== RAG 知识库检索（参数生成增强） ===================
+    # 约束：参数值仅来源于知识库/历史上下文/用户输入，禁止凭空捏造
+    rag_param_context = ""
+    try:
+        from ..RAG.retriever import get_scan_strategy, is_rag_ready
+        if is_rag_ready():
+            rag_param_context = state.get("rag_last_strategy", "") or ""
+            if not rag_param_context:
+                rag_param_context = get_scan_strategy(
+                    target=target,
+                    current_task=tool_name,
+                    completed_tasks=list(state.get("tool_results", {}).keys()),
+                    last_result=state.get("task_result", {}) or state.get("tool_result", {})
+                )
+            if rag_param_context:
+                logger.info(f"[{session_id}] 直调工具参数生成注入RAG上下文: 长度={len(rag_param_context)}")
+    except Exception as e:
+        logger.warning(f"[{session_id}] 直调工具RAG检索异常: {e}，使用默认参数生成")
+    # ========================================================
+
+    rag_hint = f"\n【专业知识参考（参数取值须基于知识库/历史结果/用户输入，不得臆造）】{rag_param_context[:800]}" if rag_param_context else ""
+    prompt = f"用户想执行工具: {tool_name}。请从可用工具中选择最匹配的工具。目标: {target}\n工具名: {tool_name}{rag_hint}"
     matched_name, llm_params = _match_tool_via_llm(prompt, ALL_TOOLS)
     tool = None
     
@@ -1721,7 +1792,12 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
                 except Exception as e:
                     logger.error(f"WebSocket推送认证通知失败: {e}")
         
-        formatted_result = format_tool_result(tool_name, target, result)
+        deterministic_result = format_tool_result(tool_name, target, result)
+        from ..analysis.result_analyzer import get_analyzer, sanitize_result_for_display
+        analyzer = get_analyzer()
+        analyzed_result = await asyncio.to_thread(analyzer.analyze, tool_name, target, result)
+        analysis_payload = analyzer.to_websocket_payload(analyzed_result)
+        formatted_result = f"{deterministic_result}\n\n{analysis_payload['analysis']}"
         
         if ws_callback:
             try:
@@ -1731,8 +1807,8 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
                         "tool": tool_name,
                         "target": target,
                         "formatted_result": formatted_result,
-                        "raw_result": result if isinstance(result, dict) else {"data": str(result)},
-                        "analysis": formatted_result,
+                        "raw_result": sanitize_result_for_display(result),
+                        **analysis_payload,
                         "vulnerable": isinstance(result, dict) and result.get("vulnerable", False),
                         "auth_obtained": bool(auth_info),
                         "timestamp": datetime.now().isoformat()
@@ -1781,16 +1857,23 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
 
 async def start_scan_node(state: ScanState) -> ScanState:
     """扫描启动节点 - 标记开始扫描"""
+    task_id = state.get("task_id", "")
     session_id = state.get("websocket_session_id") or state.get("task_id")
     ws_callback = memory_store.get_websocket_callback(session_id)
-    
+
+    # TaskStatusStore: 进入时写 queued
+    _safe_set_status(task_id, STATUS_QUEUED, stage="启动")
+
     logger.info(f"[{session_id}] 开始扫描流程")
-    log_info(f"扫描流程启动", category="workflow", node="start_scan", session_id=session_id, 
+    log_info(f"扫描流程启动", category="workflow", node="start_scan", session_id=session_id,
              details={"target": state.get("target", ""), "mode": "full_scan"})
-    
+
     mode = "full_scan"
     planned_tasks = get_tool_sequence(mode)
-    
+
+    # TaskStatusStore: 规划后写 planning
+    _safe_set_status(task_id, STATUS_PLANNING, stage="规划", progress=5)
+
     if ws_callback:
         try:
             await ws_callback({
@@ -1804,9 +1887,9 @@ async def start_scan_node(state: ScanState) -> ScanState:
             })
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
-    
-    return update_state(state, 
-        mode=mode, 
+
+    return update_state(state,
+        mode=mode,
         next_action="run_full_scan",
         planned_tasks=planned_tasks,
         last_activity_time=datetime.now().isoformat()
@@ -2022,6 +2105,8 @@ def build_react_prompt(state: dict, rag_strategy: str) -> str:
     mode = state.get("mode", "full_scan")
     done = list(state.get("tool_results", {}).keys())
     last_result = state.get("task_result", {})
+    if _is_dvwa_target(state):
+        mode = "dvwa_scan"
     tool_sequence = get_tool_sequence(mode)
     remaining = [t for t in tool_sequence if t not in done]
     
@@ -2103,20 +2188,25 @@ def parse_react_response(response_text: str) -> dict:
 @with_node_retry(max_retries=3)
 async def ai_decision(state: ScanState) -> ScanState:
     """原子1: AI智能决策（RAG增强版）"""
-    logger.info(f"[{state.get('task_id')}] AI决策节点开始执行（RAG增强版）")
-    
+    task_id = state.get("task_id", "")
     session_id = state.get("websocket_session_id") or state.get("task_id")
+    logger.info(f"[{task_id}] AI决策节点开始执行（RAG增强版）")
     log_info("AI决策节点开始执行", category="workflow", node="ai_decision", session_id=session_id,
              details={"target": state.get("target", ""), "mode": state.get("mode", "full_scan")})
-    
+
+    # TaskStatusStore: 决策开始写 running + progress
+    done_count = len(state.get("tool_results", {}).keys())
+    mode = state.get("mode", "full_scan")
+    tool_sequence = get_tool_sequence(mode)
+    progress_pct = round((done_count / len(tool_sequence)) * 100) if tool_sequence else 0
+    _safe_set_status(task_id, STATUS_RUNNING, stage="决策", progress=progress_pct)
+
     # 检查是否需要跳过剩余任务（高危漏洞确认后用户选择停止）
     if state.get("skip_remaining_tasks"):
         logger.info(f"[{session_id}] 跳过剩余任务，直接生成报告")
         return update_state(state, next_task="end", need_generate_script=False)
-    
+
     done = list(state.get("tool_results", {}).keys())
-    mode = state.get("mode", "full_scan")
-    tool_sequence = get_tool_sequence(mode)
     ws_callback = memory_store.get_websocket_callback(session_id)
     
     remaining_tasks = [t for t in tool_sequence if t not in done]
@@ -2135,8 +2225,7 @@ async def ai_decision(state: ScanState) -> ScanState:
             last_result=last_result
         )
         if rag_strategy:
-            source_matches = re.findall(r'来源: ([^\|]+)', rag_strategy)
-            rag_sources = source_matches[:3]
+            rag_sources = extract_knowledge_sources(rag_strategy)[:3]
             logger.info(f"RAG 策略检索成功: 来源={rag_sources}, 内容长度={len(rag_strategy)}")
         else:
             logger.warning(f"[{session_id}] RAG检索返回空结果，使用默认策略")
@@ -2177,28 +2266,34 @@ async def ai_decision(state: ScanState) -> ScanState:
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
     
-    # =================== 任务分配（用户指令优先 > ReACT > 默认序列） ===================
+    # =================== 任务分配（三级优先级：用户指令 > 知识库策略 > AI默认决策） ===================
     next_task_assigned = None
     is_react_selected = False
     is_user_directed = False
-    
+    priority_level = "none"
+
     user_directed_next_task = state.get("user_directed_next_task", "")
     user_directed_params = state.get("user_directed_params", {})
-    
+
+    # 优先级1：用户交互指令（最高优先级）
     if user_directed_next_task and user_directed_next_task in tool_sequence and user_directed_next_task not in done:
         next_task_assigned = user_directed_next_task
         is_user_directed = True
-        logger.info(f"👤 用户指令优先分配任务：{user_directed_next_task}")
+        priority_level = "user_directive"
+        logger.info(f"👤 [优先级1-用户指令] 分配任务：{user_directed_next_task}（用户交互指令 > 知识库 > AI默认）")
+    # 优先级2：知识库策略（通过ReACT决策，ReACT使用RAG检索结果）
     elif react_decision and react_decision.get("action"):
         react_action = react_decision["action"]
         if react_action in tool_sequence and react_action not in done:
             next_task_assigned = react_action
             is_react_selected = True
-            logger.info(f"✅ ReACT 决策分配任务：{react_action}")
-
+            priority_level = "kb_react"
+            logger.info(f"📚 [优先级2-知识库策略] ReACT决策分配任务：{react_action}（基于RAG检索+ReACT推理）")
+    # 优先级3：AI默认决策（默认序列回退）
     if next_task_assigned is None and len(done) < len(tool_sequence):
         remaining = [t for t in tool_sequence if t not in done]
-        logger.warning(f"ReACT 决策未选出任务，回退到默认序列。待处理任务: {remaining}")
+        priority_level = "ai_default"
+        logger.warning(f"🤖 [优先级3-AI默认] 回退到默认序列。待处理任务: {remaining}（用户指令和知识库策略均未选出任务）")
         next_task_assigned = remaining[0] if remaining else None
         is_react_selected = False
         
@@ -2209,6 +2304,63 @@ async def ai_decision(state: ScanState) -> ScanState:
 
     if next_task_assigned:
         t = next_task_assigned
+
+        # ===== 缺参检测分支：必要入参缺失时路由到 wait_user_input =====
+        missing_fields = detect_missing_required_params(state, t)
+        if missing_fields:
+            logger.info(f"[{session_id}] 任务 {t} 缺少必要入参: {[f['name'] for f in missing_fields]}，路由到 wait_user_input")
+            # TaskStatusStore: 等待用户输入
+            _safe_set_status(task_id, STATUS_WAITING_USER_INPUT, stage="等待用户输入",
+                             waiting_input={"fields": missing_fields})
+            return update_state(state,
+                next_task=t,
+                need_generate_script=False,
+                decision_history=state.get("decision_history", []).copy(),
+                rag_last_strategy=rag_strategy,
+                last_activity_time=datetime.now().isoformat(),
+                pending_input_request={"fields": missing_fields},
+                task_status="waiting_user_input",
+                user_directed_params=user_directed_params if is_user_directed else {},
+                user_directed_next_task=""
+            )
+        # ================================================================
+
+        # ===== Task 8: 工具存在性校验 + waiting_script_upload 中断 =====
+        script_check = _check_tool_existence(t)
+        if script_check:
+            logger.info(f"[{session_id}] 工具 {t} 不存在，触发 waiting_script_upload 中断")
+            script_req = {
+                **script_check,
+                "task_id": task_id,
+            }
+            # TaskStatusStore: 等待脚本上传
+            _safe_set_status(task_id, STATUS_WAITING_SCRIPT_UPLOAD, stage="等待脚本上传",
+                             waiting_script=script_req)
+            # WS 推送 script_req
+            if ws_callback:
+                try:
+                    await ws_callback(script_req)
+                except Exception as e:
+                    logger.error(f"WebSocket推送脚本请求失败: {e}")
+            # 更新 state，设置 pending_script_request 供路由判断
+            state = update_state(state,
+                pending_script_request=script_req,
+                task_status="waiting_script_upload",
+                next_task=t,
+                need_generate_script=False,
+                decision_history=state.get("decision_history", []).copy(),
+                rag_last_strategy=rag_strategy,
+                last_activity_time=datetime.now().isoformat(),
+            )
+            # LangGraph interrupt 暂停，等用户上传脚本后 resume_workflow 恢复
+            interrupt(script_req)
+            # interrupt 恢复后，清除 pending_script_request，回到 ai_decision 重跑
+            return update_state(state,
+                pending_script_request={},
+                task_status="running",
+                last_activity_time=datetime.now().isoformat(),
+            )
+        # ================================================================
 
         decision_history = state.get("decision_history", []).copy()
         decision_entry = {
@@ -2221,6 +2373,7 @@ async def ai_decision(state: ScanState) -> ScanState:
             "rag_used": len(rag_strategy) > 0,
             "user_directed": is_user_directed,
             "user_directed_params": user_directed_params if is_user_directed else {},
+            "priority_level": priority_level,
             "react_chain": {
                 "thought": react_decision.get("thought", "") if react_decision else "",
                 "action": react_decision.get("action", "") if react_decision else "",
@@ -2244,7 +2397,8 @@ async def ai_decision(state: ScanState) -> ScanState:
                         "react_selected": is_react_selected,
                         "react_thought": react_decision.get("thought", "")[:100] if react_decision else "",
                         "user_directed": is_user_directed,
-                        "user_directed_params": user_directed_params if is_user_directed else {}
+                        "user_directed_params": user_directed_params if is_user_directed else {},
+                        "priority_level": priority_level
                     }
                 })
             except Exception as e:
@@ -2259,6 +2413,10 @@ async def ai_decision(state: ScanState) -> ScanState:
             user_directed_params=user_directed_params if is_user_directed else {},
             user_directed_next_task=""
         )
+    # ================================================================
+
+    # TaskStatusStore: 所有任务已完成（走到这里说明 next_task_assigned 为 None）
+    _safe_set_status(task_id, STATUS_RUNNING, stage="决策完成", progress=100)
     # ================================================================
     
     logger.info("✅ 所有扫描任务已完成！")
@@ -2292,9 +2450,117 @@ async def ai_decision(state: ScanState) -> ScanState:
         rag_last_strategy=rag_strategy)
 
 
+def detect_missing_required_params(state: ScanState, next_task: str) -> Optional[List[Dict]]:
+    """检测 next_task 是否缺少必要入参，返回缺失字段列表；无缺失返回 None。
+
+    最小实现：仅对工具名包含 "dvwa" 的任务检查 dvwa_base_url。
+    其他工具暂不中断，保持向下兼容。
+    """
+    if not next_task:
+        return None
+
+    # DVWA 类扫描需要 dvwa_base_url
+    if "dvwa" in next_task.lower():
+        target = state.get("target", "")
+        user_directed_params = state.get("user_directed_params", {})
+        extracted_params = state.get("extracted_params", {})
+
+        # 从 state.target 或 user_directed_params / extracted_params 获取 base_url
+        dvwa_base_url = (
+            user_directed_params.get("dvwa_base_url")
+            or extracted_params.get("dvwa_base_url")
+            or ""
+        )
+        # 如果 target 本身就是 DVWA URL，也视为已有
+        if not dvwa_base_url and target and "dvwa" in target.lower():
+            dvwa_base_url = target
+
+    if next_task == "cookie_extract":
+        return None
+    if next_task == "dvwa_vuln_scanner":
+        dvwa_base_url = _dvwa_base_url(state)
+        if not dvwa_base_url:
+            return [{
+                "name": "dvwa_base_url",
+                "type": "string",
+                "description": "DVWA 靶场的 Base URL（如 http://127.0.0.1:8080）",
+                "required": True,
+                "default": "http://127.0.0.1:8080",
+            }]
+        return None
+
+    # 其他工具暂不需要中断
+    return None
+
+
+async def wait_user_input(state: ScanState) -> ScanState:
+    """扫描任务中断-用户输入交互节点
+
+    当 AI 检测到必要入参缺失时，输出结构化参数请求，
+    经 LangGraph interrupt() 暂停，前端渲染输入表单，
+    用户提交后回填参数并恢复调度。
+    """
+    session_id = state.get("websocket_session_id") or state.get("task_id")
+    task_id = state.get("task_id", "")
+    ws_callback = memory_store.get_websocket_callback(session_id)
+
+    pending = state.get("pending_input_request", {})
+    fields = pending.get("fields", [])
+
+    # 构造结构化请求
+    request_payload = {
+        "type": "waiting_for_user_input",
+        "task_id": task_id,
+        "fields": fields,
+    }
+
+    logger.info(f"[{session_id}] 缺参中断，请求用户输入: fields={[f.get('name') for f in fields]}")
+
+    # WebSocket 推送结构化请求
+    if ws_callback:
+        try:
+            await ws_callback(request_payload)
+        except Exception as e:
+            logger.error(f"WebSocket推送失败: {e}")
+
+    # 设置任务状态为等待用户输入
+    state = update_state(state, task_status="waiting_user_input")
+
+    # TaskStatusStore: 等待用户输入
+    _safe_set_status(task_id, STATUS_WAITING_USER_INPUT, stage="等待用户输入",
+                     waiting_input={"fields": fields})
+
+    # LangGraph interrupt 暂停，等待用户通过 resume_workflow 提交参数
+    user_input_data = interrupt(request_payload)
+    logger.info(f"[{session_id}] 用户提交参数: {user_input_data}")
+
+    # 将用户提交的参数合并进 state
+    user_directed_params = dict(state.get("user_directed_params", {}))
+    extracted_params = dict(state.get("extracted_params", {}))
+
+    if isinstance(user_input_data, dict):
+        # 用户提交格式: {"params": {field_name: value, ...}} 或直接 {field_name: value, ...}
+        submitted = user_input_data.get("params", user_input_data)
+        if isinstance(submitted, dict):
+            user_directed_params.update(submitted)
+            extracted_params.update(submitted)
+
+    # 清除 pending_input_request，恢复任务状态
+    # TaskStatusStore: 恢复为 running
+    _safe_set_status(task_id, STATUS_RUNNING, stage="用户输入已恢复", progress=None)
+    return update_state(
+        state,
+        user_directed_params=user_directed_params,
+        extracted_params=extracted_params,
+        pending_input_request={},
+        task_status="running",
+        last_activity_time=datetime.now().isoformat(),
+    )
+
+
 async def user_interact(state: ScanState) -> ScanState:
     """原子2: 用户交互 - 使用 interrupt 实现暂停等待
-    
+
     这是唯一的用户确认断点，包含工具参数展示供用户审查。
     用户确认后才进入 execute_task 执行，避免双重确认。
     """
@@ -2434,17 +2700,45 @@ async def execute_task(state: ScanState) -> ScanState:
             logger.error(f"WebSocket推送失败: {e}")
     
     from .tools import get_tools_by_mode
-    
+
     scan_mode = state.get("mode", "info_collection")
     tools_list = get_tools_by_mode(scan_mode)
-    
-    prompt = f"当前需要执行的安全任务: {task}。请从可用工具中选择最匹配的工具来执行此任务。任务名称: {task}\n目标: {target}"
+
+    # =================== RAG 知识库检索（参数生成增强） ===================
+    # 约束：参数值仅来源于知识库/历史上下文/用户输入，禁止凭空捏造
+    rag_param_context = ""
+    try:
+        from ..RAG.retriever import get_scan_strategy, is_rag_ready
+        if is_rag_ready():
+            # 优先复用 ai_decision 已检索的策略，避免重复检索；为空时补检一次
+            rag_param_context = state.get("rag_last_strategy", "") or ""
+            if not rag_param_context:
+                rag_param_context = get_scan_strategy(
+                    target=target,
+                    current_task=task,
+                    completed_tasks=list(state.get("tool_results", {}).keys()),
+                    last_result=state.get("task_result", {}) or state.get("tool_result", {})
+                )
+            if rag_param_context:
+                logger.info(f"[{session_id}] 参数生成注入RAG上下文: 长度={len(rag_param_context)}")
+    except Exception as e:
+        logger.warning(f"[{session_id}] 参数生成RAG检索异常: {e}，使用默认参数生成")
+    # ========================================================
+
+    rag_hint = f"\n【专业知识参考（参数取值须基于知识库/历史结果/用户输入，不得臆造）】{rag_param_context[:800]}" if rag_param_context else ""
+    prompt = f"当前需要执行的安全任务: {task}。请从可用工具中选择最匹配的工具来执行此任务。任务名称: {task}\n目标: {target}{rag_hint}"
     matched_name, llm_params = _match_tool_via_llm(prompt, tools_list)
     
-    user_directed_params = state.get("user_directed_params", {})
     if user_directed_params and isinstance(llm_params, dict):
         llm_params.update(user_directed_params)
         logger.info(f"👤 合并用户指令参数: {user_directed_params}")
+
+    if task == "dvwa_vuln_scanner":
+        cookies = state.get("auth_cookies") or state.get("session_cookies")
+        if not cookies and isinstance(state.get("auth_info"), dict):
+            cookies = state["auth_info"].get("cookies")
+        if cookies:
+            llm_params["__extend_params"] = {"cookie": cookies}
     
     tool = None
     if matched_name:
@@ -2549,9 +2843,15 @@ async def execute_task(state: ScanState) -> ScanState:
                 except Exception as e:
                     logger.error(f"WebSocket推送认证通知失败: {e}")
         
-        llm = get_llm()
-        analysis = safe_llm_invoke(llm, f"用1-2句话简要分析这个扫描结果的关键发现：{str(res)[:500]}").content
-        logger.info(f"🧾 分析：{analysis}")
+        from ..analysis.result_analyzer import get_analyzer, sanitize_result_for_display
+        analyzer = get_analyzer()
+        analyzed_result = await asyncio.to_thread(analyzer.analyze, task, target, res)
+        analysis_payload = analyzer.to_websocket_payload(analyzed_result)
+        analysis = analysis_payload["analysis"]
+        logger.info(
+            f"🧾 分析完成：风险={analyzed_result.risk_level}, "
+            f"知识库={analyzed_result.knowledge_used}"
+        )
         
         if ws_callback:
             try:
@@ -2560,8 +2860,9 @@ async def execute_task(state: ScanState) -> ScanState:
                     "payload": {
                         "tool": task,
                         "target": target,
-                        "raw_result": res if isinstance(res, dict) else {"data": str(res)},
-                        "analysis": analysis,
+                        "raw_result": sanitize_result_for_display(res),
+                        "formatted_result": analysis,
+                        **analysis_payload,
                         "vulnerable": isinstance(res, dict) and res.get("vulnerable", False),
                         "auth_obtained": bool(auth_info),
                         "timestamp": datetime.now().isoformat()
@@ -2580,8 +2881,23 @@ async def execute_task(state: ScanState) -> ScanState:
         completed_tasks.append(task)
         
         all_vulns = state.get("vulnerabilities", []).copy()
+        vuln_scan_results = state.get("vuln_scan_results", {}).copy()
         current_mode = state.get("mode", "")
-        if current_mode in ("vuln_scan", "full_scan") and isinstance(res, dict):
+        if task == "dvwa_vuln_scanner" and isinstance(res, dict):
+            vuln_scan_results[task] = res
+            findings = (res.get("data") or {}).get("findings", []) if isinstance(res.get("data"), dict) else []
+            for finding in findings:
+                if isinstance(finding, dict):
+                    all_vulns.append({
+                        "vuln_type": finding.get("vuln_type", ""),
+                        "title": finding.get("title", finding.get("vuln_type", "")),
+                        "url": finding.get("url", target),
+                        "payload": finding.get("payload", ""),
+                        "evidence": finding.get("evidence", ""),
+                        "severity": finding.get("severity", "unknown"),
+                        "source_tool": task,
+                    })
+        elif current_mode in ("vuln_scan", "full_scan") and isinstance(res, dict):
             vuln_data = res.get("data", {}).get("vulnerabilities", [])
             if vuln_data:
                 for v in vuln_data:
@@ -2607,6 +2923,7 @@ async def execute_task(state: ScanState) -> ScanState:
             tool_results=tool_results, 
             completed_tasks=completed_tasks,
             vulnerabilities=all_vulns,
+            vuln_scan_results=vuln_scan_results,
             task_history=task_history,
             stage_status=stage_status,
             task_result={"tool": task, "result": res},
@@ -2626,11 +2943,15 @@ async def execute_task(state: ScanState) -> ScanState:
         error_response = format_tool_error(task, e)
         
         ai_analysis = None
+        error_analysis_payload: Dict[str, Any] = {}
         try:
-            llm = get_llm()
-            analysis_prompt = f"A security scanning tool failed. Analyze the following error and provide diagnostic suggestions in Chinese. Error: {str(e)}"
-            analysis_result = safe_llm_invoke(llm, analysis_prompt, timeout=30)
-            ai_analysis = analysis_result.content if hasattr(analysis_result, 'content') else str(analysis_result)
+            from ..analysis.result_analyzer import get_analyzer
+            analyzer = get_analyzer()
+            analyzed_error = await asyncio.to_thread(
+                analyzer.analyze, task, target, None, str(e)
+            )
+            error_analysis_payload = analyzer.to_websocket_payload(analyzed_error)
+            ai_analysis = error_analysis_payload.get("analysis", str(e))
             logger.info(f"[{session_id}] AI错误分析完成")
         except Exception as llm_e:
             logger.warning(f"[{session_id}] LLM错误分析失败，回退到原始错误: {llm_e}")
@@ -2648,7 +2969,8 @@ async def execute_task(state: ScanState) -> ScanState:
                         "source": error_response.get("payload", {}).get("source"),
                         "suggestion": error_response.get("payload", {}).get("suggestion"),
                         "details": error_response.get("payload", {}).get("details", {}),
-                        "ai_analysis": ai_analysis
+                        "ai_analysis": ai_analysis,
+                        **error_analysis_payload,
                     }
                 })
             except Exception as we:
@@ -2821,53 +3143,181 @@ async def script_manager(state: ScanState) -> ScanState:
 async def vulnerability_check(state: ScanState) -> ScanState:
     """
     漏洞风险检查节点
-    
+
     检测到高危/严重漏洞时：
-    1. 暂停工作流（interrupt）
-    2. 通过 WebSocket 通知前端
-    3. 等待用户确认
-    4. 根据用户决策更新状态
+    1. 检索知识库获取等保标准/风险分级文档
+    2. 使用等级分类提示词引导LLM输出风险等级+置信度
+    3. 暂停工作流（interrupt）
+    4. 通过 WebSocket 通知前端
+    5. 等待用户确认
+    6. 根据用户决策更新状态
     """
     vulnerabilities = state.get("vulnerabilities", [])
     session_id = state.get("websocket_session_id") or state.get("task_id")
-    
+
     risk_summary = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for vuln in vulnerabilities:
         severity = (vuln.get("severity") or "info").lower()
         if severity in risk_summary:
             risk_summary[severity] += 1
-    
-    state = update_state(state, risk_summary=risk_summary)
-    
+
+    # === 风险等级评估：调用知识库+等级分类提示词 ===
+    risk_level = "info"
+    risk_confidence = 50
+    risk_reason = "基于扫描结果严重度统计的规则评估"
+    kb_rag_context = ""
+    kb_sources: List[str] = []
+
+    if vulnerabilities:
+        try:
+            from ..RAG.retriever import retrieve_for_risk_assessment
+            from ..RAG.retriever import get_kb_match_score
+
+            # 检索知识库获取等保标准/风险分级文档
+            severity_rank = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+            top_vuln = max(
+                vulnerabilities,
+                key=lambda v: severity_rank.get(str(v.get("severity", "info")).lower(), 0),
+            )
+            vuln_types = list(dict.fromkeys(
+                str(v.get("type") or v.get("vuln_type", "")).strip()
+                for v in vulnerabilities
+                if v.get("type") or v.get("vuln_type")
+            ))
+            vuln_type = " ".join(vuln_types[:5]) or (
+                top_vuln.get("type") or top_vuln.get("vuln_type", "")
+            )
+            vuln_severity = top_vuln.get("severity", "info")
+            kb_rag_context = retrieve_for_risk_assessment(vuln_type, vuln_severity)
+            kb_sources = extract_knowledge_sources(kb_rag_context)
+            kb_match = get_kb_match_score(f"{vuln_type} {vuln_severity} 风险等级 等保标准")
+
+            # 使用等级分类提示词引导LLM输出风险等级
+            llm = get_llm()
+            vuln_summary = json.dumps([
+                {"type": v.get("type") or v.get("vuln_type", ""), "severity": v.get("severity", ""),
+                 "url": str(v.get("url", ""))[:80]}
+                for v in vulnerabilities[:5]
+            ], ensure_ascii=False)
+
+            risk_prompt = f"""你是等保评估专家，请基于以下信息评估整体风险等级。
+
+## 知识库参考（等保标准/风险分级）
+{kb_rag_context[:1000] if kb_rag_context else "无"}
+
+## 漏洞概要
+{vuln_summary}
+
+## 风险统计
+- 严重: {risk_summary['critical']} | 高危: {risk_summary['high']} | 中危: {risk_summary['medium']} | 低危: {risk_summary['low']}
+
+请输出严格JSON格式（不要其他内容）：
+{{"risk_level": "critical/high/medium/low/info", "confidence": 0-100, "reason": "评级依据"}}
+
+confidence为0-100的整数，表示你对这个风险评级的确信度。"""
+
+            response = safe_llm_invoke(llm, risk_prompt, timeout=15)
+            resp_text = response.content if hasattr(response, 'content') else str(response)
+            json_match = re.search(r'\{[\s\S]*\}', resp_text)
+            if json_match:
+                risk_result = json.loads(json_match.group())
+                risk_level = risk_result.get("risk_level", "info")
+                if risk_level not in severity_rank:
+                    risk_level = "info"
+                risk_confidence = int(risk_result.get("confidence", 50))
+                risk_confidence = max(0, min(100, risk_confidence))
+                risk_reason = str(risk_result.get("reason", "")).strip() or risk_reason
+
+                observed_level = next(
+                    (level for level in ("critical", "high", "medium", "low", "info")
+                     if risk_summary[level] > 0),
+                    "info",
+                )
+                if severity_rank[risk_level] < severity_rank[observed_level]:
+                    risk_reason = (
+                        f"{risk_reason}；模型评级低于扫描器已确认的最高严重度，"
+                        f"因此按 {observed_level} 作为风险下限"
+                    )
+                    risk_level = observed_level
+                # 融合知识库匹配度（get_kb_match_score），体现"知识库匹配"维度
+                # LLM 评级置信度 50% + 知识库匹配度 50%
+                if kb_match > 0:
+                    risk_confidence = int(risk_confidence * 0.5 + kb_match * 100 * 0.5)
+                    risk_confidence = max(0, min(100, risk_confidence))
+                    logger.info(f"[{session_id}] 风险等级评估: {risk_level}, 置信度: {risk_confidence}%（已融合KB匹配度 kb_match={kb_match:.3f}）")
+                else:
+                    logger.info(f"[{session_id}] 风险等级评估: {risk_level}, 置信度: {risk_confidence}%")
+        except Exception as e:
+            logger.warning(f"[{session_id}] 知识库风险评估失败（使用规则回退）: {e}")
+            # 规则回退
+            if risk_summary["critical"] > 0:
+                risk_level = "critical"
+                risk_confidence = 70
+                risk_reason = "扫描结果包含严重漏洞，采用规则回退评级"
+            elif risk_summary["high"] > 0:
+                risk_level = "high"
+                risk_confidence = 65
+                risk_reason = "扫描结果包含高危漏洞，采用规则回退评级"
+            elif risk_summary["medium"] > 0:
+                risk_level = "medium"
+                risk_confidence = 60
+                risk_reason = "扫描结果包含中危漏洞，采用规则回退评级"
+
+    state = update_state(state, risk_summary=risk_summary, risk_level=risk_level,
+                         risk_confidence=risk_confidence)
+
+    # 推送风险等级评估结果（含置信度）
+    ws_callback = memory_store.get_websocket_callback(session_id)
+    if ws_callback:
+        try:
+            await ws_callback({
+                "type": "risk_assessment",
+                "payload": {
+                    "risk_level": risk_level,
+                    "confidence": risk_confidence,
+                    "risk_summary": risk_summary,
+                    "kb_used": bool(kb_rag_context),
+                    "kb_sources": kb_sources,
+                    "reason": risk_reason,
+                    "message": f"风险等级: {risk_level}, 置信度: {risk_confidence}%"
+                }
+            })
+        except Exception as e:
+            logger.error(f"WebSocket推送风险评估失败: {e}")
+
     if risk_summary["critical"] > 0 or risk_summary["high"] > 0:
         highest_risk = "critical" if risk_summary["critical"] > 0 else "high"
-        
+
         interrupt_data = {
             "type": "high_risk_vulnerability_detected",
             "highest_risk_level": highest_risk,
             "risk_summary": risk_summary,
+            "risk_level": risk_level,
+            "risk_confidence": risk_confidence,
+            "risk_reason": risk_reason,
+            "kb_used": bool(kb_rag_context),
+            "kb_sources": kb_sources,
             "vulnerabilities": [
-                v for v in vulnerabilities 
+                v for v in vulnerabilities
                 if (v.get("severity") or "").lower() in ("critical", "high")
             ],
-            "message": f"检测到 {risk_summary['critical']} 个严重漏洞, {risk_summary['high']} 个高危漏洞",
+            "message": f"检测到 {risk_summary['critical']} 个严重漏洞, {risk_summary['high']} 个高危漏洞（风险等级: {risk_level}, 置信度: {risk_confidence}%）",
             "options": [
                 {"key": "continue", "label": "继续扫描", "description": "继续执行剩余扫描任务"},
                 {"key": "stop", "label": "停止并报告", "description": "立即停止扫描并生成报告"},
                 {"key": "poc_verify", "label": "POC验证", "description": "对已发现漏洞进行POC验证"}
             ]
         }
-        
-        ws_callback = memory_store.get_websocket_callback(session_id)
+
         if ws_callback:
             await ws_callback(interrupt_data)
-        
+
         user_decision = interrupt(interrupt_data)
-        
+
         decision = user_decision.get("choice", "continue") if isinstance(user_decision, dict) else "continue"
-        
+
         logger.info(f"[{session_id}] 高危漏洞确认 - 用户决策: {decision}")
-        
+
         if decision == "stop":
             state = update_state(state, skip_remaining_tasks=True, confirmed=True)
             return update_state(state, next_task="end", need_generate_script=False)
@@ -2875,7 +3325,7 @@ async def vulnerability_check(state: ScanState) -> ScanState:
             state = update_state(state, next_task="poc_verification", confirmed=True)
         else:
             state = update_state(state, confirmed=True)
-    
+
     return state
 
 
@@ -2898,6 +3348,9 @@ async def report_generation(state: ScanState) -> ScanState:
                 "type": "report_error",
                 "payload": {"error": "无扫描结果"}
             })
+        # TaskStatusStore: 无扫描结果完成
+        _safe_set_status(state.get("task_id", ""), STATUS_COMPLETED, progress=100, stage="完成",
+                         result="无扫描结果")
         return update_state(state, is_complete=True, report="无扫描结果")
     
     scan_summary = {
@@ -2973,6 +3426,9 @@ async def report_generation(state: ScanState) -> ScanState:
         
         html_download_url = html_report_info.get("download_url", "")
         logger.info(f"HTML报告已保存: {html_download_url}")
+        risk_assessment = ai_analysis.get("risk_assessment", {}) if isinstance(ai_analysis, dict) else {}
+        knowledge_metadata = ai_analysis.get("knowledge", {}) if isinstance(ai_analysis, dict) else {}
+        confidence = ai_analysis.get("confidence") if isinstance(ai_analysis, dict) else None
         
         if ws_callback:
             try:
@@ -2981,16 +3437,29 @@ async def report_generation(state: ScanState) -> ScanState:
                     "payload": {
                         "report_url": report_info.get("download_url", ""),
                         "report_id": report_info.get("report_id", ""),
-                        "report_preview": report[:500] if report else "",
+                        "report_preview": report[:1200] if report else "",
                         "html_report_url": html_download_url,
-                        "html_report_id": html_report_info.get("report_id", "")
+                        "html_report_id": html_report_info.get("report_id", ""),
+                        "scan_summary": scan_summary,
+                        "risk_assessment": risk_assessment,
+                        "confidence": confidence,
+                        "knowledge": knowledge_metadata,
+                        "ai_analysis": ai_analysis,
                     }
                 })
             except Exception as e:
                 logger.error(f"WebSocket推送失败: {e}")
         
         log_collector.add_log(session_id, "report_generation", "info", "报告生成完成")
-        
+
+        # TaskStatusStore: 扫描完成
+        result_payload = {"report_url": report_info.get("download_url", ""),
+                          "report_id": report_info.get("report_id", "")}
+        if confidence is not None:
+            result_payload["confidence"] = confidence
+        _safe_set_status(state.get("task_id", ""), STATUS_COMPLETED, progress=100, stage="完成",
+                         result=result_payload)
+
         return update_state(
             state, 
             is_complete=True, 
@@ -2998,7 +3467,12 @@ async def report_generation(state: ScanState) -> ScanState:
             scan_summary=scan_summary,
             report_url=report_info.get("download_url", ""),
             report_id=report_info.get("report_id", ""),
-            html_report_url=html_download_url
+            html_report_url=html_download_url,
+            report_analysis={
+                "risk_assessment": risk_assessment,
+                "confidence": confidence,
+                "knowledge": knowledge_metadata,
+            },
         )
     except Exception as e:
         logger.error(f"保存报告失败: {e}")
@@ -3011,6 +3485,8 @@ async def report_generation(state: ScanState) -> ScanState:
                 })
             except Exception as we:
                 logger.error(f"WebSocket推送失败: {we}")
+        # TaskStatusStore: 报告生成失败
+        _safe_set_status(state.get("task_id", ""), STATUS_EXCEPTION, stage="报告生成异常", error=str(e))
         return update_state(state, is_complete=True, report="报告生成失败", scan_summary=scan_summary)
 
 
@@ -3190,6 +3666,18 @@ async def rejection_handler(state: ScanState) -> ScanState:
         )
 
 
+def ai_decision_router(state: ScanState) -> str:
+    """ai_decision 后的路由：缺参 → wait_user_input，待脚本上传 → ai_decision 重跑，否则 → user_interact"""
+    pending_input_request = state.get("pending_input_request", {})
+    if pending_input_request and pending_input_request.get("fields"):
+        return "wait_user_input"
+    # Task 8: pending_script_request 有值时路由回 ai_decision（脚本注册后重跑）
+    pending_script_request = state.get("pending_script_request", {})
+    if pending_script_request:
+        return "ai_decision"
+    return "user_interact"
+
+
 def router(state: ScanState) -> str:
     """路由决策"""
     next_task = state.get("next_task", "")
@@ -3262,8 +3750,9 @@ class IntentRecognitionGraph:
 def _build_scan_graph(checkpointer: MemorySaver = None) -> StateGraph:
     """构建扫描子图（信息收集和漏洞扫描共用同一拓扑）"""
     workflow = StateGraph(ScanState)
-    
+
     workflow.add_node("ai_decision", ai_decision)
+    workflow.add_node("wait_user_input", wait_user_input)
     workflow.add_node("user_interact", user_interact)
     workflow.add_node("execute_task", execute_task)
     workflow.add_node("vulnerability_check", vulnerability_check)
@@ -3273,9 +3762,10 @@ def _build_scan_graph(checkpointer: MemorySaver = None) -> StateGraph:
     workflow.add_node("script_upload_process", script_upload_process)
     workflow.add_node("script_generate_process", script_generate_process)
     workflow.add_node("report_generation", report_generation)
-    
+
     workflow.set_entry_point("ai_decision")
-    workflow.add_edge("ai_decision", "user_interact")
+    workflow.add_conditional_edges("ai_decision", ai_decision_router)
+    workflow.add_edge("wait_user_input", "ai_decision")
     workflow.add_conditional_edges("user_interact", router)
     workflow.add_conditional_edges("execute_task", execute_task_router)
     workflow.add_edge("vulnerability_check", "ai_decision")
@@ -3285,7 +3775,7 @@ def _build_scan_graph(checkpointer: MemorySaver = None) -> StateGraph:
     workflow.add_edge("script_upload_process", "ai_decision")
     workflow.add_edge("script_generate_process", "ai_decision")
     workflow.add_edge("report_generation", END)
-    
+
     if checkpointer is None:
         checkpointer = create_checkpointer()
     return workflow.compile(checkpointer=checkpointer)
@@ -3393,6 +3883,9 @@ class AgentOrchestrator:
                                 })
                             except Exception:
                                 pass
+                        # TaskStatusStore: 工作流超时
+                        _safe_set_status(session_id, STATUS_EXCEPTION, stage="工作流超时",
+                                         error=f"工作流超时({elapsed}s > 1800s)，自动终止")
                         return update_state(
                             checkpoint.values or {},
                             is_complete=True,
@@ -3497,8 +3990,13 @@ class AgentOrchestrator:
                 logger.error(f"WebSocket推送失败: {e}")
         
         try:
-            result = tool.invoke(target)
-            formatted = format_tool_result(tool_name, target, result)
+            result = await asyncio.to_thread(tool.invoke, target)
+            deterministic = format_tool_result(tool_name, target, result)
+            from ..analysis.result_analyzer import get_analyzer, sanitize_result_for_display
+            analyzer = get_analyzer()
+            analyzed_result = await asyncio.to_thread(analyzer.analyze, tool_name, target, result)
+            analysis_payload = analyzer.to_websocket_payload(analyzed_result)
+            formatted = f"{deterministic}\n\n{analysis_payload['analysis']}"
             
             if websocket_callback:
                 try:
@@ -3507,7 +4005,10 @@ class AgentOrchestrator:
                         "payload": {
                             "tool": tool_name,
                             "target": target,
-                            "formatted_result": formatted
+                            "formatted_result": formatted,
+                            "raw_result": sanitize_result_for_display(result),
+                            **analysis_payload,
+                            "timestamp": datetime.now().isoformat(),
                         }
                     })
                 except Exception as e:
@@ -3517,7 +4018,8 @@ class AgentOrchestrator:
                 "tool": tool_name,
                 "target": target,
                 "result": result,
-                "formatted_result": formatted
+                "formatted_result": formatted,
+                "analysis": analysis_payload,
             }
         except Exception as e:
             if websocket_callback:
@@ -3532,13 +4034,17 @@ class AgentOrchestrator:
     
     async def run_full_scan(self, state: ScanState, websocket_callback: Callable = None) -> ScanState:
         """运行完整扫描流程"""
-        logger.info(f"[{state.get('task_id')}] 开始完整扫描流程")
-        
+        task_id = state.get("task_id", "")
+        logger.info(f"[{task_id}] 开始完整扫描流程")
+
         session_id = state.get("websocket_session_id") or state.get("task_id")
-        
+
+        # TaskStatusStore: 扫描流程启动
+        _safe_set_status(task_id, STATUS_QUEUED, stage="扫描启动")
+
         if websocket_callback:
             memory_store.set_websocket_callback(session_id, websocket_callback)
-        
+
         try:
             state = update_state(state, mode="info_collection")
             state = await self.info_graph.ainvoke(
@@ -3549,7 +4055,9 @@ class AgentOrchestrator:
             logger.error(f"信息收集阶段失败: {e}")
             state = update_state(state, error=f"信息收集失败: {str(e)}")
             memory_store.save_session(session_id, state)
-        
+            # TaskStatusStore: 信息收集阶段异常
+            _safe_set_status(task_id, STATUS_EXCEPTION, stage="信息收集异常", error=str(e))
+
         if not state.get("error"):
             try:
                 state = update_state(state, mode="vuln_scan")
@@ -3561,7 +4069,9 @@ class AgentOrchestrator:
                 logger.error(f"漏洞扫描阶段失败: {e}")
                 state = update_state(state, error=f"漏洞扫描失败: {str(e)}")
                 memory_store.save_session(session_id, state)
-        
+                # TaskStatusStore: 漏洞扫描阶段异常
+                _safe_set_status(task_id, STATUS_EXCEPTION, stage="漏洞扫描异常", error=str(e))
+
         if not state.get("error"):
             try:
                 state = await self.report_graph.ainvoke(
@@ -3571,7 +4081,9 @@ class AgentOrchestrator:
             except Exception as e:
                 logger.error(f"报告生成阶段失败: {e}")
                 state = update_state(state, error=f"报告生成失败: {str(e)}")
-        
+                # TaskStatusStore: 报告生成阶段异常
+                _safe_set_status(task_id, STATUS_EXCEPTION, stage="报告生成异常", error=str(e))
+
         memory_store.save_session(session_id, state)
         logger.info(f"[{state.get('task_id')}] 完整扫描流程完成")
         return state

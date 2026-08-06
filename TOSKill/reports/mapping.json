@@ -107,5 +107,349 @@
       }
     },
     "vulnerabilities": []
+  },
+  "f05d2007": {
+    "report_id": "scan_report_f05d2007_20260806_163512",
+    "session_id": "f05d2007",
+    "report_file": "scan_report_f05d2007_20260806_163512.html",
+    "target": "http://testasp.vulnweb.com",
+    "created_at": "2026-08-06 16:35:12",
+    "download_url": "/api/reports/download/scan_report_f05d2007_20260806_163512.html",
+    "format": "html",
+    "vulnerabilities_count": 0,
+    "tool_results": {
+      "port_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-06T16:34:06.192847"
+      },
+      "baseinfo_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-06T16:34:11.941649"
+      },
+      "subdomain_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-06T16:34:16.334886"
+      },
+      "dir_brute": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-06T16:34:24.614648"
+      },
+      "web_weight_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-06T16:34:29.314350"
+      },
+      "waf_detect_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-06T16:34:36.092126"
+      },
+      "ip_locate_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-06T16:34:40.355431"
+      },
+      "cdn_detect_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-06T16:34:45.180219"
+      },
+      "cms_detect_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-06T16:34:50.801525"
+      },
+      "infoleak_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-06T16:34:57.057332"
+      },
+      "webside_query_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-06T16:35:00.943981"
+      }
+    },
+    "vulnerabilities": []
+  },
+  "test-session-001": {
+    "report_id": "scan_report_test-session-001_20260807_002532",
+    "session_id": "test-session-001",
+    "report_file": "scan_report_test-session-001_20260807_002532.html",
+    "target": "https://example.com",
+    "created_at": "2026-08-07 00:25:32",
+    "download_url": "/api/reports/download/scan_report_test-session-001_20260807_002532.html",
+    "format": "html",
+    "vulnerabilities_count": 0,
+    "tool_results": {},
+    "vulnerabilities": []
   }
 }

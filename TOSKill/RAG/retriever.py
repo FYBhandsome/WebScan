@@ -2,6 +2,7 @@
 RAG 检索器 - 给 graph.py 调用的极简接口
 封装 rag_engine 的调用，供 LangGraph 工作流 AI 决策使用
 """
+import re
 from typing import List, Dict, Any
 from .rag_engine import get_rag_engine
 
@@ -61,11 +62,76 @@ def is_rag_ready() -> bool:
 def rebuild_knowledge_base() -> bool:
     """
     重建知识库索引
-    
+
     在添加/修改知识库文档后调用，重新生成向量索引。
-    
+
     Returns:
         bool: 重建是否成功
     """
     from .rag_engine import rebuild_knowledge_base as _rebuild
     return _rebuild()
+
+
+def retrieve_for_report(
+    target: str,
+    vulnerabilities: List[Dict[str, Any]]
+) -> str:
+    """报告生成前检索知识库——获取等保标准/修复指南/案例参考
+
+    Args:
+        target: 扫描目标URL
+        vulnerabilities: 漏洞列表
+
+    Returns:
+        str: 知识库检索结果
+    """
+    engine = get_rag_engine()
+    return engine.retrieve_for_report(target, vulnerabilities)
+
+
+def retrieve_for_result_analysis(
+    tool_name: str,
+    target: str,
+    result: Any
+) -> str:
+    """检索单个工具扫描结果的解读、风险判断和处置建议。"""
+    engine = get_rag_engine()
+    return engine.retrieve_for_result_analysis(tool_name, target, result)
+
+
+def extract_knowledge_sources(context: str) -> List[str]:
+    """从检索结果中稳定提取文档来源，兼容冒号两侧空格。"""
+    if not context:
+        return []
+    sources = re.findall(r"来源\s*:\s*([^\s|]+)", context)
+    return list(dict.fromkeys(source.strip() for source in sources if source.strip()))
+
+
+def retrieve_for_risk_assessment(
+    vuln_type: str,
+    severity: str
+) -> str:
+    """风险定级前检索知识库——获取等保标准/风险分级文档
+
+    Args:
+        vuln_type: 漏洞类型
+        severity: 漏洞严重度
+
+    Returns:
+        str: 知识库检索结果
+    """
+    engine = get_rag_engine()
+    return engine.retrieve_for_risk_assessment(vuln_type, severity)
+
+
+def get_kb_match_score(query: str) -> float:
+    """获取知识库匹配度评分
+
+    Args:
+        query: 检索查询字符串
+
+    Returns:
+        float: 0.0-1.0 的匹配度评分
+    """
+    engine = get_rag_engine()
+    return engine.get_kb_match_score(query)

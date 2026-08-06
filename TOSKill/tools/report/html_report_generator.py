@@ -75,7 +75,9 @@ class HTMLReportGenerator:
         else:
             risk_score = self._calculate_risk_score(severity_count)
             risk_level = self._determine_risk_level(severity_count)
-        
+
+        confidence = ai_analysis.get("confidence") if isinstance(ai_analysis, dict) else None
+        confidence_html = self._render_confidence_html(confidence)
         risk_color = self.SEVERITY_CONFIG.get(risk_level, self.SEVERITY_CONFIG["medium"])["color"]
         
         vulns_html = self._render_vulnerabilities_html(vulnerabilities)
@@ -90,6 +92,7 @@ class HTMLReportGenerator:
             risk_score=risk_score,
             risk_level=risk_level,
             risk_color=risk_color,
+            confidence_html=confidence_html,
             vulns_html=vulns_html,
             ai_html=ai_html,
             tools_html=tools_html,
@@ -128,6 +131,7 @@ class HTMLReportGenerator:
         risk_score: int,
         risk_level: str,
         risk_color: str,
+        confidence_html: str,
         vulns_html: str,
         ai_html: str,
         tools_html: str,
@@ -224,6 +228,8 @@ class HTMLReportGenerator:
             font-weight: 700;
         }}
         .risk-breakdown {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }}
+        .confidence-dashboard {{ grid-template-columns: 300px 1fr; }}
+        .confidence-breakdown {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }}
         .risk-item {{ 
             padding: 20px; 
             border-radius: 12px; 
@@ -480,6 +486,8 @@ class HTMLReportGenerator:
                 </div>
             </div>
         </div>
+
+        {confidence_html}
         
         <div class="stats-grid">
             <div class="stat-card" style="border-top: 4px solid #c0392b;">
@@ -530,6 +538,50 @@ class HTMLReportGenerator:
     </div>
 </body>
 </html>"""
+
+    def _render_confidence_html(self, confidence: Any) -> str:
+        """渲染可选的报告置信度"""
+        if not isinstance(confidence, dict):
+            return ""
+
+        total = confidence.get("total")
+        if not isinstance(total, (int, float)) or isinstance(total, bool):
+            return ""
+
+        total = max(0, min(100, total))
+        breakdown = confidence.get("breakdown")
+        breakdown = breakdown if isinstance(breakdown, dict) else {}
+        items = (
+            ("kb_match", "知识库匹配"),
+            ("coverage", "扫描覆盖率"),
+            ("consistency", "结果一致性"),
+            ("completeness", "分析完整性"),
+        )
+        breakdown_html = "".join(
+            f'''<div class="risk-item" style="border-color: #16a085;">
+                    <div class="title">{label}</div>
+                    <div class="value" style="color: #16a085;">{max(0, min(100, breakdown[key]))}</div>
+                </div>'''
+            for key, label in items
+            if isinstance(breakdown.get(key), (int, float)) and not isinstance(breakdown.get(key), bool)
+        )
+
+        return f'''
+        <div class="risk-dashboard confidence-dashboard" data-confidence-total="{total}">
+            <div class="gauge-container">
+                <div class="gauge">
+                    <svg viewBox="0 0 200 200">
+                        <circle cx="100" cy="100" r="80" fill="none" stroke="#eee" stroke-width="15"/>
+                        <circle cx="100" cy="100" r="80" fill="none" stroke="#16a085" stroke-width="15"
+                            stroke-dasharray="{total * 5.03} 503"
+                            stroke-linecap="round" transform="rotate(-90 100 100)"/>
+                    </svg>
+                    <div class="gauge-value" style="color: #16a085;">{total}</div>
+                </div>
+                <div class="gauge-label" style="color: #16a085;">报告置信度</div>
+            </div>
+            <div class="confidence-breakdown">{breakdown_html}</div>
+        </div>'''
     
     def _render_vulnerabilities_html(self, vulnerabilities: List[Dict[str, Any]]) -> str:
         """渲染漏洞列表"""

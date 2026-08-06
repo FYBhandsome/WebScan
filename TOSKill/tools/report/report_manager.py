@@ -355,8 +355,8 @@ class ReportManager:
         tool_summary = self._summarize_tool_results(tool_results)
         vuln_summary = self._format_vulnerabilities_detailed(vulnerabilities)
         
-        rag_context = self._get_rag_context(target, vulnerabilities)
-        
+        rag_context = self._retrieve_report_context(target, vulnerabilities)
+
         severity_count = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         for v in vulnerabilities:
             sev = (v.get("severity") or "info").lower()
@@ -462,7 +462,7 @@ class ReportManager:
         return response.content
     
     def _get_rag_context(self, target: str, vulnerabilities: List[Dict]) -> str:
-        """获取RAG知识库上下文"""
+        """使用通用策略检索作为报告专用检索不可用时的降级。"""
         try:
             from TOSKill.RAG.retriever import get_scan_strategy
             vuln_types = list(set(v.get("type") or v.get("vuln_type", "") for v in vulnerabilities if v.get("type") or v.get("vuln_type")))
@@ -477,6 +477,24 @@ class ReportManager:
         except Exception as e:
             logger.debug(f"RAG检索失败: {e}")
         return "无"
+
+    def _retrieve_report_context(self, target: str, vulnerabilities: List[Dict]) -> str:
+        """优先执行报告专用检索，并记录本次报告实际采用的知识上下文。"""
+        rag_result = ""
+        try:
+            from TOSKill.RAG.retriever import retrieve_for_report
+            rag_result = retrieve_for_report(target, vulnerabilities) or ""
+            if rag_result:
+                logger.info("报告专用知识库检索完成，内容长度=%s", len(rag_result))
+        except Exception as e:
+            logger.warning(f"报告专用知识库检索失败，将使用通用策略检索降级: {e}")
+
+        if not rag_result:
+            fallback = self._get_rag_context(target, vulnerabilities)
+            rag_result = "" if fallback == "无" else fallback
+
+        self._last_rag_result = rag_result or None
+        return rag_result[:2000] if rag_result else "无可用知识库参考"
     
     def _format_vulnerabilities_detailed(self, vulns: List) -> str:
         """格式化漏洞详细信息"""
@@ -497,6 +515,47 @@ class ReportManager:
             })
         return json.dumps(vuln_data, ensure_ascii=False, indent=2)
     
+    def _build_confidence_state(
+        self,
+        tool_results: Dict[str, Any],
+        vulnerabilities: List[Dict[str, Any]],
+        task_history: List[Dict] = None
+    ) -> Dict[str, Any]:
+        """根据可用数据构建置信度计算所需的 state 字典
+
+        Args:
+            tool_results: 工具执行结果
+            vulnerabilities: 漏洞列表
+            task_history: 任务执行历史 (可选)
+
+        Returns:
+            Dict: 包含 completed_tasks / planned_tasks / execution_history / mode 的状态字典
+        """
+        try:
+            completed_tasks = list(tool_results.keys()) if tool_results else []
+
+            execution_history = []
+            if task_history:
+                for t in task_history:
+                    try:
+                        execution_history.append({
+                            "tool": t.get("tool", ""),
+                            "success": t.get("success", True)
+                        })
+                    except Exception:
+                        continue
+
+            return {
+                "completed_tasks": completed_tasks,
+                "planned_tasks": [],
+                "execution_history": execution_history,
+                "decision_history": execution_history,
+                "mode": "full_scan"
+            }
+        except Exception as e:
+            logger.debug(f"构建 confidence state 失败: {e}")
+            return {}
+
     def generate_professional_ai_analysis(
         self,
         tool_results: Dict[str, Any],
@@ -507,14 +566,46 @@ class ReportManager:
         try:
             import json
             import re
-            
+
             md_report = self._generate_ai_report_sync(tool_results, vulnerabilities, target)
-            
+
             json_match = re.search(r'\{[\s\S]*\}', md_report)
             if json_match:
-                return json.loads(json_match.group())
-            
-            return self._generate_fallback_ai_analysis(vulnerabilities, target)
+                analysis_result = json.loads(json_match.group())
+            else:
+                analysis_result = self._generate_fallback_ai_analysis(vulnerabilities, target)
+
+            # Task 5.2: 计算并添加置信度评分，供前端渲染环形可视化
+            try:
+                from TOSKill.tools.report.confidence_calculator import calculate_confidence
+                rag_result = getattr(self, '_last_rag_result', None)
+                state = self._build_confidence_state(tool_results, vulnerabilities)
+                confidence = calculate_confidence(state, vulnerabilities, rag_result)
+                analysis_result["confidence"] = confidence
+            except Exception as e:
+                logger.debug(f"置信度计算失败，使用默认值: {e}")
+                analysis_result["confidence"] = {
+                    "total": 0,
+                    "breakdown": {
+                        "kb_match": 0,
+                        "coverage": 0,
+                        "consistency": 0,
+                        "completeness": 0
+                    }
+                }
+
+            try:
+                from TOSKill.RAG.retriever import extract_knowledge_sources
+                rag_result = getattr(self, '_last_rag_result', None) or ""
+                analysis_result["knowledge"] = {
+                    "used": bool(rag_result),
+                    "sources": extract_knowledge_sources(rag_result),
+                }
+            except Exception as e:
+                logger.debug(f"知识库来源元数据生成失败: {e}")
+                analysis_result["knowledge"] = {"used": False, "sources": []}
+
+            return analysis_result
         except Exception as e:
             logger.error(f"生成专业AI分析失败: {e}")
             return self._generate_fallback_ai_analysis(vulnerabilities, target)
@@ -556,7 +647,30 @@ class ReportManager:
                 "cvss_vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" if v.get("severity") in ("critical", "high") else "AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N",
                 "proof_of_concept": "建议通过专业渗透测试验证此漏洞"
             })
-        
+
+        # Task 5.3: 备用分析也输出置信度评分 (rag_result=None，使用规则估算)
+        try:
+            from TOSKill.tools.report.confidence_calculator import calculate_confidence
+            state = {
+                "completed_tasks": [],
+                "planned_tasks": [],
+                "execution_history": [],
+                "decision_history": [],
+                "mode": "full_scan"
+            }
+            confidence = calculate_confidence(state, vulnerabilities, None)
+        except Exception as e:
+            logger.debug(f"备用分析置信度计算失败: {e}")
+            confidence = {
+                "total": 0,
+                "breakdown": {
+                    "kb_match": 0,
+                    "coverage": 0,
+                    "consistency": 0,
+                    "completeness": 0
+                }
+            }
+
         return {
             "executive_summary": f"目标 {target} 存在 {len(vulnerabilities)} 个安全问题，其中高危 {severity_count['high']} 个，中危 {severity_count['medium']} 个。建议尽快修复高危漏洞。",
             "risk_assessment": {
@@ -606,9 +720,10 @@ class ReportManager:
                 "mid_term": ["部署WAF", "实施安全监控", "代码安全审计"],
                 "long_term": ["建立安全开发流程", "定期安全审计", "DevSecOps集成"],
                 "monitoring": ["配置SIEM告警规则", "监控异常访问日志", "设置漏洞扫描定期任务"]
-            }
+            },
+            "confidence": confidence
         }
-    
+
     async def _generate_ai_report_async(
         self,
         tool_results: Dict[str, Any],
@@ -625,6 +740,9 @@ class ReportManager:
         vuln_summary = self._format_vulnerabilities(vulnerabilities)
         chat_summary = self._format_chat_history(chat_history)
         task_summary = self._format_task_history(task_history)
+        rag_context = await asyncio.to_thread(
+            self._retrieve_report_context, target, vulnerabilities
+        )
         
         prompt = f"""你是安全分析师，基于以下数据生成简洁的安全报告。
 
@@ -646,28 +764,42 @@ class ReportManager:
 ## 任务执行记录
 {task_summary}
 
-请生成简洁报告（控制在500字内），包含：
-1. **风险等级**: 高/中/低
-2. **关键发现**: 最多3条
-3. **修复建议**: 具体可执行
+## 知识库参考
+{rag_context}
 
-要求：专业简洁，突出重点。"""
+请生成 800-1200 字的 Markdown 安全分析报告，至少包含：
+1. **执行摘要与风险等级**：说明评级依据，不能仅按漏洞数量判断。
+2. **扫描覆盖与执行质量**：列明已执行工具、成功/失败/空结果，以及认证、超时、结果截断等限制。
+3. **关键发现与证据**：逐项引用扫描结果中的 URL、参数、端口、服务、状态码、严重度等可核验值；明确区分已证实、疑似、未发现和无法判断。
+4. **风险分析**：解释真实攻击面、利用前提、业务影响和误报可能性，不得补造扫描数据中不存在的漏洞、CVE 或影响。
+5. **处置建议**：按立即处置、进一步验证、长期加固分组，给出对应本次发现的具体动作和复测方法。
+6. **知识库依据与结论边界**：只引用上方实际提供的知识库来源；知识库内容只能用于解释和建议，不能当作本次扫描证据。
+
+要求：内容完整但避免重复；没有漏洞时仍需说明覆盖范围，禁止直接断言目标安全。"""
         
         response = await llm.ainvoke(prompt)
         return response.content
     
     def _summarize_tool_results(self, results: Dict) -> str:
-        """精简工具结果摘要"""
+        """保留可核验字段的工具摘要，避免只凭 vulnerable 布尔值下结论。"""
         if not results:
             return "无"
+        from TOSKill.analysis.result_analyzer import sanitize_result_for_display
+
         summary = []
         for tool, result in list(results.items())[:10]:
             if isinstance(result, dict):
-                status = "⚠️ 发现问题" if result.get("vulnerable") else "✅ 正常"
-                summary.append(f"- {tool}: {status}")
+                safe_result = sanitize_result_for_display(result)
+                status = "发现风险" if result.get("vulnerable") else (
+                    "执行失败" if result.get("success") is False or result.get("error") else "已返回结果"
+                )
+                excerpt = json.dumps(safe_result, ensure_ascii=False, default=str)
+                summary.append(f"### {tool}\n- 状态: {status}\n- 结果摘录: {excerpt[:800]}")
             else:
-                summary.append(f"- {tool}: 已完成")
-        return "\n".join(summary)
+                summary.append(f"### {tool}\n- 状态: 已返回结果\n- 结果摘录: {str(result)[:500]}")
+        if len(results) > 10:
+            summary.append(f"- 另有 {len(results) - 10} 个工具结果未展开")
+        return "\n\n".join(summary)
     
     def _format_vulnerabilities(self, vulns: List) -> str:
         """格式化漏洞信息"""

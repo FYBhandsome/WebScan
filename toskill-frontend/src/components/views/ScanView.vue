@@ -136,6 +136,94 @@
           </div>
         </div>
 
+        <!-- 轮询兜底提示：WS 断开但轮询仍在工作 -->
+        <div class="poll-banner" v-if="isPolling && wsOffline">
+          <span class="poll-banner-dot"></span>
+          <span>WebSocket 已断开，正在通过轮询获取任务状态...</span>
+        </div>
+
+        <!-- 中断点：等待用户补充参数（waiting_user_input） -->
+        <div class="interactive-panel" v-if="waitingInput">
+          <div class="panel-header">
+            <h4>需要补充参数</h4>
+            <p class="panel-desc">扫描任务已暂停，请填写以下参数后继续</p>
+          </div>
+          <div class="panel-body">
+            <div class="form-group" v-for="field in waitingInput.fields" :key="field.name">
+              <label>
+                {{ field.name }}
+                <span class="required-mark" v-if="field.required">*</span>
+              </label>
+              <p class="field-desc" v-if="field.description">{{ field.description }}</p>
+              <input
+                v-if="field.type === 'boolean'"
+                type="checkbox"
+                v-model="inputFormValues[field.name]"
+              >
+              <input
+                v-else-if="field.type === 'number'"
+                type="number"
+                v-model="inputFormValues[field.name]"
+                :placeholder="field.default || ''"
+              >
+              <input
+                v-else-if="field.type === 'password'"
+                type="password"
+                v-model="inputFormValues[field.name]"
+                :placeholder="field.default || ''"
+              >
+              <input
+                v-else
+                type="text"
+                v-model="inputFormValues[field.name]"
+                :placeholder="field.default || ''"
+              >
+            </div>
+          </div>
+          <div class="panel-footer">
+            <button class="primary-btn" @click="submitInputForm" :disabled="submittingInput">
+              {{ submittingInput ? '提交中...' : '提交参数' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 中断点：等待用户上传脚本（waiting_script_upload） -->
+        <div class="interactive-panel" v-if="waitingScript">
+          <div class="panel-header">
+            <h4>需要上传脚本</h4>
+            <p class="panel-desc">所需能力: <code>{{ waitingScript.capability }}</code></p>
+          </div>
+          <div class="panel-body" v-if="waitingScript.params && waitingScript.params.length">
+            <p class="params-title">入参规范：</p>
+            <ul class="params-list">
+              <li v-for="p in waitingScript.params" :key="p.name">
+                <code>{{ p.name }}</code>
+                <span class="param-type">({{ p.type }})</span>
+                <span class="param-desc" v-if="p.description"> — {{ p.description }}</span>
+              </li>
+            </ul>
+          </div>
+          <div class="panel-body">
+            <div class="form-group">
+              <label>脚本名称</label>
+              <input type="text" v-model="scriptForm.script_name" placeholder="例如: custom_scanner">
+            </div>
+            <div class="form-group">
+              <label>脚本内容</label>
+              <textarea v-model="scriptForm.script_content" rows="8" placeholder="粘贴脚本内容..."></textarea>
+            </div>
+            <div class="form-group">
+              <label>或从文件导入</label>
+              <input type="file" @change="onScriptFileChange" accept=".py,.sh,.js,.txt">
+            </div>
+          </div>
+          <div class="panel-footer">
+            <button class="primary-btn" @click="submitScriptUpload" :disabled="submittingScript">
+              {{ submittingScript ? '上传中...' : '上传脚本' }}
+            </button>
+          </div>
+        </div>
+
         <div class="scan-results" id="scanResults" v-show="showResults">
           <h3>扫描结果</h3>
 
@@ -233,6 +321,7 @@ import { API } from '../../services/api.js'
 import { ws } from '../../services/websocket.js'
 import { showToast, globalState, addScanHistory, getScanHistory } from '../../store.js'
 import { marked } from 'marked'
+import { TaskPoller } from '../../services/taskPoller.js'
 
 marked.setOptions({ breaks: true, gfm: true })
 
@@ -252,6 +341,24 @@ const completedTasksCount = ref(0)
 const totalTasksCount = ref(0)
 const resultsData = ref({})
 const scanHistory = ref([])
+
+// === 任务轮询（TaskPoller，作为 WS 的补充/兜底通道） ===
+const taskPoller = new TaskPoller()
+/** 当前跟踪的任务 ID（停止轮询后仍保留，供提交参数后重启轮询使用） */
+const currentTaskId = ref(null)
+const isPolling = ref(false)
+/** WS 连接是否已断开（在每次轮询回调中刷新，不注册 onDisconnect 以免覆盖其他组件回调） */
+const wsOffline = ref(false)
+/** waiting_user_input 时填充：{ fields: [{name,type,description,required,default}] } */
+const waitingInput = ref(null)
+/** waiting_script_upload 时填充：{ capability, params: [{name,type,description}] } */
+const waitingScript = ref(null)
+/** 动态输入表单的值（按 field.name 为 key） */
+const inputFormValues = reactive({})
+const submittingInput = ref(false)
+/** 脚本上传表单 */
+const scriptForm = reactive({ script_name: '', script_content: '', filename: '' })
+const submittingScript = ref(false)
 
 const taskModal = reactive({
   show: false,
@@ -422,6 +529,9 @@ const startScan = async () => {
     } else {
       statusText.value = '指令已发送，等待执行...'
       globalState.currentTarget = target
+      // 异步扫描：若有 task_id 则启动轮询兜底（WS 仍为主通道）
+      const tid = result.task_id || result.data?.task_id
+      if (tid) startTaskPolling(tid)
     }
   } catch (error) {
     showToast('扫描启动失败: ' + error.message, 'error')
@@ -446,7 +556,185 @@ const cancelScan = () => {
   isScanning.value = false
   progress.value = 0
   statusText.value = '已取消'
+  stopTaskPolling()
   showToast('扫描已取消', 'warning')
+}
+
+// === 任务轮询：启动 / 停止 / 状态回调 ===
+
+/**
+ * 启动任务轮询。若已有轮询在跑则先停止。
+ * 轮询是 WS 的补充：WS 仍是主通道，这里仅作状态兜底与中断点驱动。
+ * @param {string} taskId 任务 ID
+ */
+const startTaskPolling = (taskId) => {
+  if (!taskId) return
+  currentTaskId.value = taskId
+  taskPoller.stop()
+  taskPoller.start(taskId, onTaskStatus, { interval: 2000 })
+  isPolling.value = taskPoller.isPolling
+}
+
+const stopTaskPolling = () => {
+  taskPoller.stop()
+  isPolling.value = false
+}
+
+/**
+ * 轮询状态回调。按 status 更新 UI。
+ * 兼容后端可能的 {data:{...}} 包装。
+ */
+const onTaskStatus = (status) => {
+  // 兼容后端返回 {data:{...}} 或裸对象
+  const st = (status && status.status) ? status : ((status && status.data && status.data.status) ? status.data : {})
+  if (!st.status) return
+
+  // 每次轮询刷新 WS 连接状态（不注册 onDisconnect 以免覆盖其他组件回调）
+  wsOffline.value = !ws.isConnected()
+  isPolling.value = taskPoller.isPolling
+
+  switch (st.status) {
+    case 'queued':
+    case 'planning':
+    case 'running':
+      // 更新进度展示（仅在轮询进度更高时覆盖，避免回退 WS 已有进度）
+      if (typeof st.progress === 'number') {
+        progress.value = Math.max(progress.value, st.progress)
+      }
+      if (st.stage) statusText.value = st.stage
+      // 任务已恢复运行，清除中断面板
+      waitingInput.value = null
+      waitingScript.value = null
+      break
+
+    case 'waiting_user_input':
+      waitingInput.value = st.waiting_input || null
+      // 用 default 初始化表单值（仅初始化未出现过的字段）
+      if (waitingInput.value && Array.isArray(waitingInput.value.fields)) {
+        waitingInput.value.fields.forEach(f => {
+          if (inputFormValues[f.name] === undefined) {
+            inputFormValues[f.name] = (f.default !== undefined && f.default !== '')
+              ? f.default
+              : (f.type === 'boolean' ? false : '')
+          }
+        })
+      }
+      // 任务已暂停等待输入，停止轮询避免空转；提交后重启
+      taskPoller.stop()
+      isPolling.value = false
+      break
+
+    case 'waiting_script_upload':
+      waitingScript.value = st.waiting_script || null
+      // 同样停止轮询，等待用户上传后重启
+      taskPoller.stop()
+      isPolling.value = false
+      break
+
+    case 'completed':
+      waitingInput.value = null
+      waitingScript.value = null
+      if (st.result) {
+        handleScanResult(st.result)
+      }
+      stopTaskPolling()
+      break
+
+    case 'exception':
+      waitingInput.value = null
+      waitingScript.value = null
+      showToast('扫描异常: ' + (st.error || '未知错误'), 'error')
+      stopTaskPolling()
+      break
+  }
+}
+
+// === 中断点：提交用户输入参数 ===
+
+const submitInputForm = () => {
+  if (!waitingInput.value) return
+  const fields = waitingInput.value.fields || []
+  // 必填校验
+  for (const f of fields) {
+    const val = inputFormValues[f.name]
+    if (f.required && (val === '' || val === undefined || val === null)) {
+      showToast(`字段 [${f.name}] 为必填项`, 'warning')
+      return
+    }
+  }
+  // 组装多字段 payload：{ fields: [{field, value}] }
+  const payloadFields = fields.map(f => ({
+    field: f.name,
+    value: inputFormValues[f.name]
+  }))
+  submittingInput.value = true
+  const sent = ws.send('input_response', { fields: payloadFields })
+  submittingInput.value = false
+  if (sent) {
+    showToast('参数已提交', 'success')
+    waitingInput.value = null
+    // 提交后重启轮询以追踪恢复后的进度（给后端 resume 处理时间）
+    const tid = currentTaskId.value
+    if (tid) {
+      setTimeout(() => {
+        if (!taskPoller.isPolling) startTaskPolling(tid)
+      }, 1500)
+    }
+  } else {
+    showToast('提交失败，WebSocket 未连接', 'error')
+  }
+}
+
+// === 中断点：提交脚本上传 ===
+
+const submitScriptUpload = () => {
+  if (!waitingScript.value) return
+  if (!scriptForm.script_content.trim()) {
+    showToast('脚本内容不能为空', 'warning')
+    return
+  }
+  const name = scriptForm.script_name.trim() || `custom_${Date.now().toString(36)}`
+  submittingScript.value = true
+  const sent = ws.send('script_content', {
+    script_content: scriptForm.script_content,
+    script_name: name,
+    filename: scriptForm.filename || name
+  })
+  submittingScript.value = false
+  if (sent) {
+    showToast('脚本已上传，正在注册...', 'success')
+    waitingScript.value = null
+    scriptForm.script_name = ''
+    scriptForm.script_content = ''
+    scriptForm.filename = ''
+    // 重启轮询追踪恢复进度
+    const tid = currentTaskId.value
+    if (tid) {
+      setTimeout(() => {
+        if (!taskPoller.isPolling) startTaskPolling(tid)
+      }, 1500)
+    }
+  } else {
+    showToast('上传失败，WebSocket 未连接', 'error')
+  }
+}
+
+/** 从文件读取脚本内容填入表单 */
+const onScriptFileChange = (event) => {
+  const file = event.target.files && event.target.files[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    scriptForm.script_content = String(e.target.result || '')
+    if (!scriptForm.script_name.trim()) {
+      scriptForm.script_name = file.name.replace(/\.[^.]+$/, '')
+    }
+    scriptForm.filename = file.name
+  }
+  reader.onerror = () => {
+    showToast('文件读取失败', 'error')
+  }
+  reader.readAsText(file)
 }
 
 const handleWSMessage = (data) => {
@@ -455,6 +743,8 @@ const handleWSMessage = (data) => {
       addTask(data.payload.task_id || '初始化任务', 'running')
       progress.value = 10
       statusText.value = '扫描已启动'
+      // WS 推送的 task_id 同步启动轮询兜底
+      if (data.payload.task_id) startTaskPolling(data.payload.task_id)
       break
 
     case 'tool_execution_started':
@@ -485,6 +775,7 @@ const handleWSMessage = (data) => {
 
     case 'scan_completed':
       handleScanResult(data)
+      stopTaskPolling()
       showToast('扫描完成', 'success')
       break
 
@@ -492,6 +783,7 @@ const handleWSMessage = (data) => {
       progress.value = 0
       statusText.value = '扫描已取消'
       isScanning.value = false
+      stopTaskPolling()
       showToast('扫描已取消', 'warning')
       break
 
@@ -532,6 +824,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   ws.off('*', handleWSMessage)
+  stopTaskPolling()
 })
 </script>
 
@@ -1421,5 +1714,182 @@ select:focus {
   .task-modal-report {
     padding: 16px;
   }
+}
+
+/* === 任务轮询：中断点交互面板 === */
+
+.poll-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--warning-color, #ff9500);
+  background: #fffdf8;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.poll-banner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warning-color, #ff9500);
+  flex-shrink: 0;
+  animation: pulse-dot 1.2s cubic-bezier(0.25, 0.1, 0.25, 1) infinite;
+}
+
+.interactive-panel {
+  border: 1px solid var(--primary-color, #1677ff);
+  border-radius: 6px;
+  background: #f8fbff;
+  padding: 20px;
+  margin-bottom: 16px;
+  animation: fadeInUp 0.35s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.panel-header {
+  margin-bottom: 16px;
+}
+
+.panel-header h4 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+
+.panel-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.panel-desc code {
+  background: #eef4ff;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--primary-color, #1677ff);
+}
+
+.panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.panel-body .form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.panel-body .form-group label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.required-mark {
+  color: var(--error-color, #ff3b30);
+  margin-left: 2px;
+}
+
+.field-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 4px;
+  line-height: 1.4;
+}
+
+.panel-body input[type="text"],
+.panel-body input[type="number"],
+.panel-body input[type="password"],
+.panel-body textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light, #e5e7eb);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: #fff;
+  box-sizing: border-box;
+  transition: border-color 0.2s ease;
+}
+
+.panel-body input:focus,
+.panel-body textarea:focus {
+  outline: none;
+  border-color: var(--primary-color, #1677ff);
+}
+
+.panel-body textarea {
+  resize: vertical;
+  font-family: 'SF Mono', 'Consolas', monospace;
+  line-height: 1.5;
+}
+
+.panel-body input[type="file"] {
+  font-size: 12px;
+}
+
+.params-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.params-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.params-list li {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.params-list code {
+  background: #eef4ff;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: 'SF Mono', 'Consolas', monospace;
+  color: var(--primary-color, #1677ff);
+}
+
+.param-type {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.param-desc {
+  color: var(--text-secondary);
+}
+
+.panel-footer {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.panel-footer .primary-btn {
+  padding-right: 24px;
+}
+
+.panel-footer .primary-btn::after {
+  display: none;
 }
 </style>

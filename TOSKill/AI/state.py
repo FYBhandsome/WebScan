@@ -64,6 +64,7 @@ class ScanState(TypedDict, total=False):
     report_url: str
     report_id: str
     html_report_url: str
+    report_analysis: Dict[str, Any]
     last_activity_time: str
     conversation_turn: int
     auth_cookies: Dict[str, str]
@@ -104,6 +105,18 @@ class ScanState(TypedDict, total=False):
     user_directed_params: NotRequired[Dict[str, Any]]
     user_directed_next_task: NotRequired[str]
 
+    # AI等保评估置信度
+    confidence_score: NotRequired[int]
+    confidence_breakdown: NotRequired[Dict[str, int]]
+    risk_level: NotRequired[str]
+    risk_confidence: NotRequired[int]
+    kb_match_score: NotRequired[float]
+
+    # 扫描任务中断-用户输入交互
+    pending_input_request: NotRequired[Dict[str, Any]]
+    task_status: NotRequired[str]
+    pending_script_request: NotRequired[Dict[str, Any]]
+
 
 def create_initial_state(target: str, task_id: str = None, mode: str = "info_collection") -> ScanState:
     """创建初始状态"""
@@ -119,6 +132,7 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         tool_results={},
         vulnerabilities=[],
         target_context={},
+        history_context={},
         execution_history=[],
         is_complete=False,
         should_continue=True,
@@ -169,6 +183,7 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         report_url="",
         report_id="",
         html_report_url="",
+        report_analysis={},
         last_activity_time=now,
         conversation_turn=0,
         auth_cookies={},
@@ -191,6 +206,9 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         tool_confirm_required=False,
         confirm_target="",
         confirm_tool="",
+        pending_input_request={},
+        task_status="queued",
+        pending_script_request={},
     )
 
 
