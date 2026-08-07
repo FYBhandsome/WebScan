@@ -94,6 +94,10 @@ class ApiService {
     return this.request(endpoint, { method: 'DELETE' });
   }
 
+  async resetRuntimeData() {
+    return this.post('/runtime/reset', {});
+  }
+
   // --- Session ---
   // 修正：接口路径改为 /sessions，参数改为 target 和 mode
   async createSession(target = '', mode = 'full_scan') {

@@ -189,6 +189,20 @@ class TaskStatusStore:
         except Exception:
             logger.warning("Failed to delete status from sqlite for task %s", task_id, exc_info=True)
 
+    def clear_all(self) -> int:
+        """Clear all task statuses from memory and SQLite."""
+        with self._lock:
+            count = len(self._cache)
+            self._cache.clear()
+            try:
+                with sqlite3.connect(self._db_path) as conn:
+                    cursor = conn.execute("DELETE FROM task_statuses")
+                    conn.commit()
+                    count = max(count, cursor.rowcount or 0)
+            except Exception:
+                logger.warning("Failed to clear all task statuses", exc_info=True)
+            return count
+
     # ── 内部方法 ────────────────────────────────────────────
 
     def _persist_to_sqlite(self, task_id: str, record: Dict[str, Any]) -> None:

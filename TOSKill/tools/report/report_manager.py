@@ -257,6 +257,22 @@ class ReportManager:
         """获取所有报告信息"""
         return list(self._mapping.values())
     
+    def clear_all_reports(self) -> int:
+        """Delete generated report files and reset the report mapping."""
+        self._ensure_dirs()
+        removed = 0
+        for pattern in ("*.md", "*.html", "*.pdf"):
+            for report_path in self.reports_dir.glob(pattern):
+                try:
+                    report_path.unlink()
+                    removed += 1
+                except OSError:
+                    logger.warning("Failed to remove report %s", report_path, exc_info=True)
+        self._mapping.clear()
+        self._save_mapping()
+        logger.info("Report data reset, removed=%s", removed)
+        return removed
+
     def delete_report(self, session_id: str) -> bool:
         """删除报告"""
         if session_id not in self._mapping:

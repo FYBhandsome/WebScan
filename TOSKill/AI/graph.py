@@ -788,6 +788,34 @@ class MemoryStore:
             
             logger.info(f"删除会话: {session_id}")
     
+    def reset_runtime_data(self) -> int:
+        """Clear all persisted runtime sessions and transient interaction data."""
+        with self._lock:
+            removed = len(self._sessions)
+            conn = self._get_db_conn()
+            if conn:
+                try:
+                    with conn:
+                        for table in (
+                            "pending_interactions",
+                            "decision_history",
+                            "chat_history",
+                            "script_history",
+                            "user_preferences",
+                            "sessions",
+                        ):
+                            conn.execute(f"DELETE FROM {table}")
+                except Exception:
+                    logger.warning("Failed to clear runtime SQLite data", exc_info=True)
+            self._sessions.clear()
+            self._chat_histories.clear()
+            self._pending_interactions.clear()
+            self._websocket_callbacks.clear()
+            self._session_timestamps.clear()
+            self._session_metadata.clear()
+            logger.info("Runtime session data reset, removed=%s", removed)
+            return removed
+
     def _cleanup_expired_sessions(self):
         """清理过期会话（带日志记录，活跃扫描会话豁免）"""
         now = datetime.now()

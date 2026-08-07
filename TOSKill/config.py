@@ -39,6 +39,8 @@ class TOSKillSettings(BaseSettings):
     RAG_UPLOAD_MAX_SIZE: int = 10 * 1024 * 1024
     SCAN_TIMEOUT: int = 300
     MAX_CONCURRENT_SCANS: int = 5
+    # Help: 是否在启动时重置运行时数据
+    RESET_RUNTIME_DATA_ON_STARTUP: bool = True
     
     REPORTS_DIR: str = "reports"
     SCRIPTS_DIR: str = "scripts"

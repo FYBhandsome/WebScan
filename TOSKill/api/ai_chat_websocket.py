@@ -219,6 +219,22 @@ class AIChatManager:
                 logger.info(f"[{session_id}] WebSocket断开，扫描任务继续运行(后台)")
             else:
                 self.tasks.pop(session_id, None)
+
+    async def reset_runtime_state(self) -> int:
+        """Cancel orphaned workflows and clear connection bookkeeping."""
+        tasks = [task for task in self.tasks.values() if task and not task.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        count = len(self.tasks)
+        self.tasks.clear()
+        self.connections.clear()
+        self._last_confirm_time.clear()
+        self._send_locks.clear()
+        self._event_sequences.clear()
+        logger.info("AI chat runtime reset, cancelled=%s", len(tasks))
+        return count
     
     async def _send(self, session_id: str, message: Dict):
         """Serialize outbound events so the UI receives a causal sequence."""

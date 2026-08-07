@@ -92,7 +92,7 @@ const handleModalConfirm = () => {
 }
 
 // === 应用初始化逻辑 (原 app.js init 的核心) ===
-onMounted(() => {
+onMounted(async () => {
   // 1. 加载本地设置
   const savedSettings = localStorage.getItem('toskill_settings')
   if (savedSettings) {
@@ -116,6 +116,21 @@ onMounted(() => {
   ws.onConnect(() => { connectionStatus.value = '已连接' })
   ws.onDisconnect(() => { connectionStatus.value = '未连接' })
   
+  // Clear transient UI state so a browser reload cannot resurrect an old scan.
+  sessionStorage.clear()
+  localStorage.removeItem('scan_history')
+  localStorage.removeItem('toskill_script_history')
+  Object.keys(localStorage)
+    .filter(key => key.startsWith('toskill_session_') || key.startsWith('toskill_workspace'))
+    .forEach(key => localStorage.removeItem(key))
+
+  // Reset backend runtime state before reconnecting the WebSocket.
+  try {
+    await API.resetRuntimeData()
+  } catch (error) {
+    if (import.meta.env.DEV) console.warn('Backend runtime reset failed; confirm 8081 is restarted:', error)
+  }
+
   ws.connect().then(sessionId => {
     if (import.meta.env.DEV) console.log('应用启动: WS 连接成功，Session:', sessionId)
   }).catch(err => {

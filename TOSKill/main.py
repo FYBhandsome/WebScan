@@ -36,6 +36,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def reset_runtime_data() -> dict:
+    """Reset persisted scan state, task statuses, reports, and orphan tasks."""
+    from TOSKill.AI.graph import memory_store
+    from TOSKill.AI.task_status_store import get_task_status_store
+    from TOSKill.api.ai_chat_websocket import manager as ai_chat_manager
+    from TOSKill.tools.report.report_manager import get_report_manager
+
+    cancelled = await ai_chat_manager.reset_runtime_state()
+    sessions = memory_store.reset_runtime_data()
+    statuses = get_task_status_store().clear_all()
+    reports = get_report_manager().clear_all_reports()
+    return {
+        "cancelled_tasks": cancelled,
+        "sessions": sessions,
+        "task_statuses": statuses,
+        "reports": reports,
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"启动 {settings.APP_NAME} v{settings.APP_VERSION}")
@@ -43,6 +62,10 @@ async def lifespan(app: FastAPI):
     
     from TOSKill.AI.log_collector import log_collector
     log_collector.initialize()
+    if settings.RESET_RUNTIME_DATA_ON_STARTUP:
+        reset_summary = await reset_runtime_data()
+        logger.info("Runtime data reset on startup: %s", reset_summary)
+        log_collector.add_system_log("info", "启动时已清理扫描任务和报告数据", "system")
     log_collector.add_system_log("info", f"服务启动: {settings.APP_NAME} v{settings.APP_VERSION}", "system")
     
     from TOSKill.AI.model_check import verify_model_connectivity
@@ -125,6 +148,12 @@ app.include_router(chat_router, prefix="/api")
 app.include_router(script_router, prefix="/api")
 app.include_router(log_ws_router, prefix="/api")
 app.include_router(rag_router, prefix="/api")
+
+
+@app.post("/api/runtime/reset")
+async def runtime_reset():
+    """Manually clear all transient scan data for local development."""
+    return {"status": "reset", "data": await reset_runtime_data()}
 
 
 if __name__ == "__main__":
