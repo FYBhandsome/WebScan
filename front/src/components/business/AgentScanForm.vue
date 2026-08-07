@@ -140,7 +140,7 @@
 </template>
 
 <script>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { aiAgentsApi } from '@/utils/aiAgents'
 import Alert from '@/components/common/Alert.vue'
 
@@ -168,6 +168,7 @@ export default {
     const availableTools = ref([])
     const isSubmitting = ref(false)
     const errorMessage = ref('')
+    const labTargetListener = ref(null)
 
     const loadTools = async () => {
       try {
@@ -232,6 +233,22 @@ export default {
 
     onMounted(() => {
       loadTools()
+      if (typeof window !== 'undefined') {
+        labTargetListener.value = (event) => {
+          const target = event.detail || {}
+          if (!target.url) return
+          formData.value.target = target.url
+          formData.value.taskName = `${target.name || '公开靶场'} 扫描测试`
+        }
+        window.addEventListener('toskill:lab-target-selected', labTargetListener.value)
+      }
+    })
+
+    onUnmounted(() => {
+      if (typeof window !== 'undefined' && labTargetListener.value) {
+        window.removeEventListener('toskill:lab-target-selected', labTargetListener.value)
+        labTargetListener.value = null
+      }
     })
 
     return {

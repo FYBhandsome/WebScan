@@ -129,6 +129,14 @@ class WebSocketManager {
       case 'task_completed':
         this.emit('task:completed', { ...payload, message_id, timestamp })
         break
+      case 'scan_completed':
+        this.emit('scan:completed', { ...payload, message_id, timestamp })
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('ai-websocket:scan-completed', {
+            detail: { ...payload, message_id, timestamp }
+          }))
+        }
+        break
       case 'stage_update':
         this.emit('stage:update', payload)
         break
@@ -176,6 +184,11 @@ class WebSocketManager {
         break
       case 'report_ready':
         this.emit('ai:report', payload)
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('ai-websocket:report-ready', {
+            detail: payload
+          }))
+        }
         break
       case 'scan_cancelled':
         this.emit('ai:cancelled', payload)

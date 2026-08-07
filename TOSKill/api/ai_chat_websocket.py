@@ -1,4 +1,4 @@
-"""
+﻿"""
 AI对话WebSocket处理器
 
 处理AI对话相关的WebSocket消息，支持悬浮球对话功能。
@@ -14,7 +14,12 @@ from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from TOSKill.AI.state import create_initial_state, update_state
-from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm as _get_llm
+from TOSKill.AI.graph import (
+    memory_store,
+    get_agent_orchestrator,
+    get_llm as _get_llm,
+    WORKFLOW_TIMEOUT_SECONDS,
+)
 from TOSKill.AI.core import CHAT_SYSTEM_PROMPT
 from TOSKill.AI.tools import get_tool_by_name, get_all_tool_names, get_tool_sequence
 from TOSKill.AI.log_collector import log_collector
@@ -35,7 +40,14 @@ router = APIRouter(prefix="/ai-chat", tags=["AI对话WebSocket"])
 logger = logging.getLogger(__name__)
 
 
-SCAN_MODE_MAP = {"info": "info_collection", "vuln": "vuln_scan", "full": "full_scan"}
+SCAN_MODE_MAP = {
+    "info": "info_collection",
+    "info_collection": "info_collection",
+    "vuln": "vuln_scan",
+    "vuln_scan": "vuln_scan",
+    "full": "full_scan",
+    "full_scan": "full_scan",
+}
 
 
 def _safe_set_task_status(task_id: str, status: str, **kwargs) -> None:
@@ -296,7 +308,6 @@ class AIChatManager:
             "tool_rejected": self._handle_tool_rejected,
             "alternative_selected": self._handle_alternative_selected,
             "task_error": self._handle_task_error,
-            "ping": self._handle_ping,
         }
         
         if handler := handlers.get(msg_type):
@@ -452,14 +463,24 @@ class AIChatManager:
         
         state = create_initial_state(target=target, task_id=session_id, mode=mode)
         state["websocket_session_id"] = session_id
+        requested_next_task = str(initial_params.get("next_task", "") or initial_params.get("user_directed_next_task", "")).strip()
         state = update_state(
             state,
             user_directed_params=dict(initial_params),
+            user_directed_next_task=requested_next_task,
             __extend_params=dict(initial_params),
         )
         memory_store.save_session(session_id, state)
         # SubTask 4.3: 任务入队状态同步
-        _safe_set_task_status(session_id, STATUS_QUEUED, stage="排队", progress=0)
+        _safe_set_task_status(
+            session_id,
+            STATUS_QUEUED,
+            stage="排队",
+            progress=0,
+            total_tasks=len(get_tool_sequence(mode)),
+            completed_tasks=[],
+            workflow_timeout_seconds=WORKFLOW_TIMEOUT_SECONDS,
+        )
 
         logger.info(f"[{session_id}] 创建扫描任务，目标: {target}, 模式: {mode}")
         log_collector.add_log(session_id, "handle_start_scan", "info", f"扫描开始: 目标={target}, 模式={mode}")
@@ -467,23 +488,143 @@ class AIChatManager:
         logger.info(f"[{session_id}] 扫描任务已创建并启动")
 
     async def _handle_stop_scan(self, session_id: str, payload: Dict):
-        task = self.tasks.get(session_id)
-        if task and not task.done():
-            task.cancel()
-            _safe_set_task_status(session_id, STATUS_EXCEPTION, stage="已取消", error="用户取消扫描")
-            return
-
         state = memory_store.get_session(session_id)
         if state:
             memory_store.save_session(session_id, update_state(
                 state,
                 should_continue=False,
+                stop_requested=True,
                 task_status="cancelled",
                 is_complete=False,
+                last_activity_time=datetime.now().isoformat(),
             ))
+
+        task = self.tasks.get(session_id)
+        if task and not task.done():
+            task.cancel()
+            await asyncio.sleep(0)
+
+        # Stop is a terminal user action, but it must still produce a partial
+        # report from all results collected before cancellation.
+        report_state = memory_store.get_session(session_id) or state or {}
+        report_payload = {}
+        report_error = ""
+        try:
+            orchestrator = get_agent_orchestrator()
+            await orchestrator._ensure_initialized()
+            await self._send(session_id, {
+                "type": "report_generation_started",
+                "payload": {"session_id": session_id, "reason": "user_requested_stop"},
+            })
+            report_state = await orchestrator.run_report(report_state)
+            # The graph historically skipped persistence when no tool result
+            # existed. Create a minimal report here so every stop is visible
+            # in the report list, including an immediate stop.
+            if not report_state.get("report_id"):
+                from TOSKill.tools.report.report_manager import get_report_manager
+                report_manager = get_report_manager()
+                tool_results = report_state.get("tool_results", {}) or {}
+                vulnerabilities = report_state.get("vulnerabilities", []) or []
+                report = report_state.get("report") or await report_manager.generate_ai_report_content_async(
+                    tool_results=tool_results,
+                    vulnerabilities=vulnerabilities,
+                    target=report_state.get("target", ""),
+                    chat_history=memory_store.get_chat_history(session_id),
+                    task_history=[],
+                )
+                report = report or (
+                    "# Scan Report\n\n"
+                    f"Target: {report_state.get('target', '')}\n\n"
+                    "The scan was stopped before any tool result was collected."
+                )
+                report_info = report_manager.save_report(
+                    session_id=session_id,
+                    content=report,
+                    metadata={
+                        "target": report_state.get("target", ""),
+                        "tool_results": tool_results,
+                        "vulnerabilities": vulnerabilities,
+                        "scan_summary": {"tool_count": len(tool_results), "vulnerability_count": len(vulnerabilities), "stopped": True},
+                    },
+                )
+                ai_analysis = report_manager.generate_professional_ai_analysis(
+                    tool_results=tool_results,
+                    vulnerabilities=vulnerabilities,
+                    target=report_state.get("target", ""),
+                )
+                html_info = report_manager.save_html_report(
+                    session_id=session_id,
+                    target=report_state.get("target", ""),
+                    scan_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    vulnerabilities=vulnerabilities,
+                    tool_results=tool_results,
+                    ai_analysis=ai_analysis,
+                )
+                report_state = update_state(
+                    report_state,
+                    report=report,
+                    report_id=report_info.get("report_id", ""),
+                    report_url=report_info.get("download_url", ""),
+                    html_report_id=html_info.get("report_id", ""),
+                    html_report_url=html_info.get("download_url", ""),
+                    report_analysis=ai_analysis if isinstance(ai_analysis, dict) else {},
+                )
+            report_state = update_state(
+                report_state,
+                should_continue=False,
+                stop_requested=True,
+                task_status="cancelled",
+                is_complete=True,
+                cancelled_with_report=True,
+                last_activity_time=datetime.now().isoformat(),
+            )
+            memory_store.save_session(session_id, report_state)
+            report_payload = {
+                "report_status": "completed",
+                "report": report_state.get("report", ""),
+                "report_id": report_state.get("report_id", ""),
+                "report_url": report_state.get("report_url", ""),
+                "html_report_id": report_state.get("html_report_id", ""),
+                "html_report_url": report_state.get("html_report_url", ""),
+                "report_analysis": report_state.get("report_analysis", {}),
+                "target": report_state.get("target", ""),
+                "completed_tasks": report_state.get("completed_tasks", []),
+                "vulnerabilities": report_state.get("vulnerabilities", [])[:20],
+                "errors": report_state.get("errors", []),
+            }
+        except Exception as exc:
+            report_error = str(exc)
+            logger.exception("[%s] 停止扫描后生成报告失败", session_id)
+            report_state = update_state(
+                report_state,
+                should_continue=False,
+                stop_requested=True,
+                task_status="cancelled",
+                is_complete=False,
+                report_status="error",
+                report_error=report_error,
+            )
+            memory_store.save_session(session_id, report_state)
+
+        _safe_set_task_status(
+            session_id,
+            STATUS_EXCEPTION if report_error else STATUS_COMPLETED,
+            stage="已停止，报告生成失败" if report_error else "已停止，报告已生成",
+            progress=100,
+            completed_tasks=report_state.get("completed_tasks", []),
+            total_tasks=report_state.get("total_tasks") or len(report_state.get("planned_tasks") or []),
+            result=report_payload,
+            error=report_error or "用户停止扫描",
+        )
         await self._send(session_id, {
             "type": "scan_cancelled",
-            "payload": {"session_id": session_id, "reason": "no_active_task"},
+            "payload": {
+                "session_id": session_id,
+                "reason": "user_requested" if task else "no_active_task",
+                "report_status": "error" if report_error else "completed",
+                "report_error": report_error,
+                **report_payload,
+            },
         })
 
     async def _run_scan(self, session_id: str, target: str, mode: str, state: Dict):
@@ -561,7 +702,22 @@ class AIChatManager:
             # SubTask 4.3: 正常结束状态同步
             _safe_set_task_status(session_id, STATUS_COMPLETED, progress=100, stage="完成")
         except asyncio.CancelledError:
-            await self._send(session_id, {"type": "scan_cancelled", "payload": {"session_id": session_id}})
+            state = memory_store.get_session(session_id)
+            user_requested_stop = bool(state and state.get("stop_requested"))
+            if state:
+                memory_store.save_session(session_id, update_state(
+                    state,
+                    should_continue=False,
+                    stop_requested=True,
+                    task_status="cancelled",
+                    is_complete=False,
+                ))
+            if not user_requested_stop:
+                _safe_set_task_status(session_id, STATUS_EXCEPTION, stage="已取消", error="扫描任务被取消")
+                await self._send(session_id, {
+                    "type": "scan_cancelled",
+                    "payload": {"session_id": session_id, "reason": "task_cancelled"},
+                })
         except Exception as e:
             logger.error(f"[{session_id}] 扫描任务异常: {e}")
             # SubTask 4.3: 异常状态同步
@@ -575,6 +731,11 @@ class AIChatManager:
     async def _handle_get_status(self, session_id: str, payload: Dict):
         state = memory_store.get_session(session_id)
         if state:
+            try:
+                task_status = get_task_status_store().get_status(session_id) or {}
+            except Exception:
+                task_status = {}
+            is_complete = state.get("is_complete", False)
             await self._send(session_id, {
                 "type": "status",
                 "payload": {
@@ -583,7 +744,17 @@ class AIChatManager:
                         "target": state.get("target", ""),
                         "mode": state.get("mode", ""),
                         "completed_tasks": state.get("completed_tasks", []),
-                        "is_complete": state.get("is_complete", False),
+                        "total_tasks": task_status.get(
+                            "total_tasks",
+                            len(state.get("planned_tasks") or get_tool_sequence(state.get("mode", "full_scan"))),
+                        ),
+                        "is_complete": is_complete,
+                        "status": task_status.get("status") or state.get("task_status") or ("completed" if is_complete else "idle"),
+                        "progress": task_status.get("progress", state.get("progress", 0)),
+                        "stage": task_status.get("stage") or state.get("stage", ""),
+                        "next_task": state.get("next_task") or state.get("user_directed_next_task", ""),
+                        "waiting_input": task_status.get("waiting_input"),
+                        "waiting_script": task_status.get("waiting_script"),
                         "vulnerabilities_count": len(state.get("vulnerabilities", [])),
                         "risk_level": state.get("risk_level", "info"),
                         "risk_confidence": state.get("risk_confidence", 0),
@@ -591,7 +762,14 @@ class AIChatManager:
                         "report_url": state.get("report_url", ""),
                         "report_id": state.get("report_id", ""),
                         "html_report_url": state.get("html_report_url", ""),
+                        "html_report_id": state.get("html_report_id", ""),
                         "report_analysis": state.get("report_analysis", {}),
+                        "report_status": state.get("report_status", "completed" if state.get("report_id") else "pending"),
+                        "report_error": state.get("report_error", ""),
+                        "cancelled_with_report": bool(state.get("cancelled_with_report", False)),
+                        "workflow_timeout_seconds": task_status.get(
+                            "workflow_timeout_seconds", WORKFLOW_TIMEOUT_SECONDS
+                        ),
                         "errors": state.get("errors", []),
                     }
                 }
@@ -878,6 +1056,7 @@ class AIChatManager:
     async def _handle_script_content(self, session_id: str, payload: Dict):
         script_content = payload.get("script_content", "")
         filename = payload.get("filename", "")
+        requested_language = str(payload.get("language", "") or "").strip().lower()
         
         if not script_content:
             await self._send_error(session_id, "脚本内容不能为空", error_code="EMPTY_SCRIPT")
@@ -885,8 +1064,7 @@ class AIChatManager:
         
         try:
             from TOSKill.AI.script_safety import (
-                validate_script_full, sanitize_script_name,
-                ValidationStage
+                normalize_script_for_registration,
             )
             
             await self._send(session_id, {
@@ -894,14 +1072,25 @@ class AIChatManager:
                 "payload": {"stage": "validating", "progress": 20, "message": "正在验证脚本..."}
             })
             
-            is_valid, msg, details = validate_script_full(script_content, filename)
+            requested_name = payload.get("script_name") or filename
+            # Keep compatibility with older upload cards that sent language but
+            # omitted filename; normalization uses the extension to select JS.
+            if not filename and requested_language in {"js", "javascript"}:
+                filename = f"{requested_name or 'custom_script'}.js"
+            is_valid, msg, normalized = normalize_script_for_registration(
+                script_content,
+                script_name=requested_name,
+                filename=filename,
+                default_prefix="custom",
+            )
             if not is_valid:
                 await self._send(session_id, {
                     "type": "script_upload_progress",
-                    "payload": {"stage": "failed", "progress": 100, "message": msg, "details": details}
+                    "payload": {"stage": "failed", "progress": 100, "message": msg, "details": {}}
                 })
                 await self._send_error(session_id, f"脚本验证失败: {msg}", error_code="VALIDATION_FAILED")
                 return
+            script_content = normalized.content
             
             await self._send(session_id, {
                 "type": "script_upload_progress",
@@ -911,9 +1100,8 @@ class AIChatManager:
             from TOSKill.AI.tools import script_manager
             from datetime import datetime
             
-            script_name = payload.get("script_name", f"custom_{datetime.now().strftime('%Y%m%d%H%M%S')}")
-            safe_name, name_err = sanitize_script_name(script_name)
-            script_name = safe_name or f"custom_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            script_name = normalized.tool_name
+            language = normalized.language
             
             analysis = await script_manager.analyze_script_with_ai(script_content)
             
@@ -924,7 +1112,7 @@ class AIChatManager:
             
             result = script_manager.register_script_as_tool(
                 script_content=script_content,
-                script_name=analysis.get("tool_name", script_name),
+                script_name=(script_name + ".js") if language == "js" else script_name,
                 description=analysis.get("description", "自定义扫描脚本"),
                 category=analysis.get("category", "custom")
             )
@@ -940,6 +1128,7 @@ class AIChatManager:
                         "tool_name": result["tool_name"],
                         "description": analysis.get("description"),
                         "script_content": script_content,
+                        "language": result.get("language", language),
                         "message": f"脚本已注册为工具: {result['tool_name']}"
                     }
                 })
@@ -999,30 +1188,8 @@ class AIChatManager:
 
         try:
             from TOSKill.AI.tools import script_manager
-            from TOSKill.AI.script_safety import validate_script_full, sanitize_script_name
+            from TOSKill.AI.script_safety import normalize_script_for_registration
             from datetime import datetime
-
-            # 进度发送任务（防止WebSocket超时）
-            async def send_progress_heartbeat():
-                """定期发送进度心跳，保持连接活跃"""
-                progress = 30
-                while progress < 55:
-                    try:
-                        await asyncio.sleep(15)  # 每15秒发送一次
-                        progress = min(progress + 5, 55)
-                        await self._send(session_id, {
-                            "type": "script_generation_progress",
-                            "payload": {
-                                "stage": "generating",
-                                "progress": progress,
-                                "message": f"AI正在生成脚本...{progress}%"
-                            }
-                        })
-                    except asyncio.CancelledError:
-                        break
-                    except Exception as e:
-                        logger.debug(f"[{session_id}] 进度心跳发送失败: {e}")
-                        break
 
             await self._send(session_id, {
                 "type": "script_generation_progress",
@@ -1033,9 +1200,6 @@ class AIChatManager:
                 "type": "script_generation_progress",
                 "payload": {"stage": "generating", "progress": 30, "message": "AI正在生成脚本..."}
             })
-
-            # 启动进度心跳任务
-            heartbeat_task = asyncio.create_task(send_progress_heartbeat())
 
             try:
                 # 添加超时控制（90秒）
@@ -1052,12 +1216,7 @@ class AIChatManager:
                 await self._send_error(session_id, "AI生成脚本超时，请稍后重试", error_code="GENERATION_TIMEOUT")
                 return
             finally:
-                # 取消心跳任务
-                heartbeat_task.cancel()
-                try:
-                    await heartbeat_task
-                except asyncio.CancelledError:
-                    pass
+                pass
 
             if not script_code:
                 await self._send(session_id, {
@@ -1072,7 +1231,13 @@ class AIChatManager:
                 "payload": {"stage": "validating", "progress": 60, "message": "正在安全审查..."}
             })
 
-            is_valid, msg, details = validate_script_full(script_code)
+            default_name = f"ai_gen_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            is_valid, msg, normalized = normalize_script_for_registration(
+                script_code,
+                script_name=default_name,
+                filename=f"{default_name}.py",
+                default_prefix="ai_gen",
+            )
             if not is_valid:
                 await self._send(session_id, {
                     "type": "script_generation_progress",
@@ -1080,6 +1245,7 @@ class AIChatManager:
                 })
                 await self._send_error(session_id, f"AI生成脚本安全审查未通过: {msg}", error_code="VALIDATION_FAILED")
                 return
+            script_code = normalized.content
 
             await self._send(session_id, {
                 "type": "script_generation_progress",
@@ -1091,14 +1257,14 @@ class AIChatManager:
                 script_manager.analyze_script_with_ai(script_code),
                 timeout=30.0
             )
-            default_name = f"ai_gen_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-            tool_name = analysis.get("tool_name", default_name)
-            safe_name, name_err = sanitize_script_name(tool_name)
-            tool_name = safe_name or default_name
+            language = str(payload.get("language", "") or "").strip().lower()
+            if not language:
+                language = normalized.language
+            tool_name = normalized.tool_name
 
             result = script_manager.register_script_as_tool(
                 script_content=script_code,
-                script_name=tool_name,
+                script_name=(tool_name + ".js") if language == "js" and not tool_name.endswith(".js") else tool_name,
                 description=analysis.get("description", description),
                 category=analysis.get("category", "custom")
             )
@@ -1420,23 +1586,6 @@ class AIChatManager:
                 "timestamp": datetime.now().isoformat()
             }
         })
-
-    async def _handle_ping(self, session_id: str, payload: Dict):
-        """处理心跳ping，返回pong并更新连接状态"""
-        # 更新最后活动时间
-        state = memory_store.get_session(session_id)
-        if state:
-            memory_store.save_session(session_id, update_state(state, last_activity_time=datetime.now().isoformat()))
-
-        # 发送pong响应
-        await self._send(session_id, {
-            "type": "pong",
-            "payload": {
-                "timestamp": datetime.now().isoformat(),
-                "session_id": session_id
-            }
-        })
-
 
 manager = AIChatManager()
 

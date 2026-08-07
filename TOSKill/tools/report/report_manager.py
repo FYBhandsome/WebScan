@@ -165,6 +165,10 @@ class ReportManager:
             "tool_results": tool_results,
             "vulnerabilities": vulnerabilities
         }
+        if isinstance(ai_analysis, dict):
+            report_info["ai_analysis"] = ai_analysis
+            report_info["confidence"] = ai_analysis.get("confidence")
+            report_info["risk_assessment"] = ai_analysis.get("risk_assessment", {})
         
         self._mapping[session_id] = report_info
         self._save_mapping()

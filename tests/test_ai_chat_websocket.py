@@ -9,6 +9,12 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 
+# Legacy protocol: current coverage lives under TOSKill/tests.
+pytest.skip(
+    "legacy WebSocket tests superseded by TOSKill/tests/test_websocket.py",
+    allow_module_level=True,
+)
+
 
 class TestAIChatConnectionManager:
     """AIChatConnectionManager 测试类"""

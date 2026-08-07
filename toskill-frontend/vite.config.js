@@ -13,7 +13,7 @@ export default defineConfig({
         ws: true,
         configure: (proxy, options) => {
           proxy.on('error', (err, req, res) => {
-            console.log('proxy error', err);
+            if (err.code !== 'ECONNREFUSED') console.warn('proxy error', err.message);
           });
           proxy.on('proxyReq', (proxyReq, req, res) => {
             console.log('Sending Request:', req.url);

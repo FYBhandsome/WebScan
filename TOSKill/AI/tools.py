@@ -2199,120 +2199,203 @@ class ScriptManager:
     
     def register_script_as_tool(self, script_content: str, script_name: str, 
                                  description: str, category: str = "custom") -> Dict:
-        """将脚本注册为LangChain工具"""
-        from pathlib import Path
+        """将脚本注册为 LangChain 工具"""
         from datetime import datetime
+        import importlib.util
+        import subprocess
+        import json
+
         try:
             from langchain_core.tools import Tool
         except ImportError:
             from langchain.tools import Tool
-        import importlib.util
-        
+
         try:
-            from ..AI.script_safety import validate_script_safety
-            is_safe, safety_err = validate_script_safety(script_content)
-            if not is_safe:
-                return {"success": False, "error": f"脚本安全审查未通过: {safety_err}"}
+            from ..AI.script_safety import normalize_script_for_registration
+            ok, normalize_msg, normalized = normalize_script_for_registration(
+                script_content,
+                script_name=script_name,
+                filename=script_name,
+                default_prefix="ai_gen" if str(script_name).startswith("ai_gen_") else "custom",
+            )
+            if not ok or normalized is None:
+                return {"success": False, "error": f"脚本验证失败: {normalize_msg}"}
+            script_content = normalized.content
+            script_name = normalized.filename
+            base_name = normalized.tool_name
+            script_kind = normalized.language
         except ImportError:
             pass
-        
+
+        script_kind = locals().get("script_kind", "js" if script_name.lower().endswith(".js") else "py")
+        base_name = locals().get("base_name", script_name.rsplit(".", 1)[0] if script_name.lower().endswith((".py", ".js")) else script_name)
+
         try:
-            script_path = self._scripts_dir / f"{script_name}.py"
-            with open(script_path, 'w', encoding='utf-8') as f:
-                f.write(script_content)
-            
-            def create_tool_func(script_path, script_name):
-                def tool_func(target: str, **kwargs):
-                    try:
-                        spec = importlib.util.spec_from_file_location("custom_module", script_path)
-                        if not spec or not spec.loader:
-                            return {"success": False, "error": "无法加载脚本"}
+            if script_kind == "js":
+                script_path = self._scripts_dir / f"{base_name}.js"
+                with open(script_path, 'w', encoding='utf-8') as f:
+                    f.write(script_content)
 
-                        module = importlib.util.module_from_spec(spec)
-                        safe_builtins = {
-                            'print': print, 'len': len, 'range': range,
-                            'str': str, 'int': int, 'float': float, 'bool': bool,
-                            'list': list, 'dict': dict, 'set': set, 'tuple': tuple,
-                            'True': True, 'False': False, 'None': None,
-                            'isinstance': isinstance, 'type': type,
-                            'Exception': Exception, 'ValueError': ValueError,
-                            'TypeError': TypeError, 'KeyError': KeyError,
-                            'ImportError': ImportError, 'AttributeError': AttributeError,
-                            'min': min, 'max': max, 'sum': sum, 'sorted': sorted,
-                            'abs': abs, 'round': round, 'enumerate': enumerate,
-                            'zip': zip, 'map': map, 'filter': filter, 'any': any, 'all': all,
-                            'hasattr': hasattr, 'getattr': getattr, 'setattr': setattr,
-                            '__import__': lambda name, *args, **kw: __import__(name, *args, **kw)
-                        }
-                        module.__builtins__ = safe_builtins
-                        spec.loader.exec_module(module)
-
-                        logger.info(f"自定义脚本执行: {script_name} -> {target} | kwargs={list(kwargs.keys())}")
-
-                        # 选择入口函数（run 优先，其次 scan）
-                        if hasattr(module, 'run'):
-                            entry = module.run
-                        elif hasattr(module, 'scan'):
-                            entry = module.scan
-                        else:
-                            return {"success": False, "error": "脚本缺少run或scan函数"}
-
-                        # 经 signature 过滤 kwargs，只传 entry 接受的参数（向下兼容旧脚本）
-                        # 旧脚本 run(target) 不接受 cookie 等扩展参数 → 自动忽略
-                        # 新脚本 run(target, cookie=None) 接受 → 收到 __extend_params 注入的参数
-                        import inspect as _inspect
-                        filtered = {}
+                def create_js_tool_func(script_path, script_name):
+                    def tool_func(target: str, **kwargs):
                         try:
-                            entry_sig = _inspect.signature(entry)
-                            accepted = set(entry_sig.parameters.keys())
-                            # 若 entry 含 **kwargs（VAR_KEYWORD），则全部透传
-                            has_var_keyword = any(
-                                p.kind == _inspect.Parameter.VAR_KEYWORD
-                                for p in entry_sig.parameters.values()
+                            payload = {"target": target, "kwargs": kwargs}
+                            runner = r"""
+const fs = require('fs');
+const vm = require('vm');
+const path = process.argv[2];
+const input = JSON.parse(process.argv[3] || '{}');
+const code = fs.readFileSync(path, 'utf8');
+const sandbox = {
+  console,
+  target: input.target,
+  kwargs: input.kwargs || {},
+  module: { exports: {} },
+  exports: {},
+  require: (name) => {
+    const allowed = new Set(['fs', 'path', 'url', 'querystring', 'crypto']);
+    if (!allowed.has(name)) throw new Error('Disallowed module: ' + name);
+    return require(name);
+  },
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+  Buffer,
+  process: { env: {} },
+};
+vm.createContext(sandbox);
+vm.runInContext(code, sandbox, { timeout: 3000 });
+const entry = typeof sandbox.run === 'function' ? sandbox.run
+  : typeof sandbox.scan === 'function' ? sandbox.scan
+  : (sandbox.module && typeof sandbox.module.exports?.run === 'function' ? sandbox.module.exports.run
+  : typeof sandbox.module.exports?.scan === 'function' ? sandbox.module.exports.scan : null);
+if (!entry) throw new Error('JS script missing run(target) or scan(target)');
+Promise.resolve(entry.call(sandbox, input.target, ...(input.kwargs ? [input.kwargs] : [])))
+  .then((output) => {
+    process.stdout.write(JSON.stringify({ success: true, data: output }));
+  })
+  .catch((err) => {
+    process.stdout.write(JSON.stringify({ success: false, error: String(err && err.message ? err.message : err) }));
+    process.exitCode = 1;
+  });
+"""
+                            result = subprocess.run(
+                                ['node', '-e', runner, str(script_path), json.dumps(payload, ensure_ascii=False)],
+                                capture_output=True,
+                                text=True,
+                                timeout=10,
                             )
-                            if has_var_keyword:
-                                filtered = dict(kwargs)
-                            else:
-                                filtered = {k: v for k, v in kwargs.items() if k in accepted}
-                        except (ValueError, TypeError):
-                            filtered = {}
+                            if not result.stdout:
+                                return {"success": False, "error": result.stderr.strip() or "JS script execution failed"}
+                            try:
+                                parsed = json.loads(result.stdout)
+                            except json.JSONDecodeError:
+                                return {"success": False, "error": result.stdout[:500]}
+                            return parsed if isinstance(parsed, dict) else {"success": False, "error": "JS script returned invalid format"}
+                        except subprocess.TimeoutExpired:
+                            return {"success": False, "error": "JS script execution timeout"}
+                        except Exception as e:
+                            logger.error(f"JS custom script {script_name} execution failed: {e}")
+                            return {"success": False, "error": str(e)}
+                    return tool_func
 
+                tool = Tool(
+                    name=base_name,
+                    description=description,
+                    func=create_js_tool_func(str(script_path), base_name)
+                )
+            else:
+                script_path = self._scripts_dir / f"{base_name}.py"
+                with open(script_path, 'w', encoding='utf-8') as f:
+                    f.write(script_content)
+
+                def create_tool_func(script_path, script_name):
+                    def tool_func(target: str, **kwargs):
                         try:
-                            return entry(target, **filtered)
-                        except TypeError:
-                            # entry 不接受 target 单独传（极少情况），尝试只传 kwargs
-                            return entry(**filtered) if filtered else entry()
-                    except Exception as e:
-                        logger.error(f"自定义脚本 {script_name} 执行失败: {e}")
-                        return {"success": False, "error": str(e)}
-                return tool_func
-            
-            tool = Tool(
-                name=script_name,
-                description=description,
-                func=create_tool_func(str(script_path), script_name)
-            )
-            
+                            spec = importlib.util.spec_from_file_location("custom_module", script_path)
+                            if not spec or not spec.loader:
+                                return {"success": False, "error": "无法加载脚本"}
+
+                            module = importlib.util.module_from_spec(spec)
+                            safe_builtins = {
+                                'print': print, 'len': len, 'range': range,
+                                'str': str, 'int': int, 'float': float, 'bool': bool,
+                                'list': list, 'dict': dict, 'set': set, 'tuple': tuple,
+                                'True': True, 'False': False, 'None': None,
+                                'isinstance': isinstance, 'type': type,
+                                'Exception': Exception, 'ValueError': ValueError,
+                                'TypeError': TypeError, 'KeyError': KeyError,
+                                'ImportError': ImportError, 'AttributeError': AttributeError,
+                                'min': min, 'max': max, 'sum': sum, 'sorted': sorted,
+                                'abs': abs, 'round': round, 'enumerate': enumerate,
+                                'zip': zip, 'map': map, 'filter': filter, 'any': any, 'all': all,
+                                'hasattr': hasattr, 'getattr': getattr, 'setattr': setattr,
+                                '__import__': lambda name, *args, **kw: __import__(name, *args, **kw)
+                            }
+                            module.__builtins__ = safe_builtins
+                            spec.loader.exec_module(module)
+
+                            logger.info(f"自定义脚本执行: {script_name} -> {target} | kwargs={list(kwargs.keys())}")
+
+                            if hasattr(module, 'run'):
+                                entry = module.run
+                            elif hasattr(module, 'scan'):
+                                entry = module.scan
+                            else:
+                                return {"success": False, "error": "脚本缺少 run 或 scan 函数"}
+
+                            import inspect as _inspect
+                            filtered = {}
+                            try:
+                                entry_sig = _inspect.signature(entry)
+                                accepted = set(entry_sig.parameters.keys())
+                                has_var_keyword = any(
+                                    p.kind == _inspect.Parameter.VAR_KEYWORD
+                                    for p in entry_sig.parameters.values()
+                                )
+                                if has_var_keyword:
+                                    filtered = dict(kwargs)
+                                else:
+                                    filtered = {k: v for k, v in kwargs.items() if k in accepted}
+                            except (ValueError, TypeError):
+                                filtered = {}
+
+                            try:
+                                return entry(target, **filtered)
+                            except TypeError:
+                                return entry(**filtered) if filtered else entry()
+                        except Exception as e:
+                            logger.error(f"自定义脚本 {script_name} 执行失败: {e}")
+                            return {"success": False, "error": str(e)}
+                    return tool_func
+
+                tool = Tool(
+                    name=base_name,
+                    description=description,
+                    func=create_tool_func(str(script_path), base_name)
+                )
+
             if tool and hasattr(tool, 'name'):
                 TOOL_MAP[tool.name] = tool
                 if tool not in ALL_TOOLS:
                     ALL_TOOLS.append(tool)
                 logger.info(f"动态注册工具: {tool.name}")
-                self._registered_scripts[script_name] = {
+                self._registered_scripts[base_name] = {
                     "path": str(script_path),
                     "description": description,
                     "category": category,
-                    "registered_at": datetime.now().isoformat()
+                    "registered_at": datetime.now().isoformat(),
+                    "language": script_kind,
                 }
-                return {"success": True, "tool_name": script_name, "tool": tool}
-            
+                return {"success": True, "tool_name": base_name, "tool": tool, "language": script_kind}
+
             script_path.unlink(missing_ok=True)
             return {"success": False, "error": "工具注册失败，脚本文件已清理"}
-            
+
         except Exception as e:
             logger.error(f"注册脚本工具失败: {e}")
             return {"success": False, "error": str(e)}
-    
     async def generate_script_with_ai(self, description: str) -> str:
         """使用AI生成扫描脚本"""
         from ..AI.script_safety import extract_code_block

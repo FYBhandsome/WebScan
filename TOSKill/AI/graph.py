@@ -80,6 +80,7 @@ def _parse_chat_response(full_response: str):
     return thought, content
 
 AUTH_MAX_RETRY_COUNT = 3
+WORKFLOW_TIMEOUT_SECONDS = max(60, int(os.getenv("TOSKILL_WORKFLOW_TIMEOUT_SECONDS", "1800")))
 
 
 def _is_dvwa_target(state: ScanState) -> bool:
@@ -1943,7 +1944,15 @@ async def start_scan_node(state: ScanState) -> ScanState:
     planned_tasks = get_tool_sequence(mode)
 
     # TaskStatusStore: 规划后写 planning
-    _safe_set_status(task_id, STATUS_PLANNING, stage="规划", progress=5)
+    _safe_set_status(
+        task_id,
+        STATUS_PLANNING,
+        stage="规划",
+        progress=5,
+        total_tasks=len(planned_tasks),
+        completed_tasks=list(state.get("completed_tasks", []) or []),
+        workflow_timeout_seconds=WORKFLOW_TIMEOUT_SECONDS,
+    )
 
     if ws_callback:
         try:
@@ -2278,7 +2287,15 @@ async def ai_decision(state: ScanState) -> ScanState:
     mode = state.get("mode", "full_scan")
     tool_sequence = get_tool_sequence(mode)
     progress_pct = round((done_count / len(tool_sequence)) * 100) if tool_sequence else 0
-    _safe_set_status(task_id, STATUS_RUNNING, stage="决策", progress=progress_pct)
+    _safe_set_status(
+        task_id,
+        STATUS_RUNNING,
+        stage="决策",
+        progress=progress_pct,
+        total_tasks=len(tool_sequence),
+        completed_tasks=list(state.get("completed_tasks", []) or []),
+        workflow_timeout_seconds=WORKFLOW_TIMEOUT_SECONDS,
+    )
 
     # 检查是否需要跳过剩余任务（高危漏洞确认后用户选择停止）
     if state.get("skip_remaining_tasks"):
@@ -2775,6 +2792,7 @@ async def execute_task(state: ScanState) -> ScanState:
     
     target = state.get("target", "")
     session_id = state.get("websocket_session_id") or state.get("task_id")
+    user_directed_params = dict(state.get("user_directed_params", {}) or {})
     log_collector.add_log(session_id, "execute_task", "info", f"任务开始: {task}, 目标={target}")
     ws_callback = memory_store.get_websocket_callback(session_id)
     
@@ -3487,7 +3505,7 @@ async def report_generation(state: ScanState) -> ScanState:
     log_collector.add_log(session_id, "report_generation", "info", "报告生成开始")
     ws_callback = memory_store.get_websocket_callback(session_id)
     
-    if not tool_results:
+    if not tool_results and state.get("task_status") != "cancelled":
         log_collector.add_log(session_id, "report_generation", "warning", "无扫描结果，报告生成跳过")
         if ws_callback:
             await ws_callback({
@@ -3621,8 +3639,19 @@ async def report_generation(state: ScanState) -> ScanState:
         log_collector.add_log(session_id, "report_generation", "info", "报告生成完成")
 
         # TaskStatusStore: 扫描完成
-        result_payload = {"report_url": report_info.get("download_url", ""),
-                          "report_id": report_info.get("report_id", "")}
+        result_payload = {
+            "report_url": report_info.get("download_url", ""),
+            "report_id": report_info.get("report_id", ""),
+            "html_report_url": html_download_url,
+            "html_report_id": html_report_info.get("report_id", ""),
+            "report_analysis": {
+                "risk_assessment": risk_assessment,
+                "confidence": confidence,
+                "knowledge": knowledge_metadata,
+                "authentication": scan_summary["authentication"],
+            },
+            "report_status": "completed",
+        }
         if confidence is not None:
             result_payload["confidence"] = confidence
         _safe_set_status(state.get("task_id", ""), STATUS_COMPLETED, progress=100, stage="完成",
@@ -3636,6 +3665,7 @@ async def report_generation(state: ScanState) -> ScanState:
             report_url=report_info.get("download_url", ""),
             report_id=report_info.get("report_id", ""),
             html_report_url=html_download_url,
+            html_report_id=html_report_info.get("report_id", ""),
             report_analysis={
                 "risk_assessment": risk_assessment,
                 "confidence": confidence,
@@ -4046,8 +4076,11 @@ class AgentOrchestrator:
                     if isinstance(updated_at, str):
                         updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00").replace("+00:00", ""))
                     elapsed = (datetime.now() - updated_at.replace(tzinfo=None)).total_seconds()
-                    if elapsed > 1800:
-                        logger.warning(f"[{session_id}] 工作流超时({elapsed}s > 1800s)，自动终止")
+                    if elapsed > WORKFLOW_TIMEOUT_SECONDS:
+                        logger.warning(
+                            f"[{session_id}] 工作流超时({elapsed}s > "
+                            f"{WORKFLOW_TIMEOUT_SECONDS}s)，自动终止"
+                        )
                         ws_callback = memory_store.get_websocket_callback(session_id)
                         if ws_callback:
                             try:
@@ -4056,14 +4089,23 @@ class AgentOrchestrator:
                                     "payload": {
                                         "session_id": session_id,
                                         "elapsed_seconds": elapsed,
-                                        "message": "工作流已超过30分钟未响应，自动结束"
+                                        "message": "工作流超过配置的响应上限，已自动结束",
+                                        "workflow_timeout_seconds": WORKFLOW_TIMEOUT_SECONDS,
                                     }
                                 })
                             except Exception:
                                 pass
                         # TaskStatusStore: 工作流超时
-                        _safe_set_status(session_id, STATUS_EXCEPTION, stage="工作流超时",
-                                         error=f"工作流超时({elapsed}s > 1800s)，自动终止")
+                        _safe_set_status(
+                            session_id,
+                            STATUS_EXCEPTION,
+                            stage="工作流超时",
+                            workflow_timeout_seconds=WORKFLOW_TIMEOUT_SECONDS,
+                            error=(
+                                f"工作流超时({elapsed}s > "
+                                f"{WORKFLOW_TIMEOUT_SECONDS}s)，自动终止"
+                            ),
+                        )
                         return update_state(
                             checkpoint.values or {},
                             is_complete=True,

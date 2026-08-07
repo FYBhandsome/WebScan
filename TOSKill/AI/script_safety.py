@@ -34,6 +34,15 @@ class ValidationResult:
             "details": self.details or {}
         }
 
+
+@dataclass
+class NormalizedScript:
+    content: str
+    tool_name: str
+    filename: str
+    language: str
+    details: Dict[str, Any]
+
 DANGEROUS_FUNCTIONS = [
     "os.system",
     "subprocess.call",
@@ -64,8 +73,8 @@ DANGEROUS_FILE_OPS = [
 ]
 
 MAX_SCRIPT_SIZE_BYTES = 500 * 1024
-ALLOWED_EXTENSIONS = [".py"]
-ALLOWED_MIME_TYPES = ["text/x-python", "text/plain", "application/x-python-code"]
+ALLOWED_EXTENSIONS = [".py", ".js"]
+ALLOWED_MIME_TYPES = ["text/x-python", "text/plain", "application/x-python-code", "application/javascript", "text/javascript"]
 
 
 def sanitize_script_name(name: str) -> Tuple[str, str]:
@@ -365,6 +374,7 @@ def validate_script_full(script_content: str, filename: str = None) -> Tuple[boo
         (is_valid, message, details)
     """
     results = []
+    file_ext = ""
     
     if filename:
         try:
@@ -373,8 +383,37 @@ def validate_script_full(script_content: str, filename: str = None) -> Tuple[boo
             results.append(result)
             if not result.is_valid:
                 return False, result.message, result.to_dict()
+            file_ext = os.path.splitext(filename.lower())[1] if "." in filename else ""
         except Exception as e:
             return False, f"文件验证失败: {e}", {"error": str(e)}
+
+    if file_ext == ".js":
+        text_lower = script_content.lower()
+        dangerous_markers = [
+            "child_process",
+            "process.exit",
+            "process.env",
+            "eval(",
+            "function constructor",
+            "new function",
+            "require('child_process')",
+            'require("child_process")',
+        ]
+        for marker in dangerous_markers:
+            if marker in text_lower:
+                return False, f"JS 脚本包含危险调用: {marker}", {
+                    "language": "js",
+                    "marker": marker,
+                }
+        if not re.search(r"\b(function\s+)?(run|scan)\s*\(", script_content) and "module.exports" not in script_content:
+            return False, "JS 脚本缺少 run(target) 或 scan(target) 入口", {
+                "language": "js",
+            }
+        details = {"language": "js"}
+        for r in results:
+            if r.details:
+                details.update(r.details)
+        return True, "脚本验证通过", details
     
     is_safe, safety_msg = validate_script_safety(script_content)
     if not is_safe:
@@ -400,3 +439,48 @@ def validate_script_full(script_content: str, filename: str = None) -> Tuple[boo
             all_details.update(r.details)
     
     return True, "脚本验证通过", all_details
+
+def normalize_script_for_registration(
+    script_content: str,
+    script_name: str = None,
+    filename: str = None,
+    default_prefix: str = "custom",
+) -> Tuple[bool, str, Optional[NormalizedScript]]:
+    """Normalize uploaded or generated scripts before registering them as tools."""
+    code = extract_code_block(script_content) or script_content
+    code = (code or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if code.startswith("\ufeff"):
+        code = code.lstrip("\ufeff").strip()
+
+    raw_name = script_name or filename or f"{default_prefix}_script"
+    raw_name = os.path.splitext(os.path.basename(str(raw_name)))[0]
+    safe_name, name_err = sanitize_script_name(raw_name)
+    if name_err:
+        return False, name_err, None
+
+    if not safe_name.startswith(("custom_", "ai_gen_")):
+        safe_name = f"{default_prefix}_{safe_name}"
+
+    language_hint = str(filename or script_name or "").lower()
+    if language_hint.endswith(".js"):
+        language = "js"
+    elif language_hint.endswith(".py"):
+        language = "py"
+    else:
+        # Older clients did not send filename/language for the upload card.
+        # Recognize the unambiguous JS entry-point shape before Python AST parsing.
+        looks_like_js = bool(re.search(r"\b(function\s+)?(run|scan)\s*\(", code)) or "module.exports" in code
+        language = "js" if looks_like_js and "def run" not in code else "py"
+    normalized_filename = f"{safe_name}.{language}"
+
+    is_valid, message, details = validate_script_full(code, normalized_filename)
+    if not is_valid:
+        return False, message, None
+
+    return True, message, NormalizedScript(
+        content=code,
+        tool_name=safe_name,
+        filename=normalized_filename,
+        language=language,
+        details=details,
+    )

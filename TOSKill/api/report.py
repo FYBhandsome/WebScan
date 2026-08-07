@@ -73,7 +73,24 @@ async def list_reports() -> APIResponse:
         mapping_reports = rm.get_all_reports()
         
         for mp in mapping_reports:
-            existing = next((r for r in reports if r["id"] == mp.get("report_id")), None)
+            existing = next(
+                (
+                    report for report in reports
+                    if report["id"] == mp.get("report_id")
+                    or report["name"] == mp.get("report_file")
+                ),
+                None,
+            )
+            if existing:
+                existing.update({
+                    key: mp[key]
+                    for key in (
+                        "session_id", "target", "confidence", "ai_analysis",
+                        "risk_assessment", "vulnerabilities_count",
+                    )
+                    if key in mp
+                })
+                continue
             if not existing and mp.get("report_file"):
                 rp = REPORTS_DIR / mp.get("report_file")
                 if rp.exists():

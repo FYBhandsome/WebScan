@@ -22,7 +22,11 @@
       >
         <div class="report-info">
           <h4>{{ report.name }}</h4>
-          <p>大小: {{ formatSize(report.size) }} | 修改时间: {{ formatDate(report.modified_at) }}</p>
+          <p v-if="report.target" class="report-target" :title="report.target">目标: {{ report.target }}</p>
+          <p>大小: {{ formatSize(report.size) }} | 修改时间: {{ formatDate(report.modified_at || report.created_at) }}</p>
+          <span v-if="report.risk_assessment?.overall_risk" class="risk-badge">
+            风险: {{ report.risk_assessment.overall_risk }}
+          </span>
         </div>
         <div v-if="confidenceTotal(report) !== null" class="report-confidence" title="报告置信度">
           <svg viewBox="0 0 42 42" class="confidence-ring">
@@ -67,7 +71,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { marked } from 'marked'
 import { Download, X } from 'lucide-vue-next'
 import { API } from '../../services/api.js'
@@ -97,6 +101,8 @@ const isHtmlReport = computed(() => {
   return viewer.filename && viewer.filename.endsWith('.html') && viewer.content
 })
 
+let refreshHandler = null
+
 const fetchReports = async () => {
   isLoading.value = true
   errorMsg.value = ''
@@ -112,6 +118,21 @@ const fetchReports = async () => {
 
 onMounted(() => {
   fetchReports()
+  if (typeof window !== 'undefined') {
+    refreshHandler = () => fetchReports()
+    window.addEventListener('ai-chat:scan-completed', refreshHandler)
+    window.addEventListener('ai-websocket:scan-completed', refreshHandler)
+    window.addEventListener('ai-websocket:report-ready', refreshHandler)
+  }
+})
+
+onUnmounted(() => {
+  if (typeof window !== 'undefined' && refreshHandler) {
+    window.removeEventListener('ai-chat:scan-completed', refreshHandler)
+    window.removeEventListener('ai-websocket:scan-completed', refreshHandler)
+    window.removeEventListener('ai-websocket:report-ready', refreshHandler)
+    refreshHandler = null
+  }
 })
 
 const openViewer = async (filename) => {
@@ -459,6 +480,24 @@ const formatDate = (dateStr) => {
 .report-card {
   background: #FAFAFA !important;
   border: 1px solid #EDEDED;
+}
+
+.report-target {
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.risk-badge {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border: 1px solid rgba(22, 160, 133, 0.25);
+  border-radius: 4px;
+  color: #147d6b;
+  font-size: 11px;
 }
 
 .report-confidence {

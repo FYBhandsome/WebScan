@@ -7,6 +7,31 @@
 
     <div class="scan-layout">
       <div class="form-section">
+        <div class="lab-targets">
+          <div class="lab-targets-header">
+            <h3>公开实训靶场案例</h3>
+            <span class="lab-targets-note">按公开靶场的常见漏洞密度排序，仅用于练习环境</span>
+          </div>
+          <div class="lab-targets-list">
+            <button
+              v-for="target in labTargets"
+              :key="target.url"
+              type="button"
+              class="lab-target-item"
+              @click="applyLabTarget(target)"
+            >
+              <div class="lab-target-main">
+                <div class="lab-target-name">{{ target.name }}</div>
+                <div class="lab-target-url">{{ target.url }}</div>
+              </div>
+              <div class="lab-target-meta">
+                <span class="lab-target-badge">{{ target.vulnCount }} 项常见漏洞</span>
+                <span class="lab-target-level">{{ target.level }}</span>
+              </div>
+            </button>
+          </div>
+        </div>
+
         <div v-if="isLoading" class="loading-overlay">
           <div class="loading-content">
             <el-icon class="loading-icon" :size="40">
@@ -333,6 +358,15 @@ export default {
     const maxRetryCount = 3
     const expandedStages = ref({})
     const currentTarget = ref('')
+    const labTargets = [
+      { name: 'OWASP Juice Shop Demo', url: 'http://demo.owasp-juice.shop', vulnCount: 120, level: '极高' },
+      { name: 'Acuart / testphp', url: 'http://testphp.vulnweb.com', vulnCount: 96, level: '很高' },
+      { name: 'Altoro Mutual Demo', url: 'https://demo.testfire.net', vulnCount: 84, level: '较高' },
+      { name: 'Acuforum / testasp', url: 'http://testasp.vulnweb.com', vulnCount: 72, level: '较高' },
+      { name: 'Acublog / testaspnet', url: 'http://testaspnet.vulnweb.com', vulnCount: 66, level: '中高' },
+      { name: 'SecurityTweets / testhtml5', url: 'http://testhtml5.vulnweb.com', vulnCount: 60, level: '中等' },
+      { name: 'REST Demo', url: 'http://rest.vulnweb.com', vulnCount: 54, level: '中等' }
+    ]
     
     const subgraphState = reactive({
       planning: { status: 'pending', progress: 0, time: 0 },
@@ -820,6 +854,16 @@ export default {
       toast.success('AI对话扫描完成', '扫描任务已完成')
       loadRecentTasks()
     }
+
+    const applyLabTarget = (target) => {
+      currentTarget.value = target.url
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('toskill:lab-target-selected', {
+          detail: target
+        }))
+      }
+      toast.info(`已选择练习靶场：${target.name}`)
+    }
     
     const handleReportReady = (report) => {
       toast.success('报告已生成', '点击下载报告')
@@ -897,6 +941,7 @@ export default {
       pluginResults,
       showPluginResultDialog,
       currentPluginResult,
+      labTargets,
       subgraphList,
       subgraphState,
       isLoading,
@@ -924,7 +969,8 @@ export default {
       viewPluginResult,
       handleAIChatScanStarted,
       handleAIChatScanCompleted,
-      handleReportReady
+      handleReportReady,
+      applyLabTarget
     }
   }
 }
@@ -969,6 +1015,84 @@ export default {
   display: grid;
   grid-template-columns: 1fr 400px;
   gap: var(--spacing-xl);
+}
+
+.lab-targets {
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-lg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-lg);
+  background: var(--card-bg);
+}
+
+.lab-targets-header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+
+.lab-targets-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.lab-targets-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.lab-targets-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-sm);
+}
+
+.lab-target-item {
+  width: 100%;
+  text-align: left;
+  padding: var(--spacing-md);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  background: var(--bg-secondary);
+  cursor: pointer;
+}
+
+.lab-target-item:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-bg);
+}
+
+.lab-target-main {
+  margin-bottom: var(--spacing-sm);
+}
+
+.lab-target-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.lab-target-url {
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.lab-target-meta {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.lab-target-badge,
+.lab-target-level {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--border-radius-sm);
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text-secondary);
 }
 
 .form-section {
@@ -1671,6 +1795,10 @@ export default {
 
 @media (max-width: 1024px) {
   .scan-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .lab-targets-list {
     grid-template-columns: 1fr;
   }
 }

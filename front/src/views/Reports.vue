@@ -149,7 +149,7 @@
 </template>
 
 <script>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { reportsApi, tasksApi } from '@/utils/api'
 import Alert from '@/components/common/Alert.vue'
@@ -175,6 +175,7 @@ export default {
     const generating = ref(false)
     const downloading = ref(null)
     const deleting = ref(null)
+    const scanReportListener = ref(null)
 
     const reportFormats = [
       { value: 'html', name: 'HTML', icon: '🌐' },
@@ -233,6 +234,22 @@ export default {
       } finally {
         loadingReports.value = false
       }
+    }
+
+    const bindReportRefresh = () => {
+      if (typeof window === 'undefined') return
+      scanReportListener.value = () => {
+        fetchReports()
+      }
+      window.addEventListener('ai-websocket:scan-completed', scanReportListener.value)
+      window.addEventListener('ai-websocket:report-ready', scanReportListener.value)
+    }
+
+    const unbindReportRefresh = () => {
+      if (typeof window === 'undefined' || !scanReportListener.value) return
+      window.removeEventListener('ai-websocket:scan-completed', scanReportListener.value)
+      window.removeEventListener('ai-websocket:report-ready', scanReportListener.value)
+      scanReportListener.value = null
     }
 
     const generateReport = async () => {
@@ -390,6 +407,11 @@ export default {
     onMounted(() => {
       fetchTasks()
       fetchReports()
+      bindReportRefresh()
+    })
+
+    onUnmounted(() => {
+      unbindReportRefresh()
     })
 
     return {

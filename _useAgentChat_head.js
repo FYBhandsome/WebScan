@@ -15,7 +15,6 @@ export function useAgentChat() {
   const scanProgress = ref({ current: 0, total: 0, activeTool: '' })
   const pendingInputRequest = ref(null)
   const scanStatus = ref('idle')
-  const stopPending = ref(false)
   const authCookies = ref({})
   const authCookieMeta = ref({ source: '', obtainedAt: '', cookieCount: 0 })
   const lastEventSequence = ref(0)
@@ -138,8 +137,8 @@ export function useAgentChat() {
     if (!file) return { valid: false, error: '未选择文件' }
     
     const ext = file.name.toLowerCase().split('.').pop()
-    if (!['py', 'js'].includes(ext)) {
-      return { valid: false, error: `不支持的文件类型: .${ext}，仅支持 .py 或 .js 文件` }
+    if (ext !== 'py') {
+      return { valid: false, error: `不支持的文件类型: .${ext}，仅支持 .py 文件` }
     }
     
     if (file.size > MAX_SCRIPT_SIZE) {
@@ -162,7 +161,7 @@ export function useAgentChat() {
     try {
       const content = await readFileContent(file)
       scriptUploadProgress.value = { stage: 'validating', progress: 20, message: '正在验证脚本...' }
-      return { name: file.name.replace(/\.(py|js)$/i, ''), content, filename: file.name, language: ext }
+      return { name: file.name.replace('.py', ''), content }
     } catch (error) {
       scriptUploadProgress.value = { stage: 'failed', progress: 100, message: error.message }
       addErrorBlock(`文件读取失败: ${error.message}`, { source: 'frontend' })
@@ -567,21 +566,10 @@ export function useAgentChat() {
         label: '脚本内容',
         description: '脚本必须包含 def run(target): 函数',
         placeholder: 'def run(target):\n    # your code here\n    return {"success": True}',
-        required: false,
+        required: true,
         validation: 'python_code',
         options: [],
         value: ''
-      }, {
-        field: 'script_file',
-        label: '从文件导入',
-        description: '支持 .py/.js 文件，大小不超过 500KB；选择文件后可直接提交。',
-        placeholder: '',
-        required: false,
-        validation: 'script_file',
-        options: [],
-        value: '',
-        filename: '',
-        error: ''
       }],
       resolved: false,
       context: 'upload_script',
@@ -679,20 +667,12 @@ export function useAgentChat() {
 
   const handleStop = () => {
     if (scriptLoopActive.value) scriptLoopActive.value = false
-    stopPending.value = true
+    scanActive.value = false
     isTyping.value = false
     isThinking.value = false
     showModeSelect.value = false
-    const sent = ws.sendStopScan()
-    if (sent) {
-      addBlock('agent_info', { content: '已发送停止请求，等待后端确认...' })
-    } else {
-      stopPending.value = false
-      addErrorBlock('停止请求未发送：WebSocket 未连接。请先恢复连接或刷新页面。', {
-        source: 'websocket',
-        suggestion: '后端未收到 stop_scan 时，扫描可能仍在后台运行。'
-      })
-    }
+    ws.sendStopScan()
+    addBlock('agent_info', { content: '已发送停止请求' })
   }
 
   // === 交互卡片事件分发 ===
@@ -819,23 +799,11 @@ export function useAgentChat() {
       } else if (block.context === 'upload_script') {
         pendingUploadScript.value = false
         const scriptName = fields.find(f => f.field === 'script_name')?.value || null
-        const contentField = fields.find(f => f.field === 'script_content')
-        const fileField = fields.find(f => f.field === 'script_file')
-        const scriptContent = contentField?.value || fileField?.value || ''
-        const filename = fileField?.filename || ''
-        if (!scriptContent.trim()) {
-          block.resolved = false
-          return showToast('请粘贴脚本内容或选择 .py/.js 文件', 'warning')
-        }
+        const scriptContent = fields.find(f => f.field === 'script_content')?.value || ''
         const name = scriptName || `custom_${Date.now().toString(36)}`
         addBlock('user_command', { content: `[上传脚本]: ${name}` })
         isTyping.value = true
-        ws.send('script_content', {
-          script_content: scriptContent,
-          script_name: name,
-          filename: filename || name,
-          language: filename.toLowerCase().endsWith('.js') ? 'js' : 'py'
-        })
+        ws.send('script_content', { script_content: scriptContent, script_name: name })
         return
       } else if (block.context === 'generate_script') {
         pendingGenerateScript.value = false
@@ -1016,23 +984,8 @@ export function useAgentChat() {
         break
 
       case 'scan_cancelled':
-        if (data.payload?.report_status === 'completed' || data.payload?.report_id || data.payload?.report_url) {
-          scanStatus.value = 'completed'
-          isTyping.value = false
-          stopPending.value = false
-          scanActive.value = false
-          addBlock('agent_text', {
-            content: `扫描已停止，报告已生成\n目标: ${data.payload?.target || '-'}\n报告: ${data.payload?.html_report_url || data.payload?.report_url || '-'}`
-          })
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('ai-websocket:report-ready', { detail: data.payload }))
-          }
-          break
-        }
         scanStatus.value = 'idle'
         isTyping.value = false
-        stopPending.value = false
-        scanActive.value = false
         addInfoBlock('扫描已取消')
         break
 
@@ -1301,9 +1254,6 @@ export function useAgentChat() {
           reportContent += `\n\n${preview}`
         }
         addBlock('agent_text', { content: reportContent })
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('ai-websocket:report-ready', { detail: data.payload }))
-        }
         break
 
       case 'report_error':
@@ -1513,8 +1463,6 @@ export function useAgentChat() {
       case 'workflow_error':
         isTyping.value = false
         isThinking.value = false
-        stopPending.value = false
-        scanActive.value = false
         addErrorBlock(`工作流错误: ${data.payload?.error || '未知错误'}`, {
           source: 'backend',
           category: data.payload?.code || 'WORKFLOW_ERROR',
@@ -1527,8 +1475,6 @@ export function useAgentChat() {
         isTyping.value = false
         isThinking.value = false
         scanStatus.value = 'idle'
-        stopPending.value = false
-        scanActive.value = false
         addErrorBlock(`工作流超时: ${data.payload?.message || '已超过30分钟未响应，自动结束'}`, {
           source: 'backend',
           category: 'WORKFLOW_TIMEOUT',
@@ -1552,7 +1498,6 @@ export function useAgentChat() {
       case 'error':
         isTyping.value = false
         scanStatus.value = 'error'
-        stopPending.value = false
         const errorPayload = data.payload || {}
         addErrorBlock(
           errorPayload.message || errorPayload.error || '未知错误',
@@ -1564,14 +1509,6 @@ export function useAgentChat() {
             details: errorPayload.details
           }
         )
-        break
-
-      case 'client_message_error':
-        addErrorBlock(data.payload?.message || '收到无法解析的 WebSocket 消息，已忽略。', {
-          source: 'websocket',
-          suggestion: '这通常是后端推送了异常消息格式，前端已做兼容，不会影响当前页面。',
-          details: data.payload?.raw || data.payload?.error || ''
-        })
         break
 
       case 'execution_plan':
@@ -1634,21 +1571,14 @@ export function useAgentChat() {
       const reason = event?.reason || '连接已关闭'
       addErrorBlock(`WebSocket 连接断开: ${reason}`, { 
         source: 'websocket',
-        suggestion: '正在尝试自动重连；如果后端已退出，请先启动 FastAPI 再刷新页面。'
+        suggestion: '正在尝试重新连接...'
       })
     })
     
-    ws.onError((error, context) => {
-      if (context?.critical) {
-        addErrorBlock(error?.message || '关键控制消息发送失败', {
-          source: 'websocket',
-          suggestion: '请先恢复 WS 连接，否则停止/确认类指令不会真正到达后端。'
-        })
-        return
-      }
+    ws.onError((error) => {
       addErrorBlock('WebSocket 连接错误', { 
         source: 'websocket',
-        suggestion: '请检查网络连接或代理配置；若后端未启动，先确认 127.0.0.1:8081 可访问。'
+        suggestion: '请检查网络连接，或刷新页面重试'
       })
     })
     

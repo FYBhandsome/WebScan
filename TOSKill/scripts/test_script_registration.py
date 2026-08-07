@@ -44,10 +44,10 @@ result = script_manager.register_script_as_tool(
 )
 
 if result.get("success"):
-    print(f"   ✅ 脚本注册成功: {result['tool_name']}")
+if result.get("success"): 
+    print(f"   [PASS] 脚本注册成功: {result["tool_name"]}")
 else:
-    print(f"   ❌ 脚本注册失败: {result.get('error')}")
-
+    print(f"   [FAIL] 脚本注册失败: {result.get("error")}")
 print("\n3. 验证工具是否已添加到TOOL_MAP...")
 print("   注册后工具数量:", len(TOOL_MAP))
 print("   工具 'custom_https_check' 存在:", "custom_https_check" in TOOL_MAP)
@@ -60,9 +60,9 @@ if "custom_https_check" in TOOL_MAP:
     try:
         test_result = tool.invoke("https://example.com")
         print(f"   执行结果: {test_result}")
-        print("   ✅ 工具执行成功")
+        print("   [PASS] 工具执行成功")
     except Exception as e:
-        print(f"   ❌ 工具执行失败: {e}")
+        print(f"   [FAIL] 工具执行失败: {e}")
 
 print("\n5. 检查ALL_TOOLS列表...")
 custom_tools = [t for t in ALL_TOOLS if hasattr(t, 'name') and (t.name.startswith('custom_') or t.name.startswith('ai_gen_'))]

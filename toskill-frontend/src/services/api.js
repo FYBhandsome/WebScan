@@ -2,6 +2,7 @@ class ApiService {
   constructor() {
     this.baseUrl = '/api';
     this.wsUrl = '';
+    this.pendingIntentParams = {};
     this.wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     this.WS_PATH = '/api/ai-chat/ws';
   }
@@ -33,31 +34,47 @@ class ApiService {
 
     try {
       const response = await fetch(url, config);
-      const data = await response.json();
+      const contentType = response.headers.get('content-type') || '';
+      const rawText = await response.text();
+      let data = null;
+
+      if (rawText) {
+        if (contentType.includes('application/json')) {
+          try {
+            data = JSON.parse(rawText);
+          } catch (parseError) {
+            throw new Error(`后端返回了无效 JSON：${parseError.message}`);
+          }
+        } else {
+          data = { message: rawText };
+        }
+      }
 
       if (!response.ok) {
-        // ✅ 增强版错误解析：精准翻译 FastAPI 的报错
+        // FastAPI validation errors and Vite proxy errors should become
+        // readable UI messages instead of JSON parse failures.
         let errorMsg = `HTTP ${response.status}`;
         
-        if (Array.isArray(data.detail)) {
-          // 处理 422 验证错误，提取出具体是哪个字段报错
+        if (Array.isArray(data?.detail)) {
           errorMsg = data.detail.map(err => {
-            const field = err.loc[err.loc.length - 1]; // 获取报错的字段名
+            const field = err.loc?.[err.loc.length - 1] || 'unknown';
             return `字段 [${field}] 错误: ${err.msg}`;
           }).join(' | ');
-        } else if (data.detail) {
-          // 处理常规错误字符串
+        } else if (data?.detail) {
           errorMsg = data.detail;
-        } else if (data.message) {
+        } else if (data?.message) {
           errorMsg = data.message;
         }
         
         throw new Error(errorMsg);
       }
 
-      return data;
+      return data ?? {};
     } catch (error) {
       if (import.meta.env.DEV) console.error('API Error:', error);
+      if (error instanceof TypeError && /fetch|network|failed|load/i.test(error.message)) {
+        throw new Error('无法连接后端服务，请确认 FastAPI 已在 127.0.0.1:8081 启动，且 Vite /api 代理配置正确。');
+      }
       throw error;
     }
   }
@@ -224,7 +241,19 @@ class ApiService {
 
   // --- Intent Parsing ---
   async parseIntent(message) {
-    return this.post('/parse-intent', { message });
+    const response = await this.post('/parse-intent', { message });
+    const intent = response?.data || {};
+    this.pendingIntentParams = {
+      ...(intent.params || {}),
+      ...(intent.next_task ? { next_task: intent.next_task } : {}),
+    };
+    return response;
+  }
+
+  consumeIntentParams() {
+    const params = { ...this.pendingIntentParams };
+    this.pendingIntentParams = {};
+    return params;
   }
 }
 

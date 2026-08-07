@@ -19,10 +19,15 @@
           <div class="form-group">
             <label>扫描模式</label>
             <select id="scanMode" v-model="form.mode">
-              <option value="info">信息收集</option>
-              <option value="vuln">漏洞扫描</option>
-              <option value="full">完整扫描</option>
+              <option value="info_collection">信息收集</option>
+              <option value="vuln_scan">漏洞扫描</option>
+              <option value="full_scan">完整扫描</option>
             </select>
+          </div>
+          <div class="form-group">
+            <label>任务参数（JSON，可选）</label>
+            <textarea v-model="form.paramsText" rows="4" placeholder='例如：{"timeout": 30, "next_task": "baseinfo_scan"}' @keydown.ctrl.enter="startScan"></textarea>
+            <p v-if="paramsError" class="field-error">{{ paramsError }}</p>
           </div>
           <button
             id="startScanBtn"
@@ -224,12 +229,13 @@
             </div>
             <div class="form-group">
               <label>或从文件导入</label>
-              <input type="file" @change="onScriptFileChange" accept=".py,.sh,.js,.txt">
+              <input type="file" @change="onScriptFileChange" accept=".py,.js">
             </div>
+            <p v-if="scriptProgress.message" class="upload-status" :class="scriptProgress.stage">{{ scriptProgress.message }}</p>
           </div>
           <div class="panel-footer">
-            <button class="primary-btn" @click="submitScriptUpload" :disabled="submittingScript">
-              {{ submittingScript ? '上传中...' : '上传脚本' }}
+            <button class="primary-btn" @click="submitScriptUpload" :disabled="submittingScript || readingScript">
+              {{ readingScript ? '读取中...' : (submittingScript ? '上传中...' : '上传脚本') }}
             </button>
           </div>
         </div>
@@ -350,12 +356,14 @@ import { TaskPoller } from '../../services/taskPoller.js'
 marked.setOptions({ breaks: true, gfm: true })
 
 const scanModes = [
-  { value: 'info', name: '信息收集', desc: 'WHOIS、DNS、子域名、端口扫描等基础信息', badge: '轻量·快速' },
-  { value: 'vuln', name: '漏洞扫描', desc: 'XSS、SQL注入、CSRF等常见Web漏洞检测', badge: '中等·约3-5分钟' },
-  { value: 'full', name: '完整扫描', desc: '信息收集+漏洞扫描+AI决策链条', badge: '深度·约5-10分钟' },
+  { value: 'info_collection', name: '信息收集', desc: 'WHOIS、DNS、子域名、端口扫描等基础信息', badge: '轻量·快速' },
+  { value: 'vuln_scan', name: '漏洞扫描', desc: 'XSS、SQL注入、CSRF等常见Web漏洞检测', badge: '中等·约3-5分钟' },
+  { value: 'full_scan', name: '完整扫描', desc: '信息收集+漏洞扫描+AI决策链条', badge: '深度·约5-10分钟' },
 ]
 
-const form = reactive({ target: '', mode: 'info' })
+const form = reactive({ target: '', mode: 'info_collection', paramsText: '' })
+const paramsError = ref('')
+const requestedNextTask = ref('')
 const isScanning = ref(false)
 const progress = ref(0)
 const statusText = ref('准备中...')
@@ -385,6 +393,8 @@ const submittingInput = ref(false)
 /** 脚本上传表单 */
 const scriptForm = reactive({ script_name: '', script_content: '', filename: '' })
 const submittingScript = ref(false)
+const readingScript = ref(false)
+const scriptProgress = reactive({ stage: '', progress: 0, message: '' })
 const SCAN_STATE_STORAGE_KEY = 'toskill_scan_view_state_v2'
 
 const persistScanState = () => {
@@ -419,7 +429,12 @@ const restoreScanState = () => {
     const saved = sessionStorage.getItem(SCAN_STATE_STORAGE_KEY)
     if (!saved) return
     const state = JSON.parse(saved)
-    if (state.form) Object.assign(form, state.form)
+    if (state.form) {
+      Object.assign(form, state.form)
+      const modeAliases = { info: 'info_collection', vuln: 'vuln_scan', full: 'full_scan' }
+      if (modeAliases[form.mode]) form.mode = modeAliases[form.mode]
+      if (typeof form.paramsText !== 'string') form.paramsText = ''
+    }
     if (typeof state.isScanning === 'boolean') isScanning.value = state.isScanning
     if (typeof state.progress === 'number') progress.value = state.progress
     if (typeof state.statusText === 'string') statusText.value = state.statusText
@@ -582,13 +597,16 @@ const addTask = (taskName, status = 'pending') => {
 }
 
 const updateTaskStatus = (taskName, status) => {
+  if (!taskName) return
+  if (!tasks.value.find(t => t.name === taskName)) addTask(taskName, status)
   const task = tasks.value.find(t => t.name === taskName)
   if (task && task.status !== status) {
     task.status = status
     if (status === 'completed' || status === 'error') {
-      task.elapsed = formatElapsed(Date.now() - task.startTime)
-      completedTasksCount.value++
+      task.elapsed = task.startTime ? formatElapsed(Date.now() - task.startTime) : 'N/A'
     }
+    completedTasksCount.value = tasks.value.filter(item => ['completed', 'error'].includes(item.status)).length
+    totalTasksCount.value = Math.max(totalTasksCount.value, tasks.value.length)
     const pct = Math.round((completedTasksCount.value / (totalTasksCount.value || 1)) * 100)
     progress.value = pct
     statusText.value = `已完成 ${completedTasksCount.value}/${totalTasksCount.value} 任务`
@@ -602,14 +620,37 @@ const startScan = async () => {
     return
   }
 
+  let params = {}
+  try {
+    if (form.paramsText.trim()) {
+      params = JSON.parse(form.paramsText)
+      if (!params || Array.isArray(params) || typeof params !== 'object') throw new Error('任务参数必须是 JSON 对象')
+    }
+    requestedNextTask.value = String(params.next_task || params.user_directed_next_task || '').trim()
+    paramsError.value = ''
+  } catch (error) {
+    paramsError.value = error.message
+    showToast(error.message, 'warning')
+    return
+  }
+
   initProgress()
 
   try {
+    if (ws.isConnected()) {
+      if (!ws.startScan(target, form.mode, params)) throw new Error('WebSocket 发送失败')
+      globalState.currentTarget = target
+      statusText.value = '扫描请求已发送，等待 AI 规划...'
+      addScanHistory(target)
+      scanHistory.value = getScanHistory()
+      return
+    }
+
     let result
     switch (form.mode) {
-      case 'info': result = await API.startInfoScan(target); break
-      case 'vuln': result = await API.startVulnScan(target); break
-      case 'full': result = await API.startFullScan(target); break
+      case 'info_collection': result = await API.startInfoScan(target, params); break
+      case 'vuln_scan': result = await API.startVulnScan(target, params); break
+      case 'full_scan': result = await API.startFullScan(target, params); break
     }
 
     if (!result || !result.data) {
@@ -655,7 +696,30 @@ const startScan = async () => {
 
 const ensureReportGenerated = async (scanData) => {
   const sessionId = scanData?.session_id || scanData?.task_id
-  if (!sessionId || scanData?.report || scanData?.report_url || isGeneratingReport.value) return
+  if (!sessionId || isGeneratingReport.value) return
+
+  // Completed polling status may contain the persisted report URL but omit
+  // the full Markdown body. Load it directly instead of generating a duplicate.
+  if (!scanData?.report && scanData?.report_url) {
+    try {
+      const filename = decodeURIComponent(String(scanData.report_url).split('/').pop())
+      const response = await API.getReportContent(filename)
+      const content = response?.data?.content || ''
+      if (content) {
+        resultsData.value = {
+          ...resultsData.value,
+          ...scanData,
+          report: content,
+          report_status: 'completed'
+        }
+        return
+      }
+    } catch (error) {
+      console.warn('已保存报告读取失败，将尝试重新生成:', error)
+    }
+  }
+
+  if (scanData?.report) return
 
   isGeneratingReport.value = true
   resultsData.value = {
@@ -688,7 +752,16 @@ const handleScanResult = (data) => {
   isScanning.value = false
   progress.value = 100
   statusText.value = '扫描完成'
-  resultsData.value = data.payload || data.data || data
+  resultsData.value = data?.payload || data?.data || data || {}
+  const resultTasks = resultsData.value.completed_tasks || []
+  if (Array.isArray(resultTasks)) {
+    resultTasks.forEach(name => updateTaskStatus(name, 'completed'))
+    completedTasksCount.value = resultTasks.length
+    totalTasksCount.value = Math.max(totalTasksCount.value, resultTasks.length)
+  }
+  if (resultsData.value.next_task) {
+    statusText.value = `扫描完成，下一任务：${resultsData.value.next_task}`
+  }
   showResults.value = true
   if (form.target.trim()) {
     addScanHistory(form.target.trim())
@@ -698,7 +771,7 @@ const handleScanResult = (data) => {
 }
 
 const cancelScan = () => {
-  ws.send('cancel_scan', {})
+  ws.sendStopScan()
   isScanning.value = false
   progress.value = 0
   statusText.value = '已取消'
@@ -717,13 +790,39 @@ const startTaskPolling = (taskId) => {
   if (!taskId) return
   currentTaskId.value = taskId
   taskPoller.stop()
-  taskPoller.start(taskId, onTaskStatus, { interval: 2000 })
+  taskPoller.start(taskId, onTaskStatus, {
+    interval: 2000,
+    onError: (error) => {
+      wsOffline.value = !ws.isConnected()
+      if (error.message.includes('超过上限')) {
+        showToast('任务轮询已达到后端执行上限，请检查后端日志或重新发起扫描', 'warning')
+      }
+    }
+  })
   isPolling.value = taskPoller.isPolling
 }
 
 const stopTaskPolling = () => {
   taskPoller.stop()
   isPolling.value = false
+}
+
+const normalizeTaskStatus = (status) => {
+  const root = status?.data?.status ? status.data : (status?.data || status || {})
+  const result = root.result?.data || root.result || {}
+  const completed = root.completed_tasks || result.completed_tasks || []
+  const total = root.total_tasks || result.total_tasks || root.total || totalTasksCount.value || completed.length
+  const progressValue = root.progress_percent ?? root.progress ?? (total ? (completed.length / total) * 100 : 0)
+  completed.forEach(name => {
+    addTask(name, 'completed')
+    const task = tasks.value.find(item => item.name === name)
+    if (task && !task.elapsed && task.startTime) task.elapsed = formatElapsed(Date.now() - task.startTime)
+  })
+  completedTasksCount.value = completed.length
+  totalTasksCount.value = Math.max(totalTasksCount.value, Number(total) || 0)
+  progress.value = Math.max(progress.value, Math.min(100, Number(progressValue) || 0))
+  if (root.next_task) statusText.value = `${root.stage || '工作流'}，下一任务：${root.next_task}`
+  return { ...root, progress: Number(progressValue) || 0, result }
 }
 
 const submitInteraction = (choice) => {
@@ -738,6 +837,16 @@ const submitInteraction = (choice) => {
       fields: [{ name: 'chat_message', type: 'text', description: '请输入要向智能体询问或补充的内容', required: true }]
     }
     interactionRequest.value = null
+    return
+  }
+  if (String(choice) === '2') {
+    ws.sendStopScan()
+    interactionRequest.value = null
+    waitingInput.value = null
+    waitingScript.value = null
+    isScanning.value = false
+    stopTaskPolling()
+    showToast('扫描已停止', 'warning')
     return
   }
   ws.sendConfirm(choice)
@@ -760,7 +869,7 @@ const submitInteraction = (choice) => {
  */
 const onTaskStatus = (status) => {
   // 兼容后端返回 {data:{...}} 或裸对象
-  const st = (status && status.status) ? status : ((status && status.data && status.data.status) ? status.data : {})
+  const st = normalizeTaskStatus(status)
   if (!st.status) return
 
   // 每次轮询刷新 WS 连接状态（不注册 onDisconnect 以免覆盖其他组件回调）
@@ -782,7 +891,7 @@ const onTaskStatus = (status) => {
       break
 
     case 'waiting_user_input':
-      waitingInput.value = st.waiting_input || null
+      waitingInput.value = st.waiting_input || st.data?.waiting_input || null
       // 用 default 初始化表单值（仅初始化未出现过的字段）
       if (waitingInput.value && Array.isArray(waitingInput.value.fields)) {
         waitingInput.value.fields.forEach(f => {
@@ -799,7 +908,7 @@ const onTaskStatus = (status) => {
       break
 
     case 'waiting_script_upload':
-      waitingScript.value = st.waiting_script || null
+      waitingScript.value = st.waiting_script || st.data?.waiting_script || null
       // 同样停止轮询，等待用户上传后重启
       taskPoller.stop()
       isPolling.value = false
@@ -808,9 +917,7 @@ const onTaskStatus = (status) => {
     case 'completed':
       waitingInput.value = null
       waitingScript.value = null
-      if (st.result) {
-        handleScanResult(st.result)
-      }
+      handleScanResult({ ...(st.result || {}), ...st })
       stopTaskPolling()
       break
 
@@ -889,11 +996,16 @@ const submitScriptUpload = () => {
     return
   }
   const name = scriptForm.script_name.trim() || `custom_${Date.now().toString(36)}`
+  const language = scriptForm.filename.toLowerCase().endsWith('.js') ? 'js' : 'py'
+  scriptProgress.stage = 'uploading'
+  scriptProgress.progress = 0
+  scriptProgress.message = `正在发送脚本(${language})...`
   submittingScript.value = true
   const sent = ws.send('script_content', {
     script_content: scriptForm.script_content,
     script_name: name,
-    filename: scriptForm.filename || name
+    filename: scriptForm.filename || name,
+    language
   })
   submittingScript.value = false
   if (sent) {
@@ -902,6 +1014,9 @@ const submitScriptUpload = () => {
     scriptForm.script_name = ''
     scriptForm.script_content = ''
     scriptForm.filename = ''
+    scriptProgress.stage = 'sent'
+    scriptProgress.progress = 10
+    scriptProgress.message = '脚本已发送，等待后端校验...'
     // 重启轮询追踪恢复进度
     const tid = currentTaskId.value
     if (tid) {
@@ -918,6 +1033,18 @@ const submitScriptUpload = () => {
 const onScriptFileChange = (event) => {
   const file = event.target.files && event.target.files[0]
   if (!file) return
+  const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+  if (!['.py', '.js'].includes(extension)) {
+    showToast('仅支持 .py 或 .js 脚本文件', 'warning')
+    event.target.value = ''
+    return
+  }
+  if (file.size > 1024 * 1024) {
+    showToast('脚本文件不能超过 1MB', 'warning')
+    event.target.value = ''
+    return
+  }
+  readingScript.value = true
   const reader = new FileReader()
   reader.onload = (e) => {
     scriptForm.script_content = String(e.target.result || '')
@@ -925,8 +1052,13 @@ const onScriptFileChange = (event) => {
       scriptForm.script_name = file.name.replace(/\.[^.]+$/, '')
     }
     scriptForm.filename = file.name
+    scriptProgress.stage = 'ready'
+    scriptProgress.progress = 0
+    scriptProgress.message = `已载入 ${file.name}`
+    readingScript.value = false
   }
   reader.onerror = () => {
+    readingScript.value = false
     showToast('文件读取失败', 'error')
   }
   reader.readAsText(file)
@@ -941,7 +1073,7 @@ const handleWSMessage = (data) => {
         : [{ key: '1', label: '执行' }, { key: '2', label: '停止' }, { key: '3', label: '聊天' }, { key: '4', label: '上传脚本' }, { key: '5', label: '生成脚本' }]
       interactionRequest.value = {
         title: payload.message || '需要进一步操作',
-        description: `目标: ${payload.target || form.target || '-'} | 下一任务: ${payload.next_task || '-'}`,
+        description: `目标: ${payload.target || form.target || '-'} | 下一任务: ${payload.next_task || requestedNextTask.value || '-'}`,
         options: rawOptions.map(option => {
           const item = typeof option === 'string' ? { key: option, label: option } : (option || {})
           return { key: item.key ?? item.value ?? '', label: item.label ?? item.name ?? item.key ?? '', style: item.style || 'btn-secondary' }
@@ -956,8 +1088,15 @@ const handleWSMessage = (data) => {
 
     case 'waiting_for_user_input': {
       const payload = data.payload || data
+      const fields = Array.isArray(payload.fields) ? payload.fields : (payload.waiting_input?.fields || [])
+      if (!fields.length) {
+        waitingInput.value = null
+        statusText.value = payload.message || '工作流等待后端提供参数定义'
+        showToast('后端未返回可填写的参数字段', 'warning')
+        break
+      }
       waitingInput.value = {
-        fields: Array.isArray(payload.fields) ? payload.fields : (payload.waiting_input?.fields || [])
+        fields
       }
       interactionRequest.value = null
       waitingScript.value = null
@@ -987,10 +1126,23 @@ const handleWSMessage = (data) => {
     case 'script_generated':
       waitingInput.value = null
       waitingScript.value = null
+      scriptProgress.stage = 'completed'
+      scriptProgress.progress = 100
+      scriptProgress.message = data.payload?.message || '脚本处理完成'
       showToast(data.payload?.message || '脚本已注册', 'success')
       break
 
+    case 'script_upload_progress':
+    case 'script_generation_progress':
+      scriptProgress.stage = data.payload?.stage || 'processing'
+      scriptProgress.progress = Number(data.payload?.progress || 0)
+      scriptProgress.message = data.payload?.message || '脚本处理中...'
+      break
+
     case 'script_error':
+      scriptProgress.stage = 'failed'
+      scriptProgress.progress = 100
+      scriptProgress.message = data.payload?.error || '脚本处理失败'
       showToast('脚本处理失败: ' + (data.payload?.error || '未知错误'), 'error')
       break
 
@@ -1048,6 +1200,23 @@ const handleWSMessage = (data) => {
       break
 
     case 'scan_cancelled':
+      if (data.payload?.report_status === 'completed' || data.payload?.report_id || data.payload?.report_url) {
+        resultsData.value = {
+          ...resultsData.value,
+          ...data.payload,
+          report: data.payload.report || resultsData.value.report || data.payload.report_preview || '',
+        }
+        progress.value = 100
+        statusText.value = '扫描已停止，报告已生成'
+        showResults.value = true
+        isScanning.value = false
+        stopTaskPolling()
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('ai-websocket:report-ready', { detail: data.payload }))
+        }
+        showToast('扫描已停止，报告已生成', 'success')
+        break
+      }
       progress.value = 0
       statusText.value = '扫描已取消'
       isScanning.value = false
@@ -1074,6 +1243,25 @@ const handleWSMessage = (data) => {
       if (pData.progress_percent !== undefined) {
         progress.value = pData.progress_percent
         statusText.value = `${pData.stage || '扫描中'} - ${pData.completed}/${pData.total}`
+      }
+      break
+
+    case 'report_generation_started':
+      statusText.value = '正在生成 AI 报告...'
+      break
+
+    case 'report_generated':
+      resultsData.value = {
+        ...resultsData.value,
+        ...data.payload,
+        report_status: 'completed',
+        report: data.payload?.report || resultsData.value.report || data.payload?.report_preview || ''
+      }
+      showResults.value = true
+      isScanning.value = false
+      stopTaskPolling()
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('ai-websocket:report-ready', { detail: data.payload }))
       }
       break
 
@@ -2107,6 +2295,26 @@ select:focus {
 
 .panel-body input[type="file"] {
   font-size: 12px;
+}
+
+.field-error,
+.upload-status {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.field-error,
+.upload-status.failed {
+  color: var(--error-color, #ff3b30);
+}
+
+.upload-status {
+  color: var(--text-secondary);
+}
+
+.upload-status.completed {
+  color: var(--success-color, #34c759);
 }
 
 .params-title {

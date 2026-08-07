@@ -180,12 +180,20 @@
                   class="form-input form-textarea"
                   :rows="field.validation === 'python_code' ? 12 : 4"
                 ></textarea>
+                <input
+                  v-else-if="field.validation === 'script_file'"
+                  type="file"
+                  accept=".py,.js"
+                  class="form-input"
+                  @change="onScriptFileChange(block, field, $event)"
+                />
                 <input v-else v-model="field.value" :placeholder="field.placeholder" class="form-input" />
                 <span v-if="field.description" class="field-hint">{{ field.description }}</span>
+                <span v-if="field.error" class="field-error">{{ field.error }}</span>
               </div>
             </div>
             <div class="card-actions">
-              <button class="btn btn-emerald" :disabled="block.resolved" @click="$emit('submit-input', block, block.fields)">
+              <button class="btn btn-emerald" :disabled="block.resolved || block.readingFile" @click="$emit('submit-input', block, block.fields)">
                 确认提交
               </button>
             </div>
@@ -266,6 +274,44 @@ const progressPercent = computed(() => {
 })
 
 const scrollContainer = ref(null)
+
+const onScriptFileChange = (block, fileField, event) => {
+  const file = event.target.files?.[0]
+  fileField.error = ''
+  fileField.value = ''
+  fileField.filename = ''
+  if (!file) return
+  const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+  if (!['.py', '.js'].includes(extension)) {
+    fileField.error = '仅支持 .py 或 .js 脚本文件'
+    event.target.value = ''
+    return
+  }
+  if (file.size > 500 * 1024) {
+    fileField.error = '脚本文件不能超过 500KB'
+    event.target.value = ''
+    return
+  }
+  block.readingFile = true
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const content = String(e.target.result || '')
+    fileField.value = content
+    fileField.filename = file.name
+    const contentField = block.fields.find(field => field.field === 'script_content')
+    if (contentField) contentField.value = content
+    if (!block.fields.find(field => field.field === 'script_name')?.value) {
+      const nameField = block.fields.find(field => field.field === 'script_name')
+      if (nameField) nameField.value = file.name.replace(/\.(py|js)$/i, '')
+    }
+    block.readingFile = false
+  }
+  reader.onerror = () => {
+    fileField.error = '文件读取失败'
+    block.readingFile = false
+  }
+  reader.readAsText(file)
+}
 
 watch(() => [props.blocks.length, props.isTyping], async () => {
   await nextTick()

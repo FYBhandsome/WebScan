@@ -163,7 +163,7 @@ def start_vuln_server(port=18888):
     thread = threading.Thread(target=VULN_SERVER.serve_forever, daemon=True)
     thread.start()
     time.sleep(0.5)
-    return port
+    return VULN_SERVER.server_port
 
 
 def stop_vuln_server():

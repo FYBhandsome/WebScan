@@ -661,6 +661,27 @@ async def api_parse_intent(request: ParseIntentRequest):
     import json
     
     message = request.message.strip()
+    next_task = ""
+    next_task_patterns = (
+        # Keep an ASCII path so the identifier survives non-UTF-8 clients.
+        r"(?:next[_ -]?task|next[_ -]?step|task)\s*[:=：]?\s*([a-zA-Z][a-zA-Z0-9_]*)",
+        r"(?:下一任务|下一个任务|下一步任务)\s*[:：=]?\s*([a-zA-Z][a-zA-Z0-9_]*)",
+    )
+    for pattern in next_task_patterns:
+        next_task_match = re.search(pattern, message, re.IGNORECASE)
+        if next_task_match:
+            next_task = next_task_match.group(1).strip()
+            break
+    if not next_task:
+        # Natural-language clients sometimes send only the tool identifier.
+        # Restrict the fallback to known task names to avoid treating arbitrary
+        # prose as a workflow instruction.
+        known_tasks = (
+            "baseinfo_scan", "subdomain_scan", "port_scan", "dir_scan",
+            "vuln_scan", "sqli_scan", "xss_scan", "poc_verification",
+        )
+        lowered_message = message.lower()
+        next_task = next((task for task in known_tasks if task in lowered_message), "")
     if not message:
         return APIResponse(code=400, message="消息不能为空", data=None)
     
@@ -724,13 +745,14 @@ async def api_parse_intent(request: ParseIntentRequest):
 1. target: 提取的扫描目标URL（如果有的话，确保以http://或https://开头，不要包含其他文字）
 2. mode: 扫描模式（info/vuln/full，根据用户意图判断，默认full）
 3. action: 用户意图（scan/help/status/stop/chat）
-4. confidence: 置信度（0.0-1.0）
-5. explanation: 简要解释用户意图
+4. next_task: 用户明确指定的下一工具任务名，没有则为空字符串
+5. confidence: 置信度（0.0-1.0）
+6. explanation: 简要解释用户意图
 
 注意：target字段只提取纯URL，不要包含任何中文或其他文字。
 
 只输出JSON，不要其他内容：
-{{"target": "...", "mode": "...", "action": "...", "confidence": 0.0, "explanation": "..."}}"""
+{{"target": "...", "mode": "...", "action": "...", "next_task": "", "confidence": 0.0, "explanation": "..."}}"""
         
         response = llm.invoke(prompt, timeout=10)
         response_text = response.content if hasattr(response, 'content') else str(response)
@@ -753,6 +775,9 @@ async def api_parse_intent(request: ParseIntentRequest):
             
             if ai_result.get("action") and not detected_action:
                 detected_action = ai_result["action"]
+
+            if ai_result.get("next_task") and not next_task:
+                next_task = str(ai_result["next_task"]).strip()
             
             confidence = ai_result.get("confidence", 0.8)
             explanation = ai_result.get("explanation", "")
@@ -778,6 +803,8 @@ async def api_parse_intent(request: ParseIntentRequest):
             "target": extracted_target,
             "mode": detected_mode,
             "action": detected_action,
+            "next_task": next_task,
+            "params": {"next_task": next_task} if next_task else {},
             "confidence": confidence,
             "explanation": explanation,
             "should_start_scan": extracted_target is not None and detected_action == "scan",

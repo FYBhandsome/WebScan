@@ -18,6 +18,7 @@ import { API } from './api.js';
 
 /** 命中后自动停止轮询的终态状态集合 */
 const TERMINAL_STATUSES = ['completed', 'exception'];
+const DEFAULT_MAX_DURATION_MS = 35 * 60 * 1000;
 
 /**
  * 任务轮询器。
@@ -39,6 +40,7 @@ export class TaskPoller {
   constructor(options = {}) {
     /** 轮询间隔（毫秒） */
     this.interval = options.interval || 2000;
+    this.maxDurationMs = options.maxDurationMs || DEFAULT_MAX_DURATION_MS;
     /** fetch 失败回调 */
     this.onError = options.onError || null;
 
@@ -51,6 +53,8 @@ export class TaskPoller {
     this._isPolling = false;
     /** 串行化守卫：指向正在进行的 fetch Promise，避免重叠请求 */
     this._inflight = null;
+    this._startedAt = 0;
+    this._timeoutNotified = false;
   }
 
   /** 是否正在轮询 */
@@ -85,8 +89,13 @@ export class TaskPoller {
     if (typeof options.onError === 'function') {
       this.onError = options.onError;
     }
+    if (typeof options.maxDurationMs === 'number' && options.maxDurationMs > 0) {
+      this.maxDurationMs = options.maxDurationMs;
+    }
 
     this._isPolling = true;
+    this._startedAt = Date.now();
+    this._timeoutNotified = false;
     // 首次立即拉取一次，让 UI 尽快拿到初态
     this._fetchOnce();
     this._timerId = setInterval(() => this._fetchOnce(), this.interval);
@@ -104,6 +113,7 @@ export class TaskPoller {
     }
     this.taskId = null;
     this.onStatus = null;
+    this._startedAt = 0;
   }
 
   /**
@@ -113,6 +123,16 @@ export class TaskPoller {
   _fetchOnce() {
     if (!this._isPolling || !this.taskId) return;
     if (this._inflight) return; // 上一次还没返回，跳过本轮
+
+    if (this.maxDurationMs > 0 && Date.now() - this._startedAt >= this.maxDurationMs) {
+      const timeoutError = new Error(`任务轮询超过上限 ${Math.round(this.maxDurationMs / 60000)} 分钟`);
+      if (!this._timeoutNotified) {
+        this._timeoutNotified = true;
+        this.onError?.(timeoutError);
+      }
+      this.stop();
+      return;
+    }
 
     const taskId = this.taskId;
     this._inflight = (async () => {
@@ -128,6 +148,11 @@ export class TaskPoller {
             // 回调异常不应中断轮询
             console.warn('[TaskPoller] onStatus 回调抛错:', cbErr);
           }
+        }
+
+        const backendTimeout = Number(status?.workflow_timeout_seconds);
+        if (Number.isFinite(backendTimeout) && backendTimeout > 0) {
+          this.maxDurationMs = backendTimeout * 1000 + 60 * 1000;
         }
 
         // 命中终态自动停止（completed / exception）

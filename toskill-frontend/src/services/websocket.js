@@ -10,6 +10,21 @@ const LOG = {
 
 const SESSION_KEY = 'toskill_ws_session_id';
 const MAX_OFFLINE_QUEUE = 200;
+const QUEUEABLE_TYPES = new Set(['chat', 'scan_chat', 'get_history', 'get_status', 'subscribe']);
+const CRITICAL_CONTROL_TYPES = new Set([
+    'start_scan',
+    'stop_scan',
+    'user_choice',
+    'tool_confirmed',
+    'tool_rejected',
+    'alternative_selected',
+    'decision_override',
+    'execute_tool',
+    'script_content',
+    'script_description',
+    'input_response',
+    'interaction_chat',
+]);
 
 class WSManager {
     constructor() {
@@ -28,14 +43,11 @@ class WSManager {
         this.onDisconnectCallback = null;
         this.onErrorCallback = null;
         this.onReconnectCallback = null;
+        this.onReconnectFailedCallback = null;
         this.sessionId = null;
         this._firstConnect = true;
         this._shouldReconnect = true;
         this._offlineQueue = [];
-        this._heartbeatTimer = null;
-        this._heartbeatInterval = 30000;
-        this._missedHeartbeats = 0;
-        this._maxMissedHeartbeats = 3;
 
         this._restoreSession();
     }
@@ -81,31 +93,12 @@ class WSManager {
         return baseUrl;
     }
 
+    /* Heartbeats intentionally removed; WebSocket close/error events drive reconnects. */
     _startHeartbeat() {
-        this._stopHeartbeat();
-        this._missedHeartbeats = 0;
-        this._heartbeatTimer = setInterval(() => {
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                this._missedHeartbeats++;
-                if (this._missedHeartbeats > this._maxMissedHeartbeats) {
-                    LOG.warn('Heartbeat timeout, closing connection');
-                    this.ws.close();
-                    return;
-                }
-                try {
-                    this.ws.send(JSON.stringify({ type: 'ping' }));
-                } catch (e) {
-                    LOG.error('Heartbeat send failed:', e);
-                }
-            }
-        }, this._heartbeatInterval);
+        return;
     }
-
     _stopHeartbeat() {
-        if (this._heartbeatTimer) {
-            clearInterval(this._heartbeatTimer);
-            this._heartbeatTimer = null;
-        }
+        return;
     }
 
     _flushOfflineQueue() {
@@ -130,6 +123,12 @@ class WSManager {
         }
         if (flushed > 0) {
             LOG.log(`Flushed ${flushed} offline messages`);
+        }
+    }
+
+    _notifyError(error, context = {}) {
+        if (this.onErrorCallback) {
+            this.onErrorCallback(error, context);
         }
     }
 
@@ -169,7 +168,6 @@ class WSManager {
                     this.reconnectAttempts = 0;
                     this._shouldReconnect = true;
 
-                    this._startHeartbeat();
 
                     if (this.onConnectCallback) {
                         this.onConnectCallback();
@@ -187,10 +185,8 @@ class WSManager {
                 this.ws.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
-
-                        if (data.type === 'pong') {
-                            this._missedHeartbeats = 0;
-                            return;
+                        if (!data || typeof data !== 'object') {
+                            throw new Error('WebSocket message must be a JSON object');
                         }
 
                         this.handleMessage(data);
@@ -206,6 +202,14 @@ class WSManager {
                         }
                     } catch (error) {
                         LOG.error('Failed to parse WebSocket message:', error);
+                        this.handleMessage({
+                            type: 'client_message_error',
+                            payload: {
+                                message: '收到无法解析的 WebSocket 消息，已忽略该消息。',
+                                raw: String(event.data || '').slice(0, 500),
+                                error: error.message,
+                            },
+                        });
                     }
                 };
 
@@ -218,7 +222,8 @@ class WSManager {
                         this.onDisconnectCallback(event);
                     }
 
-                    if (this._shouldReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
+                    const canReconnect = this._shouldReconnect && ![1000, 1008].includes(event.code);
+                    if (canReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
                         const baseDelay = Math.min(
                             this.reconnectDelay * Math.pow(2, this.reconnectAttempts),
                             this.maxReconnectDelay
@@ -233,15 +238,15 @@ class WSManager {
                     } else {
                         LOG.log('Max reconnect attempts reached');
                         this.cleanupConnectPromise(new Error('Max reconnect attempts reached'));
+                        if (this.onReconnectFailedCallback) {
+                            this.onReconnectFailedCallback(event);
+                        }
                     }
                 };
 
                 this.ws.onerror = (error) => {
                     LOG.error('WebSocket error:', error);
-                    if (this.onErrorCallback) {
-                        this.onErrorCallback(error);
-                    }
-                    this.cleanupConnectPromise(error);
+                    this._notifyError(error, { url: this._buildConnectUrl(), attempts: this.reconnectAttempts });
                 };
 
             } catch (error) {
@@ -264,7 +269,6 @@ class WSManager {
             this.reconnectTimer = null;
         }
         this._shouldReconnect = false;
-        this._stopHeartbeat();
         this._offlineQueue = [];
         this.cleanupConnectPromise(new Error('Disconnected'));
         if (this.ws) {
@@ -280,25 +284,50 @@ class WSManager {
         const message = { type, payload };
 
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            if (this._shouldReconnect && type !== 'ping' && type !== 'pong') {
+            if (this._shouldReconnect && QUEUEABLE_TYPES.has(type)) {
                 this._offlineQueue.push(message);
                 if (this._offlineQueue.length > MAX_OFFLINE_QUEUE) {
                     this._offlineQueue = this._offlineQueue.slice(-MAX_OFFLINE_QUEUE);
                 }
                 LOG.warn(`WebSocket offline, queued message: ${type}`);
+            } else if (CRITICAL_CONTROL_TYPES.has(type)) {
+                this._notifyError(new Error(`WebSocket 未连接，控制消息 ${type} 未发送。`), {
+                    type,
+                    critical: true,
+                });
             }
             return false;
         }
-        this.ws.send(JSON.stringify(message));
-        return true;
+        try {
+            this.ws.send(JSON.stringify(message));
+            return true;
+        } catch (error) {
+            this._notifyError(error, { type, critical: CRITICAL_CONTROL_TYPES.has(type) });
+            return false;
+        }
     }
 
     handleMessage(data) {
-        const handlers = this.messageHandlers.get(data.type) || [];
-        handlers.forEach(handler => handler(data.payload, data));
+        const type = data?.type || 'unknown';
+        const payload = data && typeof data.payload === 'object' && data.payload !== null ? data.payload : {};
+        const normalized = { ...data, type, payload };
+        const handlers = this.messageHandlers.get(type) || [];
+        handlers.forEach(handler => {
+            try {
+                handler(payload, normalized);
+            } catch (error) {
+                LOG.error(`WebSocket handler failed for ${type}:`, error);
+            }
+        });
 
         const allHandlers = this.messageHandlers.get('*') || [];
-        allHandlers.forEach(handler => handler(data));
+        allHandlers.forEach(handler => {
+            try {
+                handler(normalized);
+            } catch (error) {
+                LOG.error('WebSocket wildcard handler failed:', error);
+            }
+        });
     }
 
     on(messageType, callback) {
@@ -320,18 +349,31 @@ class WSManager {
     onConnect(callback) { this.onConnectCallback = callback; }
     onDisconnect(callback) { this.onDisconnectCallback = callback; }
     onError(callback) { this.onErrorCallback = callback; }
+    onReconnectFailed(callback) { this.onReconnectFailedCallback = callback; }
     onReconnect(callback) { this.onReconnectCallback = callback; }
     isConnected() { return this.connected && this.ws && this.ws.readyState === WebSocket.OPEN; }
     getSessionId() { return this.sessionId; }
 
     startScan(target, scanMode = 'info', params = {}) {
-        const payload = { target, scan_mode: scanMode, params };
+        const intentParams = typeof API.consumeIntentParams === 'function'
+            ? API.consumeIntentParams()
+            : {};
+        const payload = {
+            target,
+            scan_mode: scanMode,
+            params: { ...intentParams, ...(params || {}) },
+        };
         console.log('[WS] startScan 发送:', { type: 'start_scan', payload });
         const result = this.send('start_scan', payload);
         console.log('[WS] startScan 发送结果:', result);
         return result;
     }
-    sendConfirm(choice = 'confirm') { return this.send('user_choice', { choice }); }
+    sendConfirm(choice = 'confirm') {
+        // Choice 2 is the visible Stop action; use the dedicated backend
+        // command so it cancels the running task instead of resuming the graph.
+        if (String(choice) === '2') return this.sendStopScan();
+        return this.send('user_choice', { choice });
+    }
     sendToolConfirm(confirmed = true, params = {}) {
         if (confirmed) { return this.send('tool_confirmed', { confirmed: true, params }); }
         else { return this.send('tool_rejected', { confirmed: false, params }); }

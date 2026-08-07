@@ -52,10 +52,10 @@ export const useAIChatStore = defineStore('aiChat', () => {
       ws.value = new WebSocket(url)
       
       ws.value.onopen = () => {
-        console.log('AI Chat WebSocket 连接成功')
+        console.log('AI Chat WebSocket 杩炴帴鎴愬姛')
         isConnected.value = true
         reconnectAttempts.value = 0
-        ElMessage.success('AI助手已连接')
+        ElMessage.success('AI鍔╂墜宸茶繛鎺?)
       }
       
       ws.value.onmessage = (event) => {
@@ -63,30 +63,30 @@ export const useAIChatStore = defineStore('aiChat', () => {
           const data = JSON.parse(event.data)
           handleMessage(data)
         } catch (e) {
-          console.error('解析消息失败:', e)
+          console.error('瑙ｆ瀽娑堟伅澶辫触:', e)
         }
       }
       
       ws.value.onclose = (event) => {
-        console.log('AI Chat WebSocket 连接关闭', event)
+        console.log('AI Chat WebSocket 杩炴帴鍏抽棴', event)
         isConnected.value = false
         isWaitingConfirm.value = false
         
         if (reconnectAttempts.value < maxReconnectAttempts) {
           reconnectAttempts.value++
-          console.log(`尝试重连 (${reconnectAttempts.value}/${maxReconnectAttempts})...`)
+          console.log(`灏濊瘯閲嶈繛 (${reconnectAttempts.value}/${maxReconnectAttempts})...`)
           setTimeout(() => connect(sessionId.value), reconnectDelay)
         }
       }
       
       ws.value.onerror = (error) => {
-      console.error('AI Chat WebSocket 错误:', error)
-      showUniqueMessage('AI助手连接失败')
+      console.error('AI Chat WebSocket 閿欒:', error)
+      showUniqueMessage('AI鍔╂墜杩炴帴澶辫触')
     }
     
   } catch (error) {
-    console.error('创建WebSocket连接失败:', error)
-    showUniqueMessage('无法连接AI助手')
+    console.error('鍒涘缓WebSocket杩炴帴澶辫触:', error)
+    showUniqueMessage('鏃犳硶杩炴帴AI鍔╂墜')
   }
   }
   
@@ -106,17 +106,17 @@ export const useAIChatStore = defineStore('aiChat', () => {
       case 'connected':
         sessionId.value = payload.session_id
         if (payload.reconnected) {
-          addSystemMessage(`会话已恢复: ${payload.session_id.slice(0, 8)}...`)
+          addSystemMessage(`浼氳瘽宸叉仮澶? ${payload.session_id.slice(0, 8)}...`)
           if (payload.state) {
             isScanning.value = !payload.state.is_complete && payload.state.completed_tasks?.length > 0
           }
           if (payload.pending_interaction) {
             isWaitingConfirm.value = true
-            confirmationPrompt.value = payload.pending_interaction.payload?.description || '有待处理的交互请求'
+            confirmationPrompt.value = payload.pending_interaction.payload?.description || '鏈夊緟澶勭悊鐨勪氦浜掕姹?
             addMessage('assistant', confirmationPrompt.value, { type: 'confirmation', pending: payload.pending_interaction })
           }
         } else {
-          addSystemMessage(`会话已建立: ${payload.session_id.slice(0, 8)}...`)
+          addSystemMessage(`浼氳瘽宸插缓绔? ${payload.session_id.slice(0, 8)}...`)
         }
         break
         
@@ -125,7 +125,7 @@ export const useAIChatStore = defineStore('aiChat', () => {
         break
         
       case 'decision':
-        addMessage('assistant', payload.decision?.reason || 'AI决策中...', {
+        addMessage('assistant', payload.decision?.reason || 'AI鍐崇瓥涓?..', {
           type: 'decision',
           decision: payload.decision
         })
@@ -149,13 +149,13 @@ export const useAIChatStore = defineStore('aiChat', () => {
         break
         
       case 'task_executing':
-        addMessage('assistant', `正在执行工具: ${payload.tool_name} -> ${payload.target}`, { type: 'tool' })
+        addMessage('assistant', `姝ｅ湪鎵ц宸ュ叿: ${payload.tool_name} -> ${payload.target}`, { type: 'tool' })
         break
         
       case 'interaction_required':
         isWaitingConfirm.value = true
-        confirmationPrompt.value = payload.options?.map(o => `[${o.key}] ${o.label}: ${o.description}`).join('\n') || '请选择操作'
-        addMessage('assistant', `📋 下一步: ${payload.next_task}\n🎯 目标: ${payload.target}\n${payload.tool_params_info ? '参数: ' + JSON.stringify(payload.tool_params_info) : ''}`, { 
+        confirmationPrompt.value = payload.options?.map(o => `[${o.key}] ${o.label}: ${o.description}`).join('\n') || '璇烽€夋嫨鎿嶄綔'
+        addMessage('assistant', `馃搵 涓嬩竴姝? ${payload.next_task}\n馃幆 鐩爣: ${payload.target}\n${payload.tool_params_info ? '鍙傛暟: ' + JSON.stringify(payload.tool_params_info) : ''}`, { 
           type: 'confirmation',
           tool_params_info: payload.tool_params_info,
           auth_status: payload.auth_status,
@@ -164,28 +164,42 @@ export const useAIChatStore = defineStore('aiChat', () => {
         break
         
       case 'report_ready':
-        addMessage('assistant', '报告已生成完成！', {
+        addMessage('assistant', '鎶ュ憡宸茬敓鎴愬畬鎴愶紒', {
           type: 'report_ready',
           report: payload.report
         })
         isScanning.value = false
         break
-        
+
+      case 'scan_completed':
+        isScanning.value = false
+        currentTaskId.value = payload.task_id || currentTaskId.value
+        addMessage('assistant', '扫描已完成: ' + (payload.target || '未知目标'), {
+          type: 'scan_completed',
+          scan: payload
+        })
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('ai-chat:scan-completed', {
+            detail: payload
+          }))
+        }
+        break
+
       case 'scan_started':
         currentTaskId.value = payload.task_id
         isScanning.value = true
-        addSystemMessage(`开始扫描: ${payload.target}`)
+        addSystemMessage(`寮€濮嬫壂鎻? ${payload.target}`)
         break
         
       case 'scan_cancelled':
         isScanning.value = false
         isWaitingConfirm.value = false
-        addSystemMessage('扫描已取消')
+        addSystemMessage('鎵弿宸插彇娑?)
         break
         
       case 'error':
         showUniqueMessage(payload.error)
-        addMessage('system', `错误: ${payload.error}`, { type: 'error' })
+        addMessage('system', `閿欒: ${payload.error}`, { type: 'error' })
         isScanning.value = false
         break
         
@@ -207,7 +221,7 @@ export const useAIChatStore = defineStore('aiChat', () => {
         break
         
       default:
-        console.log('未处理的消息类型:', type, payload)
+        console.log('鏈鐞嗙殑娑堟伅绫诲瀷:', type, payload)
     }
   }
   
@@ -215,11 +229,11 @@ export const useAIChatStore = defineStore('aiChat', () => {
     const { tool_name, status, description, result, error } = payload
     
     if (status === 'started') {
-      addMessage('assistant', `正在执行工具: ${tool_name}`, { type: 'tool' })
+      addMessage('assistant', `姝ｅ湪鎵ц宸ュ叿: ${tool_name}`, { type: 'tool' })
     } else if (status === 'completed') {
-      addMessage('assistant', `工具 ${tool_name} 执行完成`, { type: 'tool', result })
+      addMessage('assistant', `宸ュ叿 ${tool_name} 鎵ц瀹屾垚`, { type: 'tool', result })
     } else if (status === 'failed') {
-      addMessage('assistant', `工具 ${tool_name} 执行失败: ${error}`, { type: 'error' })
+      addMessage('assistant', `宸ュ叿 ${tool_name} 鎵ц澶辫触: ${error}`, { type: 'error' })
     }
   }
   
@@ -238,7 +252,7 @@ export const useAIChatStore = defineStore('aiChat', () => {
   
   const sendMessage = (type, payload) => {
     if (!ws.value || ws.value.readyState !== WebSocket.OPEN) {
-      ElMessage.warning('WebSocket未连接')
+      ElMessage.warning('WebSocket鏈繛鎺?)
       return false
     }
     
@@ -246,7 +260,7 @@ export const useAIChatStore = defineStore('aiChat', () => {
       ws.value.send(JSON.stringify({ type, payload }))
       return true
     } catch (error) {
-      console.error('发送消息失败:', error)
+      console.error('鍙戦€佹秷鎭け璐?', error)
       return false
     }
   }
@@ -260,13 +274,13 @@ export const useAIChatStore = defineStore('aiChat', () => {
   const sendUserConfirm = (choice) => {
     if (sendMessage('user_confirm', { choice })) {
       isWaitingConfirm.value = false
-      addMessage('user', `用户选择: ${choice}`)
+      addMessage('user', `鐢ㄦ埛閫夋嫨: ${choice}`)
     }
   }
   
   const startScan = (target, scanMode = 'full') => {
     if (sendMessage('start_scan', { target, scan_mode: scanMode })) {
-      addMessage('user', `开始扫描目标: ${target}`)
+      addMessage('user', `寮€濮嬫壂鎻忕洰鏍? ${target}`)
     }
   }
   

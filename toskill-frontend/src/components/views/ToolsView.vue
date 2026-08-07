@@ -460,7 +460,8 @@ const submitUploadScript = async () => {
 
   const sent = ws.send('script_content', {
     script_content: uploadForm.scriptContent,
-    script_name: uploadForm.scriptName.trim()
+    script_name: uploadForm.scriptName.trim(),
+    language: uploadForm.scriptName.trim().toLowerCase().endsWith('.js') ? 'js' : 'py'
   })
 
   if (!sent) {
@@ -527,7 +528,8 @@ const confirmGeneratedScript = async () => {
 
   const sent = ws.send('script_content', {
     script_content: generateForm.generatedCode,
-    script_name: generateForm.generatedToolName
+    script_name: generateForm.generatedToolName,
+    language: 'py'
   })
 
   if (!sent) {
