@@ -336,6 +336,32 @@ def clean_target(target: str) -> str:
     
     return host
 
+
+def normalize_target_url(target: str, default_scheme: str = "https") -> str:
+    """Return a canonical URL for HTTP-oriented scanners."""
+    if isinstance(target, dict):
+        target = target.get("target") or target.get("url") or target.get("host") or ""
+    value = str(target or "").strip()
+    if not value:
+        return ""
+    parsed = urlparse(value if "://" in value else f"{default_scheme}://{value}")
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return ""
+    netloc = parsed.netloc
+    path = parsed.path or ""
+    query = f"?{parsed.query}" if parsed.query else ""
+    fragment = f"#{parsed.fragment}" if parsed.fragment else ""
+    return f"{parsed.scheme}://{netloc}{path}{query}{fragment}".rstrip("/")
+
+
+def normalize_target_domain(target: str) -> str:
+    """Return only the hostname for domain-oriented scanners."""
+    url = normalize_target_url(target)
+    if not url:
+        return clean_target(target)
+    parsed = urlparse(url)
+    return parsed.hostname or ""
+
 def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None, llm_params: Dict[str, Any] = None) -> Any:
     """带认证信息的工具调用辅助函数（非强制性）
     
@@ -952,7 +978,7 @@ def subdomain_scan(target: str) -> ToolResult:
             - error: 错误信息（如有）
             - timestamp: 执行时间戳
     """
-    t = clean_target(target)
+    t = normalize_target_domain(target)
     logger.info(f"[+] 执行子域名扫描：{t}")
     try:
         raw_result = subdomain(t)
@@ -1016,7 +1042,7 @@ def waf_detect_scan(target: str) -> ToolResult:
             - error: 错误信息（如有）
             - timestamp: 执行时间戳
     """
-    t = clean_target(target)
+    t = normalize_target_url(target)
     logger.info(f"[+] 执行WAF检测：{t}")
     try:
         raw_result = waf_detect(t)

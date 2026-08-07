@@ -18,7 +18,8 @@ from TOSKill.AI.graph import memory_store, get_llm
 from TOSKill.AI.state import create_initial_state, update_state, get_state_summary
 from TOSKill.AI.tools import (
     TOOL_MAP, get_tool_by_name, get_all_tool_names,
-    INFO_COLLECTION_TOOLS, VULN_SCAN_TOOLS, clean_target
+    INFO_COLLECTION_TOOLS, VULN_SCAN_TOOLS, clean_target, normalize_target_url,
+    unified_tool_invoke
 )
 from TOSKill.analysis.result_analyzer import get_analyzer
 from TOSKill.AI.task_status_store import get_task_status_store
@@ -33,6 +34,7 @@ class ScanRequest(BaseModel):
     target: str = Field(..., description="扫描目标")
     session_id: Optional[str] = Field(None, description="会话ID")
     tools: Optional[List[str]] = Field(None, description="指定工具列表")
+    params: Optional[dict] = Field(None, description="共享工具参数")
     generate_report: bool = Field(default=True, description="是否自动生成报告")
 
     @field_validator("target")
@@ -41,9 +43,10 @@ class ScanRequest(BaseModel):
         if not v or not v.strip():
             raise ValueError("target 不能为空")
         v = v.strip()
-        if not v.startswith(("http://", "https://")):
+        normalized = normalize_target_url(v)
+        if not normalized:
             raise ValueError("target 必须以 http:// 或 https:// 开头")
-        return clean_target(v)
+        return normalized
 
 
 class ToolExecuteRequest(BaseModel):
@@ -66,14 +69,18 @@ class ToolExecuteRequest(BaseModel):
         if not v or not v.strip():
             raise ValueError("target 不能为空")
         v = v.strip()
-        if not v.startswith(("http://", "https://")):
+        normalized = normalize_target_url(v)
+        if not normalized:
             raise ValueError("target 必须以 http:// 或 https:// 开头")
-        return clean_target(v)
+        return normalized
 
 
 class BatchToolExecuteRequest(BaseModel):
     tool_names: List[str] = Field(..., description="工具名称列表")
     target: str = Field(..., description="扫描目标")
+
+
+    params: Optional[dict] = Field(None, description="shared extra tool params")
 
 
 class ChatRequest(BaseModel):
@@ -115,7 +122,14 @@ def _prepare_session(request: ScanRequest, mode: str) -> Tuple[str, Dict]:
     state = memory_store.get_session(session_id)
     if not state:
         state = create_initial_state(target=request.target, task_id=session_id, mode=mode)
-    return session_id, update_state(state, target=request.target, mode=mode)
+    params = request.params or {}
+    return session_id, update_state(
+        state,
+        target=request.target,
+        mode=mode,
+        user_directed_params={**(state.get("user_directed_params", {}) or {}), **params},
+        __extend_params=dict(params),
+    )
 
 
 def _get_tools_for_mode(mode: str, custom_tools: List[str] = None) -> List[str]:
@@ -132,7 +146,7 @@ def _get_tools_for_mode(mode: str, custom_tools: List[str] = None) -> List[str]:
         return [t.name for t in INFO_COLLECTION_TOOLS] + [t.name for t in VULN_SCAN_TOOLS]
 
 
-async def _execute_tools_async(target: str, tools: List[str]) -> Tuple[List[Dict], List[str]]:
+async def _execute_tools_async(target: str, tools: List[str], shared_params: Optional[dict] = None) -> Tuple[List[Dict], List[str]]:
     results = []
     errors = []
     cleaned_target = clean_target(target)
@@ -143,13 +157,19 @@ async def _execute_tools_async(target: str, tools: List[str]) -> Tuple[List[Dict
             errors.append(f"工具 {tool_name} 不存在")
             continue
         try:
-            if hasattr(tool, 'ainvoke') and callable(getattr(tool, 'ainvoke')):
+            if shared_params:
+                result = unified_tool_invoke(
+                    tool_name,
+                    {"target": cleaned_target, "__extend_params": shared_params},
+                )
+            elif hasattr(tool, 'ainvoke') and callable(getattr(tool, 'ainvoke')):
                 result = await tool.ainvoke(cleaned_target)
             else:
                 result = tool.invoke(cleaned_target)
             results.append({
                 "tool": tool_name,
                 "success": True,
+                "params": shared_params or {},
                 "result": result,
                 "timestamp": datetime.now().isoformat()
             })
@@ -159,6 +179,7 @@ async def _execute_tools_async(target: str, tools: List[str]) -> Tuple[List[Dict
             results.append({
                 "tool": tool_name,
                 "success": False,
+                "params": shared_params or {},
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
             })
@@ -203,17 +224,19 @@ async def api_info_collection(request: ScanRequest):
     session_id, state = _prepare_session(request, "info_collection")
     tools = _get_tools_for_mode("info_collection", request.tools)
     
-    results, errors = await _execute_tools_async(request.target, tools)
+    results, errors = await _execute_tools_async(request.target, tools, request.params)
     
     tool_results = {r["tool"]: r.get("result", r.get("error")) for r in results if r["success"]}
     completed_tasks = [r["tool"] for r in results if r["success"]]
     
     state = update_state(state, tool_results=tool_results, completed_tasks=completed_tasks, errors=errors)
     memory_store.save_session(session_id, state)
+    report_data = await _generate_report_for_session(session_id, state) if request.generate_report else {}
     
     return APIResponse(
         message=f"信息收集完成: {len(completed_tasks)}/{len(tools)}",
         data={
+            **report_data,
             "session_id": session_id,
             "target": request.target,
             "scan_type": "info_collection",
@@ -232,7 +255,7 @@ async def api_vuln_scan(request: ScanRequest):
     session_id, state = _prepare_session(request, "vuln_scan")
     tools = _get_tools_for_mode("vuln_scan", request.tools)
     
-    results, errors = await _execute_tools_async(request.target, tools)
+    results, errors = await _execute_tools_async(request.target, tools, request.params)
     
     tool_results = {r["tool"]: r.get("result", r.get("error")) for r in results if r["success"]}
     completed_tasks = [r["tool"] for r in results if r["success"]]
@@ -249,10 +272,12 @@ async def api_vuln_scan(request: ScanRequest):
     
     state = update_state(state, tool_results=tool_results, completed_tasks=completed_tasks, errors=errors, vulnerabilities=vulnerabilities)
     memory_store.save_session(session_id, state)
+    report_data = await _generate_report_for_session(session_id, state) if request.generate_report else {}
     
     return APIResponse(
         message=f"漏洞扫描完成: {len(completed_tasks)}/{len(tools)}",
         data={
+            **report_data,
             "session_id": session_id,
             "target": request.target,
             "scan_type": "vuln_scan",
@@ -272,7 +297,7 @@ async def api_full_scan(request: ScanRequest):
     session_id, state = _prepare_session(request, "full_scan")
     tools = _get_tools_for_mode("full_scan", request.tools)
     
-    results, errors = await _execute_tools_async(request.target, tools)
+    results, errors = await _execute_tools_async(request.target, tools, request.params)
     
     tool_results = {r["tool"]: r.get("result", r.get("error")) for r in results if r["success"]}
     completed_tasks = [r["tool"] for r in results if r["success"]]
@@ -305,10 +330,12 @@ async def api_full_scan(request: ScanRequest):
         is_complete=True
     )
     memory_store.save_session(session_id, state)
+    report_data = await _generate_report_for_session(session_id, state) if request.generate_report else {}
     
     return APIResponse(
         message=f"完整扫描完成: {len(completed_tasks)}/{len(tools)}",
         data={
+            **report_data,
             "session_id": session_id,
             "target": request.target,
             "scan_type": "full_scan",
@@ -369,10 +396,14 @@ async def api_execute_tool(request: ToolExecuteRequest):
     target = clean_target(request.target)
     
     try:
-        result = tool.invoke(target)
+        call_args = {"target": target}
+        if request.params:
+            call_args["__extend_params"] = request.params
+        result = unified_tool_invoke(request.tool_name, call_args)
         response_data = {
             "tool_name": request.tool_name,
             "target": target,
+            "params": request.params or {},
             "success": True,
             "result": result,
             "timestamp": datetime.now().isoformat()
@@ -434,7 +465,7 @@ async def api_execute_tool(request: ToolExecuteRequest):
 
 @router.post("/tools/execute/batch", response_model=APIResponse)
 async def api_execute_tools_batch(request: BatchToolExecuteRequest):
-    results, errors = await _execute_tools_async(request.target, request.tool_names)
+    results, errors = await _execute_tools_async(request.target, request.tool_names, request.params)
     
     return APIResponse(
         message=f"批量执行完成: {len([r for r in results if r['success']])}/{len(request.tool_names)}",
@@ -444,6 +475,95 @@ async def api_execute_tools_batch(request: BatchToolExecuteRequest):
 
 # ==================== 报告接口 ====================
 
+async def _generate_report_for_session(session_id: str, state: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate and persist the AI report for a completed scan session."""
+    tool_results = state.get("tool_results", {}) or {}
+    if not tool_results:
+        return {}
+
+    # Report generation is a post-processing step: a temporary AI/storage
+    # failure must not turn an otherwise completed scan into an API failure.
+    try:
+        from TOSKill.tools.report.report_manager import get_report_manager
+        report_manager = get_report_manager()
+    except Exception as exc:
+        logger.exception("Unable to load report manager for session %s", session_id)
+        return {"report_status": "error", "report_error": str(exc)}
+
+    target = state.get("target", "")
+    vulnerabilities = state.get("vulnerabilities", []) or []
+    chat_history = memory_store.get_chat_history(session_id)
+    task_history = [
+        {
+            "tool": task,
+            "result_summary": str(tool_results.get(task, ""))[:200],
+        }
+        for task in state.get("completed_tasks", []) or []
+    ]
+
+    try:
+        report = await report_manager.generate_ai_report_content_async(
+            tool_results=tool_results,
+            vulnerabilities=vulnerabilities,
+            target=target,
+            chat_history=chat_history,
+            task_history=task_history,
+        )
+        ai_analysis = report_manager.generate_professional_ai_analysis(
+            tool_results=tool_results,
+            vulnerabilities=vulnerabilities,
+            target=target,
+        )
+    except Exception as exc:
+        logger.exception("AI report generation failed for session %s", session_id)
+        return {"report_status": "error", "report_error": str(exc)}
+    metadata = {
+        "target": target,
+        "tool_results": tool_results,
+        "vulnerabilities": vulnerabilities,
+        "scan_summary": state.get("scan_summary", {}),
+    }
+    try:
+        report_info = report_manager.save_report(
+            session_id=session_id,
+            content=report,
+            metadata=metadata,
+        )
+        html_info = report_manager.save_html_report(
+            session_id=session_id,
+            target=target,
+            scan_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            vulnerabilities=vulnerabilities,
+            tool_results=tool_results,
+            ai_analysis=ai_analysis,
+        )
+    except Exception as exc:
+        logger.exception("Unable to persist AI report for session %s", session_id)
+        return {"report_status": "error", "report_error": str(exc), "report": report}
+
+    payload = {
+        "report": report,
+        "report_preview": report[:1200] if report else "",
+        "report_id": report_info.get("report_id", ""),
+        "report_url": report_info.get("download_url", ""),
+        "html_report_id": html_info.get("report_id", ""),
+        "html_report_url": html_info.get("download_url", ""),
+        "report_analysis": ai_analysis or {},
+        "report_status": "completed",
+    }
+    updated_state = update_state(
+        state,
+        report=report,
+        is_complete=True,
+        report_id=payload["report_id"],
+        report_url=payload["report_url"],
+        html_report_url=payload["html_report_url"],
+        report_analysis=payload["report_analysis"],
+    )
+    memory_store.save_session(session_id, updated_state)
+    return payload
+
+
 @router.post("/reports/generate/{session_id}", response_model=APIResponse)
 async def api_generate_report(session_id: str):
     state = _validate_session(session_id)
@@ -451,6 +571,11 @@ async def api_generate_report(session_id: str):
     tool_results = state.get("tool_results", {})
     vulnerabilities = state.get("vulnerabilities", [])
     target = state.get("target", "")
+    generated = await _generate_report_for_session(session_id, state)
+    if generated.get("report_status") == "error":
+        return APIResponse(code=500, message="AI report generation failed", data=generated)
+    if generated:
+        return APIResponse(message="AI report generated", data=generated)
     
     if not tool_results:
         return APIResponse(code=400, message="无扫描结果，无法生成报告", data=None)

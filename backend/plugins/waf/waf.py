@@ -49,6 +49,7 @@ except ModuleNotFoundError:  # charset_normalizer is bundled with requests.
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib.parse import urljoin
+from backend.api.validation_utils import normalize_target_url
 
 # === 配置项(集中管理,便于修改) ===
 # WAF检测规则(格式:WAF名|匹配对象|匹配属性|正则规则)
@@ -317,6 +318,7 @@ def get_waf(url: str) -> Dict[str, str]:
     }
 
     # 1. 输入URL校验
+    url = normalize_target_url(url) or ""
     if not is_valid_url(url):
         result["message"] = f"URL格式非法:{url}(需以http/https开头且包含有效域名)"
         logger.error(result["message"])

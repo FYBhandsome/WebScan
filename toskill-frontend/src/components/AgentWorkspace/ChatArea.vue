@@ -17,7 +17,7 @@
       <p class="welcome-desc">System Online. 请输入目标 URL 或指令以初始化扫描进程。</p>
     </div>
 
-    <div v-for="block in blocks" :key="block.id" class="message-wrapper" :class="block.type === 'user_command' ? 'is-user' : 'is-ai'">
+    <div v-for="block in blocks" :key="block.id" :id="`block-${block.id}`" class="message-wrapper" :class="block.type === 'user_command' ? 'is-user' : 'is-ai'">
       <div v-if="block.type !== 'user_command'" class="ai-avatar">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M4 10V4H10" stroke="#18181B" stroke-width="2.5" stroke-linecap="square"/>
@@ -139,6 +139,12 @@
             <div class="result-body" v-if="block.analysis">
               <pre class="analysis-code">{{ block.analysis }}</pre>
             </div>
+            <div class="result-raw" v-if="block.params && Object.keys(block.params).length">
+              <details>
+                <summary>执行参数</summary>
+                <pre class="analysis-code">{{ JSON.stringify(block.params, null, 2) }}</pre>
+              </details>
+            </div>
             <div class="result-raw" v-if="block.raw_result && Object.keys(block.raw_result).length">
               <details>
                 <summary>原始数据</summary>
@@ -163,8 +169,17 @@
                 <label>{{ field.label }} <span v-if="field.required" class="required-mark">*</span></label>
                 <select v-if="field.options?.length" v-model="field.value" class="form-select">
                   <option value="" disabled>请选择...</option>
-                  <option v-for="opt in field.options" :key="opt" :value="opt">{{ opt }}</option>
+                  <option v-for="opt in field.options" :key="typeof opt === 'object' ? opt.value : opt" :value="typeof opt === 'object' ? opt.value : opt">
+                    {{ typeof opt === 'object' ? (opt.label || opt.value) : opt }}
+                  </option>
                 </select>
+                <textarea
+                  v-else-if="field.validation === 'python_code' || field.validation === 'json' || field.field === 'reason'"
+                  v-model="field.value"
+                  :placeholder="field.placeholder"
+                  class="form-input form-textarea"
+                  :rows="field.validation === 'python_code' ? 12 : 4"
+                ></textarea>
                 <input v-else v-model="field.value" :placeholder="field.placeholder" class="form-input" />
                 <span v-if="field.description" class="field-hint">{{ field.description }}</span>
               </div>

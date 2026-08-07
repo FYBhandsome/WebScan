@@ -5,6 +5,7 @@
 """
 import re
 from typing import Optional
+from urllib.parse import urlparse
 
 # IP地址正则表达式
 IP_PATTERN = re.compile(
@@ -49,6 +50,25 @@ def validate_url(url: str) -> Optional[str]:
         return None
     
     return url
+
+
+def normalize_target_url(value: str, default_scheme: str = "https") -> Optional[str]:
+    """Normalize a bare domain/IP or URL to a usable HTTP URL."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    parsed = urlparse(raw if "://" in raw else f"{default_scheme}://{raw}")
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    if "://" in raw:
+        return raw.rstrip("/")
+    return f"{default_scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
+
+
+def normalize_target_domain(value: str) -> Optional[str]:
+    """Normalize a URL or bare host to its hostname."""
+    normalized = normalize_target_url(value)
+    return urlparse(normalized).hostname if normalized else None
 
 def validate_domain(domain: str) -> bool:
     """

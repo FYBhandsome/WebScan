@@ -47,6 +47,26 @@ class TestWSManagerLogic:
         except Exception:
             pass
 
+    @pytest.mark.asyncio
+    async def test_outbound_events_have_monotonic_sequence(self):
+        """并发来源的会话事件应拥有单调递增的渲染顺序号。"""
+        from TOSKill.api.ai_chat_websocket import AIChatManager
+
+        class FakeWebSocket:
+            def __init__(self):
+                self.messages = []
+
+            async def send_json(self, message):
+                self.messages.append(message)
+
+        manager = AIChatManager()
+        websocket = FakeWebSocket()
+        manager.connections["sequence_test"] = websocket
+        await manager._send("sequence_test", {"type": "first", "payload": {}})
+        await manager._send("sequence_test", {"type": "second", "payload": {}})
+
+        assert [message["event_seq"] for message in websocket.messages] == [1, 2]
+
 
 class TestWSPayloadValidation:
     """WS Payload验证测试"""
@@ -69,6 +89,38 @@ class TestWSPayloadValidation:
         """聊天payload"""
         payload = {"content": "hello", "session_id": "test"}
         assert "content" in payload
+
+    @pytest.mark.asyncio
+    async def test_invalid_interaction_choice_is_rejected(self):
+        from TOSKill.api.ai_chat_websocket import AIChatManager
+
+        manager = AIChatManager()
+        manager._send_error = AsyncMock()
+        await manager._handle_user_confirm("choice-test", {"choice": "99"})
+
+        manager._send_error.assert_awaited_once()
+        assert manager._send_error.await_args.kwargs["error_code"] == "INVALID_CHOICE"
+
+    @pytest.mark.asyncio
+    async def test_interaction_chat_resumes_chat_branch(self):
+        from TOSKill.api.ai_chat_websocket import AIChatManager
+
+        manager = AIChatManager()
+        manager._send = AsyncMock()
+        manager._send_error = AsyncMock()
+        orchestrator = MagicMock()
+        orchestrator._ensure_initialized = AsyncMock()
+        orchestrator.resume_workflow = AsyncMock(return_value={})
+        orchestrator.has_pending_interaction.return_value = True
+
+        with patch("TOSKill.api.ai_chat_websocket.get_agent_orchestrator", return_value=orchestrator), \
+             patch("TOSKill.api.ai_chat_websocket.memory_store.append_chat"):
+            await manager._handle_interaction_chat("chat-test", {"content": "continue with headers"})
+
+        orchestrator.resume_workflow.assert_awaited_once_with(
+            "chat-test", {"choice": "3", "chat_content": "continue with headers"}
+        )
+        manager._send_error.assert_not_awaited()
 
 
 class TestWSSessionIsolation:

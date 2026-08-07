@@ -30,6 +30,7 @@ from typing import List
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from backend.api.validation_utils import normalize_target_domain
 
 # === 配置项(集中管理,便于修改) ===
 # 请求头配置
@@ -80,7 +81,7 @@ def get_subdomain(domain: str) -> List[str]:
     :return: 去重后的子域名列表,异常时返回空列表
     """
     # 1. 输入校验
-    domain = domain.strip() if isinstance(domain, str) else ""
+    domain = normalize_target_domain(domain) or ""
     if not is_valid_domain(domain):
         logger.error(f"输入域名 {domain} 格式非法")
         return []

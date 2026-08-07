@@ -3,6 +3,11 @@
     <div class="agent-workspace-layout">
       
       <div class="main-console">
+        <div class="auth-toolbar" role="status">
+          <span class="auth-status">Cookie: {{ authCookieMeta.cookieCount || 0 }}</span>
+          <button class="log-action-btn" type="button" title="获取目标会话 Cookie" @click="acquireCookies">获取 Cookie</button>
+          <button v-if="authCookieMeta.cookieCount" class="log-action-btn" type="button" title="清除当前会话 Cookie" @click="clearAuthCookies">清除</button>
+        </div>
         <ChatArea 
           :blocks="workspaceBlocks" 
           :is-typing="isTyping"
@@ -28,7 +33,7 @@
         class="floating-rail"
         :style="{ bottom: inputCollapsed ? '60px' : '90px' }"
         :blocks="workspaceBlocks" 
-        @navigate="handleBlockAction" 
+        @navigate="scrollToBlock"
       />
       
     </div>
@@ -138,6 +143,7 @@ import ChatArea from '../../components/AgentWorkspace/ChatArea.vue'
 import CommandInput from '../../components/AgentWorkspace/CommandInput.vue'
 import HistoryRail from '../../components/AgentWorkspace/HistoryRail.vue'
 import { ws } from '../../services/websocket.js'
+import { globalState } from '../../store.js'
 
 const inputCollapsed = ref(false)
 const logPanelVisible = ref(false)
@@ -393,8 +399,22 @@ const {
   handleStop,
   handleModeSelect,
   handleScanConfirm,
-  handleScanCancel
+  handleScanCancel,
+  authCookieMeta,
+  prepareCookieSession,
+  clearAuthCookies
 } = useAgentChat()
+
+const acquireCookies = async () => {
+  const target = globalState.currentTarget || inputText.value.trim()
+  if (!target) return
+  await prepareCookieSession(target)
+}
+
+const scrollToBlock = (id) => {
+  const element = document.getElementById(`block-${id}`)
+  element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
 </script>
 
 <style scoped>
@@ -766,6 +786,22 @@ const {
   color: #3F3F46;
   flex: 1;
   min-width: 0;
+}
+
+.auth-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 16px;
+  border-bottom: 1px solid #e4e4e7;
+  background: #fafafa;
+}
+
+.auth-status {
+  color: #52525b;
+  font-size: 12px;
 }
 
 .log-entry.log-level-error .log-message {

@@ -451,5 +451,297 @@
     "vulnerabilities_count": 0,
     "tool_results": {},
     "vulnerabilities": []
+  },
+  "a4a8c72f": {
+    "report_id": "scan_report_a4a8c72f_20260807_154539",
+    "session_id": "a4a8c72f",
+    "report_file": "scan_report_a4a8c72f_20260807_154539.html",
+    "target": "http://testasp.vulnweb.com",
+    "created_at": "2026-08-07 15:45:39",
+    "download_url": "/api/reports/download/scan_report_a4a8c72f_20260807_154539.html",
+    "format": "html",
+    "vulnerabilities_count": 0,
+    "tool_results": {
+      "baseinfo_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-07T15:43:39.026711"
+      },
+      "port_scan": {
+        "success": true,
+        "data": {
+          "open_ports": [],
+          "total_count": 0,
+          "portspoof_detected": false
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-07T15:43:40.081706"
+      },
+      "subdomain_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {},
+          "error": "导入subdomain模块失败: No module named 'backend.poc.drupal'",
+          "metadata": {
+            "tool": "subdomain",
+            "domain": "testasp.vulnweb.com"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-07T15:43:41.133613"
+      },
+      "dir_brute": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "results": [
+              {
+                "url": "http://testasp.vulnweb.com/login.asp",
+                "path": "/login.asp",
+                "status_code": 200,
+                "content_length": 3194,
+                "redirect": "",
+                "content_type": "text/html",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/db.asp",
+                "path": "/db.asp",
+                "status_code": 200,
+                "content_length": 0,
+                "redirect": "",
+                "content_type": "text/html",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/search.asp",
+                "path": "/search.asp",
+                "status_code": 200,
+                "content_length": 2809,
+                "redirect": "",
+                "content_type": "text/html",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/robots.txt",
+                "path": "/robots.txt",
+                "status_code": 200,
+                "content_length": 13,
+                "redirect": "",
+                "content_type": "text/plain",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/cgi-bin",
+                "path": "/cgi-bin",
+                "status_code": 301,
+                "content_length": 158,
+                "redirect": "http://testasp.vulnweb.com/cgi-bin/",
+                "content_type": "text/html; charset=UTF-8",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/images",
+                "path": "/images",
+                "status_code": 301,
+                "content_length": 157,
+                "redirect": "http://testasp.vulnweb.com/images/",
+                "content_type": "text/html; charset=UTF-8",
+                "server": "Microsoft-IIS/8.5"
+              }
+            ],
+            "total_scanned": 1305,
+            "found_count": 6
+          },
+          "error": "",
+          "metadata": {
+            "tool": "dirscan",
+            "target": "testasp.vulnweb.com",
+            "dict_path": null,
+            "found_count": 6
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-07T15:44:34.695650"
+      },
+      "waf_detect_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {},
+          "error": "导入waf模块失败: No module named 'backend.poc.drupal'",
+          "metadata": {
+            "tool": "waf_detect",
+            "target": "https://testasp.vulnweb.com"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-07T15:44:34.717245"
+      },
+      "cdn_detect_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "has_cdn": false,
+            "message": "目标未使用CDN"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "cdn_detect",
+            "target": "testasp.vulnweb.com",
+            "has_cdn": false
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-07T15:44:34.771587"
+      },
+      "cms_detect_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {
+            "apps": [],
+            "title": "None",
+            "server": "None",
+            "security": [],
+            "url": "testasp.vulnweb.com"
+          },
+          "error": "URL格式非法(需以http/https开头):testasp.vulnweb.com",
+          "metadata": {
+            "tool": "cms_detect",
+            "target": "testasp.vulnweb.com",
+            "apps_count": 0,
+            "server": "None"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-07T15:44:35.008247"
+      },
+      "infoleak_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "risk_links": [
+              {
+                "type": "Robots.txt",
+                "url": "http://testasp.vulnweb.com/robots.txt"
+              }
+            ],
+            "grouped_results": {
+              "Robots.txt": [
+                "http://testasp.vulnweb.com/robots.txt"
+              ]
+            },
+            "total_count": 1
+          },
+          "error": "",
+          "metadata": {
+            "tool": "infoleak_scan",
+            "target": "testasp.vulnweb.com",
+            "risk_count": 1,
+            "risk_types": [
+              "Robots.txt"
+            ]
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-07T15:44:58.694595"
+      },
+      "ip_locate_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "location": "国家(美国),省份(俄勒冈州),城市(波特蘭)",
+            "ip": "44.238.29.244"
+          },
+          "error": "",
+          "metadata": {
+            "tool": "ip_locate",
+            "ip": "44.238.29.244",
+            "location": "国家(美国),省份(俄勒冈州),城市(波特蘭)"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-07T15:44:59.028517"
+      },
+      "webside_query_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {
+            "has_data": false,
+            "side_sites": [],
+            "total_count": 0
+          },
+          "error": "IP 格式非法:testasp.vulnweb.com",
+          "metadata": {
+            "tool": "webside_query",
+            "ip": "testasp.vulnweb.com",
+            "has_data": false,
+            "sites_count": 0
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-07T15:44:59.035486"
+      },
+      "web_weight_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {
+            "result": "获取数据失败,请稍后再试",
+            "raw_data": {}
+          },
+          "error": "请求异常 | 纯域名:vulnweb.com | 原因:HTTPSConnectionPool(host='apistore.aizhan.com', po",
+          "metadata": {
+            "tool": "web_weight",
+            "domain": "vulnweb.com",
+            "result": "获取数据失败,请稍后再试"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-07T15:45:00.447333"
+      }
+    },
+    "vulnerabilities": []
   }
 }

@@ -18,6 +18,7 @@ class ScanState(TypedDict, total=False):
     tool_results: Dict[str, Any]
     vulnerabilities: List[Dict[str, Any]]
     target_context: Dict[str, Any]
+    history_context: Dict[str, Any]
     execution_history: List[Dict[str, Any]]
     is_complete: bool
     should_continue: bool
@@ -34,6 +35,7 @@ class ScanState(TypedDict, total=False):
     need_generate_script: bool
     next_task: str
     task_result: Dict[str, Any]
+    tool_result: Dict[str, Any]
     task_history: List[str]
     stage_status: Dict[str, Dict[str, Any]]
     websocket_session_id: Optional[str]
@@ -78,6 +80,9 @@ class ScanState(TypedDict, total=False):
     auth_info: NotRequired[Dict[str, Any]]
     auth_timestamp: NotRequired[str]
     auth_expires_at: NotRequired[str]
+    auth_status: NotRequired[str]
+    auth_retry_count: NotRequired[int]
+    need_reauth: NotRequired[bool]
     rag_last_strategy: str
     rag_enabled: bool
     rejection_count: NotRequired[int]
@@ -116,6 +121,16 @@ class ScanState(TypedDict, total=False):
     pending_input_request: NotRequired[Dict[str, Any]]
     task_status: NotRequired[str]
     pending_script_request: NotRequired[Dict[str, Any]]
+    error: NotRequired[str]
+    _version: NotRequired[int]
+    _pending_ws_messages: NotRequired[List[Dict[str, Any]]]
+
+    # Strict decision contract: no implicit fallback/catch-all execution.
+    fallback_rule_set: NotRequired[None]
+    enable_fallback: NotRequired[bool]
+    repair_required: NotRequired[bool]
+    repair_prompt_info: NotRequired[Dict[str, Any]]
+    exec_script: NotRequired[str]
 
 
 def create_initial_state(target: str, task_id: str = None, mode: str = "info_collection") -> ScanState:
@@ -149,6 +164,7 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         need_generate_script=False,
         next_task="",
         task_result={},
+        tool_result={},
         task_history=[],
         stage_status={
             "planning": {"status": "pending", "sub_status": "pending", "progress": 0, "logs": []},
@@ -197,6 +213,9 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         auth_info={},
         auth_timestamp="",
         auth_expires_at="",
+        auth_status="",
+        auth_retry_count=0,
+        need_reauth=False,
         rag_last_strategy="",
         rag_enabled=True,
         rejection_count=0,
@@ -206,9 +225,34 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         tool_confirm_required=False,
         confirm_target="",
         confirm_tool="",
+        pending_confirmation=False,
+        confirmation_type="",
+        confirmation_message="",
+        confirmation_options=[],
+        confirmed=False,
+        highest_risk_level="",
+        risk_summary={},
+        skip_remaining_tasks=False,
+        user_chat_context="",
+        user_directed_params={},
+        user_directed_next_task="",
+        confidence_score=0,
+        confidence_breakdown={},
+        risk_level="",
+        risk_confidence=0,
+        kb_match_score=0.0,
         pending_input_request={},
         task_status="queued",
         pending_script_request={},
+        error="",
+        _version=1,
+        _pending_ws_messages=[],
+        __extend_params={},
+        fallback_rule_set=None,
+        enable_fallback=False,
+        repair_required=False,
+        repair_prompt_info={},
+        exec_script="",
     )
 
 
@@ -216,13 +260,49 @@ def append_chat(state: ScanState, role: str, content: str) -> ScanState:
     """追加聊天历史 - 类比 demo.py 的 append_chat"""
     h = state.get("chat_history", []).copy()
     h.append({"role": role, "content": content, "timestamp": datetime.now().isoformat()})
-    return {**state, "chat_history": h}
+    return update_state(state, chat_history=h)
 
 
 def update_state(state: ScanState, **kwargs) -> ScanState:
-    """更新状态"""
+    """Update a workflow snapshot without dropping fields from prior nodes.
+
+    Older persisted sessions may not contain fields added later. Normalize
+    those fields here so every node can safely read/write the same contract.
+    """
     new_state = dict(state)
     new_state.update(kwargs)
+    defaults = {
+        "planned_tasks": [],
+        "completed_tasks": [],
+        "tool_results": {},
+        "tool_result": {},
+        "vulnerabilities": [],
+        "target_context": {},
+        "history_context": {},
+        "execution_history": [],
+        "decision_history": [],
+        "errors": [],
+        "vuln_scan_results": {},
+        "scan_summary": {},
+        "chat_history": [],
+        "task_history": [],
+        "stage_status": {},
+        "extracted_params": {},
+        "user_directed_params": {},
+        "pending_input_request": {},
+        "pending_script_request": {},
+        "repair_prompt_info": {},
+        "_pending_ws_messages": [],
+        "__extend_params": {},
+    }
+    for key, default in defaults.items():
+        if key not in new_state or new_state[key] is None:
+            new_state[key] = default.copy() if isinstance(default, (dict, list)) else default
+    # Strict decision policy is invariant across all workflow snapshots.
+    new_state["fallback_rule_set"] = None
+    new_state["enable_fallback"] = False
+    new_state.setdefault("repair_required", False)
+    new_state.setdefault("exec_script", "")
     return new_state
 
 

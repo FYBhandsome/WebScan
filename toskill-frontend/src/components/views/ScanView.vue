@@ -143,6 +143,16 @@
         </div>
 
         <!-- 中断点：等待用户补充参数（waiting_user_input） -->
+        <div class="interactive-panel" v-if="interactionRequest">
+          <div class="panel-header">
+            <h4>{{ interactionRequest.title || '需要进一步操作' }}</h4>
+            <p class="panel-desc">{{ interactionRequest.description || '请选择下一步操作以继续扫描' }}</p>
+          </div>
+          <div class="panel-footer interaction-options">
+            <button v-for="option in interactionRequest.options" :key="option.key" class="primary-btn" :class="option.style || 'btn-secondary'" @click="submitInteraction(option.key)">{{ option.label }}</button>
+          </div>
+        </div>
+
         <div class="interactive-panel" v-if="waitingInput">
           <div class="panel-header">
             <h4>需要补充参数</h4>
@@ -279,7 +289,21 @@
 
             <div class="result-section" v-if="resultsData.report">
               <h4>扫描报告</h4>
-              <div class="code-block">{{ resultsData.report }}</div>
+              <div class="report-toolbar">
+                <a v-if="resultsData.html_report_url" class="primary-btn report-link" :href="resultsData.html_report_url" target="_blank" rel="noopener">打开 HTML 报告</a>
+                <a v-if="resultsData.report_url" class="secondary-btn report-link" :href="resultsData.report_url" target="_blank" rel="noopener">下载 Markdown</a>
+              </div>
+              <iframe v-if="resultsData.html_report_url" class="report-preview" :src="resultsData.html_report_url" sandbox="allow-same-origin" title="AI 扫描报告预览"></iframe>
+              <iframe v-else class="report-preview" :srcdoc="renderMarkdownDocument(resultsData.report)" sandbox title="AI 扫描报告预览"></iframe>
+            </div>
+
+            <div class="result-section report-analysis" v-if="resultsData.report_analysis && Object.keys(resultsData.report_analysis).length">
+              <h4>AI 风险分析</h4>
+              <div class="analysis-grid">
+                <div v-for="(value, key) in resultsData.report_analysis" :key="key" class="analysis-item">
+                  <strong>{{ key }}</strong><span>{{ typeof value === 'object' ? JSON.stringify(value) : value }}</span>
+                </div>
+              </div>
             </div>
 
             <div class="result-section" v-if="resultsData.errors?.length > 0">
@@ -316,7 +340,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed, onMounted, onUnmounted } from 'vue'
+import { reactive, ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { API } from '../../services/api.js'
 import { ws } from '../../services/websocket.js'
 import { showToast, globalState, addScanHistory, getScanHistory } from '../../store.js'
@@ -341,6 +365,7 @@ const completedTasksCount = ref(0)
 const totalTasksCount = ref(0)
 const resultsData = ref({})
 const scanHistory = ref([])
+const isGeneratingReport = ref(false)
 
 // === 任务轮询（TaskPoller，作为 WS 的补充/兜底通道） ===
 const taskPoller = new TaskPoller()
@@ -353,12 +378,96 @@ const wsOffline = ref(false)
 const waitingInput = ref(null)
 /** waiting_script_upload 时填充：{ capability, params: [{name,type,description}] } */
 const waitingScript = ref(null)
+const interactionRequest = ref(null)
 /** 动态输入表单的值（按 field.name 为 key） */
 const inputFormValues = reactive({})
 const submittingInput = ref(false)
 /** 脚本上传表单 */
 const scriptForm = reactive({ script_name: '', script_content: '', filename: '' })
 const submittingScript = ref(false)
+const SCAN_STATE_STORAGE_KEY = 'toskill_scan_view_state_v2'
+
+const persistScanState = () => {
+  try {
+    sessionStorage.setItem(SCAN_STATE_STORAGE_KEY, JSON.stringify({
+      form: { ...form },
+      isScanning: isScanning.value,
+      progress: progress.value,
+      statusText: statusText.value,
+      showResults: showResults.value,
+      tasks: tasks.value,
+      completedTasksCount: completedTasksCount.value,
+      totalTasksCount: totalTasksCount.value,
+      resultsData: resultsData.value,
+      currentTaskId: currentTaskId.value,
+      isPolling: isPolling.value,
+      wsOffline: wsOffline.value,
+      waitingInput: waitingInput.value,
+      waitingScript: waitingScript.value,
+      interactionRequest: interactionRequest.value,
+      inputFormValues: { ...inputFormValues },
+      scriptForm: { ...scriptForm },
+      savedAt: new Date().toISOString()
+    }))
+  } catch (error) {
+    if (import.meta.env.DEV) console.warn('Failed to persist scan state:', error)
+  }
+}
+
+const restoreScanState = () => {
+  try {
+    const saved = sessionStorage.getItem(SCAN_STATE_STORAGE_KEY)
+    if (!saved) return
+    const state = JSON.parse(saved)
+    if (state.form) Object.assign(form, state.form)
+    if (typeof state.isScanning === 'boolean') isScanning.value = state.isScanning
+    if (typeof state.progress === 'number') progress.value = state.progress
+    if (typeof state.statusText === 'string') statusText.value = state.statusText
+    if (typeof state.showResults === 'boolean') showResults.value = state.showResults
+    if (Array.isArray(state.tasks)) tasks.value = state.tasks
+    if (typeof state.completedTasksCount === 'number') completedTasksCount.value = state.completedTasksCount
+    if (typeof state.totalTasksCount === 'number') totalTasksCount.value = state.totalTasksCount
+    if (state.resultsData && typeof state.resultsData === 'object') resultsData.value = state.resultsData
+    if (state.currentTaskId) currentTaskId.value = state.currentTaskId
+    if (typeof state.isPolling === 'boolean') isPolling.value = state.isPolling
+    if (typeof state.wsOffline === 'boolean') wsOffline.value = state.wsOffline
+    if (state.waitingInput) waitingInput.value = state.waitingInput
+    if (state.waitingScript) waitingScript.value = state.waitingScript
+    if (state.interactionRequest) interactionRequest.value = state.interactionRequest
+    if (state.inputFormValues && typeof state.inputFormValues === 'object') {
+      Object.assign(inputFormValues, state.inputFormValues)
+    }
+    if (state.scriptForm && typeof state.scriptForm === 'object') {
+      Object.assign(scriptForm, state.scriptForm)
+    }
+  } catch (error) {
+    if (import.meta.env.DEV) console.warn('Failed to restore scan state:', error)
+  }
+}
+
+watch(
+  [
+    form,
+    isScanning,
+    progress,
+    statusText,
+    showResults,
+    tasks,
+    completedTasksCount,
+    totalTasksCount,
+    resultsData,
+    currentTaskId,
+    isPolling,
+    wsOffline,
+    waitingInput,
+    waitingScript,
+    interactionRequest,
+    inputFormValues,
+    scriptForm
+  ],
+  persistScanState,
+  { deep: true }
+)
 
 const taskModal = reactive({
   show: false,
@@ -443,6 +552,11 @@ const renderedTaskResult = computed(() => {
   if (!taskModal.result) return ''
   return marked.parse(taskModal.result)
 })
+
+const renderMarkdownDocument = (content) => {
+  const body = content ? marked.parse(String(content)) : ''
+  return `<!doctype html><html><head><meta charset="utf-8"><style>body{font:14px/1.7 system-ui,sans-serif;color:#1f2937;padding:24px;max-width:1100px;margin:auto}h1,h2,h3{color:#111827;border-bottom:1px solid #e5e7eb;padding-bottom:.35em}table{border-collapse:collapse;width:100%}th,td{border:1px solid #d1d5db;padding:8px;text-align:left}pre,code{background:#f3f4f6;border-radius:5px}pre{padding:14px;overflow:auto}blockquote{border-left:4px solid #60a5fa;margin-left:0;padding-left:14px;color:#4b5563}</style></head><body>${body}</body></html>`
+}
 
 const formatElapsed = (ms) => {
   if (ms < 1000) return Math.round(ms) + 'ms'
@@ -539,6 +653,37 @@ const startScan = async () => {
   }
 }
 
+const ensureReportGenerated = async (scanData) => {
+  const sessionId = scanData?.session_id || scanData?.task_id
+  if (!sessionId || scanData?.report || scanData?.report_url || isGeneratingReport.value) return
+
+  isGeneratingReport.value = true
+  resultsData.value = {
+    ...resultsData.value,
+    report_status: 'generating',
+    report: 'AI report generation in progress...'
+  }
+  try {
+    const response = await API.generateScanReport(sessionId)
+    const generated = response?.data || response || {}
+    resultsData.value = {
+      ...resultsData.value,
+      ...generated,
+      report: generated.report || generated.report_preview || resultsData.value.report || '',
+      report_status: 'completed'
+    }
+  } catch (error) {
+    resultsData.value = {
+      ...resultsData.value,
+      report_status: 'error',
+      report_error: error.message
+    }
+    showToast('AI report generation failed: ' + error.message, 'error')
+  } finally {
+    isGeneratingReport.value = false
+  }
+}
+
 const handleScanResult = (data) => {
   isScanning.value = false
   progress.value = 100
@@ -549,6 +694,7 @@ const handleScanResult = (data) => {
     addScanHistory(form.target.trim())
     scanHistory.value = getScanHistory()
   }
+  void ensureReportGenerated(resultsData.value)
 }
 
 const cancelScan = () => {
@@ -578,6 +724,34 @@ const startTaskPolling = (taskId) => {
 const stopTaskPolling = () => {
   taskPoller.stop()
   isPolling.value = false
+}
+
+const submitInteraction = (choice) => {
+  if (!choice) return
+  if (!ws.isConnected()) {
+    showToast('WebSocket 已断开，请重新连接后重试', 'error')
+    return
+  }
+  if (String(choice) === '3') {
+    waitingInput.value = {
+      context: 'interaction_chat',
+      fields: [{ name: 'chat_message', type: 'text', description: '请输入要向智能体询问或补充的内容', required: true }]
+    }
+    interactionRequest.value = null
+    return
+  }
+  ws.sendConfirm(choice)
+  interactionRequest.value = null
+  if (String(choice) === '4') {
+    waitingScript.value = { capability: '自定义扫描脚本', params: [] }
+  } else if (String(choice) === '5') {
+    waitingInput.value = {
+      context: 'script_generate',
+      fields: [{ name: 'script_description', type: 'text', description: '请描述希望 AI 生成的扫描脚本功能', required: true }]
+    }
+  }
+  const tid = currentTaskId.value
+  if (tid) setTimeout(() => startTaskPolling(tid), 500)
 }
 
 /**
@@ -663,6 +837,27 @@ const submitInputForm = () => {
     }
   }
   // 组装多字段 payload：{ fields: [{field, value}] }
+  const context = waitingInput.value.context
+  const firstValue = fields.length ? inputFormValues[fields[0].name] : ''
+  if (context === 'interaction_chat') {
+    const sent = ws.send('interaction_chat', { content: firstValue })
+    if (sent) {
+      waitingInput.value = null
+      delete inputFormValues.chat_message
+      showToast('消息已发送，智能体正在处理', 'success')
+    } else showToast('发送失败：WebSocket 未连接', 'error')
+    return
+  }
+  if (context === 'script_generate') {
+    const sent = ws.send('script_description', { description: firstValue })
+    if (sent) {
+      waitingInput.value = null
+      delete inputFormValues.script_description
+      showToast('已提交脚本需求，AI 正在生成', 'success')
+    } else showToast('发送失败：WebSocket 未连接', 'error')
+    return
+  }
+
   const payloadFields = fields.map(f => ({
     field: f.name,
     value: inputFormValues[f.name]
@@ -739,6 +934,78 @@ const onScriptFileChange = (event) => {
 
 const handleWSMessage = (data) => {
   switch (data.type) {
+    case 'interaction_required': {
+      const payload = data.payload || {}
+      const rawOptions = Array.isArray(payload.options) && payload.options.length
+        ? payload.options
+        : [{ key: '1', label: '执行' }, { key: '2', label: '停止' }, { key: '3', label: '聊天' }, { key: '4', label: '上传脚本' }, { key: '5', label: '生成脚本' }]
+      interactionRequest.value = {
+        title: payload.message || '需要进一步操作',
+        description: `目标: ${payload.target || form.target || '-'} | 下一任务: ${payload.next_task || '-'}`,
+        options: rawOptions.map(option => {
+          const item = typeof option === 'string' ? { key: option, label: option } : (option || {})
+          return { key: item.key ?? item.value ?? '', label: item.label ?? item.name ?? item.key ?? '', style: item.style || 'btn-secondary' }
+        }).filter(option => option.key && option.label)
+      }
+      waitingInput.value = null
+      waitingScript.value = null
+      stopTaskPolling()
+      isScanning.value = true
+      break
+    }
+
+    case 'waiting_for_user_input': {
+      const payload = data.payload || data
+      waitingInput.value = {
+        fields: Array.isArray(payload.fields) ? payload.fields : (payload.waiting_input?.fields || [])
+      }
+      interactionRequest.value = null
+      waitingScript.value = null
+      isScanning.value = true
+      stopTaskPolling()
+      break
+    }
+
+    case 'script_generate_request':
+      waitingInput.value = {
+        context: 'script_generate',
+        fields: [{ name: 'script_description', type: 'text', description: data.payload?.message || '请描述希望 AI 生成的扫描脚本功能', required: true }]
+      }
+      interactionRequest.value = null
+      waitingScript.value = null
+      stopTaskPolling()
+      break
+
+    case 'script_upload_request':
+      waitingScript.value = { capability: data.payload?.message || '自定义扫描脚本', params: [] }
+      interactionRequest.value = null
+      waitingInput.value = null
+      stopTaskPolling()
+      break
+
+    case 'script_registered':
+    case 'script_generated':
+      waitingInput.value = null
+      waitingScript.value = null
+      showToast(data.payload?.message || '脚本已注册', 'success')
+      break
+
+    case 'script_error':
+      showToast('脚本处理失败: ' + (data.payload?.error || '未知错误'), 'error')
+      break
+
+    case 'input_received':
+      waitingInput.value = null
+      showToast('参数已接收，工作流继续执行', 'success')
+      break
+
+    case 'workflow_resumed':
+      if (data.payload?.resumed) {
+        const tid = currentTaskId.value
+        if (tid && !taskPoller.isPolling) startTaskPolling(tid)
+      }
+      break
+
     case 'scan_started':
       addTask(data.payload.task_id || '初始化任务', 'running')
       progress.value = 10
@@ -774,6 +1041,7 @@ const handleWSMessage = (data) => {
       break
 
     case 'scan_completed':
+      interactionRequest.value = null
       handleScanResult(data)
       stopTaskPolling()
       showToast('扫描完成', 'success')
@@ -818,8 +1086,12 @@ const handleWSMessage = (data) => {
 }
 
 onMounted(() => {
+  restoreScanState()
   scanHistory.value = getScanHistory()
   ws.on('*', handleWSMessage)
+  if (isScanning.value && currentTaskId.value && !waitingInput.value && !waitingScript.value) {
+    startTaskPolling(currentTaskId.value)
+  }
 })
 
 onUnmounted(() => {
@@ -1892,4 +2164,14 @@ select:focus {
 .panel-footer .primary-btn::after {
   display: none;
 }
+
+.interaction-options { justify-content: flex-start; flex-wrap: wrap; gap: 10px; }
+.report-toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.report-link { display: inline-flex; align-items: center; text-decoration: none; }
+.report-preview { width: 100%; min-height: 680px; border: 1px solid var(--border-light); border-radius: 8px; background: #fff; }
+.report-markdown { padding: 18px; border: 1px solid var(--border-light); border-radius: 8px; background: var(--surface-card, #fff); }
+.analysis-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.analysis-item { display: flex; flex-direction: column; gap: 5px; padding: 12px; border-radius: 8px; background: var(--surface-muted, #f5f7fa); }
+.analysis-item strong { color: var(--text-secondary); font-size: 12px; }
+.analysis-item span { white-space: pre-wrap; word-break: break-word; }
 </style>

@@ -324,22 +324,31 @@ class WSManager {
     isConnected() { return this.connected && this.ws && this.ws.readyState === WebSocket.OPEN; }
     getSessionId() { return this.sessionId; }
 
-    startScan(target, scanMode = 'info') {
-        const payload = { target, scan_mode: scanMode };
+    startScan(target, scanMode = 'info', params = {}) {
+        const payload = { target, scan_mode: scanMode, params };
         console.log('[WS] startScan 发送:', { type: 'start_scan', payload });
         const result = this.send('start_scan', payload);
         console.log('[WS] startScan 发送结果:', result);
         return result;
     }
     sendConfirm(choice = 'confirm') { return this.send('user_choice', { choice }); }
-    sendToolConfirm(confirmed = true) {
-        if (confirmed) { return this.send('tool_confirmed', { confirmed: true }); } 
-        else { return this.send('tool_rejected', { confirmed: false }); }
+    sendToolConfirm(confirmed = true, params = {}) {
+        if (confirmed) { return this.send('tool_confirmed', { confirmed: true, params }); }
+        else { return this.send('tool_rejected', { confirmed: false, params }); }
     }
     sendAlternativeChoice(choiceIndex, choiceLabel) {
         return this.send('alternative_selected', { choice_index: choiceIndex, choice_label: choiceLabel });
     }
+    sendAlternativeSelected(choiceIndex, choiceLabel) { return this.sendAlternativeChoice(choiceIndex, choiceLabel); }
     sendChat(content) { return this.send('chat', { content }); }
+    sendScanChat(content) { return this.send('scan_chat', { content }); }
+    sendDecisionOverride(nextTask, params = {}, reason = '') {
+        return this.send('decision_override', { next_task: nextTask, params, reason });
+    }
+    sendExecuteTool(toolName, target, params = {}) {
+        return this.send('execute_tool', { tool_name: toolName, target, params });
+    }
+    sendStopScan() { return this.send('stop_scan', {}); }
     sendInputResponse(field, value) { return this.send('input_response', { field, value }); }
     sendSubscribe(sessionId) { return this.send('subscribe', { session_id: sessionId }); }
     sendGetHistory() { return this.send('get_history', {}); }

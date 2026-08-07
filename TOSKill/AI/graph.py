@@ -97,7 +97,13 @@ def _dvwa_base_url(state: ScanState) -> str:
     extracted = state.get("extracted_params", {}) or {}
     context = state.get("target_context", {}) or {}
     history = state.get("history_context", {}) or {}
-    return params.get("dvwa_base_url") or extracted.get("dvwa_base_url") or context.get("dvwa_base_url") or history.get("dvwa_base_url", "")
+    return (
+        params.get("dvwa_base_url")
+        or extracted.get("dvwa_base_url")
+        or context.get("dvwa_base_url")
+        or history.get("dvwa_base_url")
+        or (state.get("target", "") if _is_dvwa_target(state) else "")
+    )
 
 
 TOOL_MAPPING_MATRIX = {
@@ -121,18 +127,11 @@ CONTEXT_TOOL_RULES = {
     "8443": ["xss_scan", "sqli_scan", "dir_brute"],
 }
 
-FALLBACK_TOOL_MAP = {
-    "sqli_scan": ["xss_scan", "cmdi_scan"],
-    "xss_scan": ["csrf_scan"],
-    "cmdi_scan": ["lfi_scan"],
-    "fileupload_scan": ["dir_brute"],
-    "weakpass_scan": ["baseinfo_scan"],
-    "ssrf_scan": ["csrf_scan"],
-    "csrf_scan": ["xss_scan"],
-    "lfi_scan": ["cmdi_scan"],
-}
-
-DEFAULT_FALLBACK_TOOLS = ["xss_scan", "sqli_scan"]
+# Decision policy is intentionally strict: tools are never selected from a
+# fallback map or a catch-all default. Recovery is an explicit user action.
+NO_FALLBACK_STRICT = True
+FALLBACK_TOOL_MAP = None
+DEFAULT_FALLBACK_TOOLS = None
 
 
 def get_tools_by_context(port_results: dict) -> list:
@@ -174,14 +173,44 @@ def get_fallback_tools(failed_tool: str) -> list:
     Returns:
         list: 备选工具名列表，若无匹配则返回默认兜底工具
     """
-    if not failed_tool:
-        return list(DEFAULT_FALLBACK_TOOLS)
+    return []
 
-    fallback = FALLBACK_TOOL_MAP.get(failed_tool)
-    if fallback:
-        return list(fallback)
 
-    return list(DEFAULT_FALLBACK_TOOLS)
+async def _require_decision_repair(
+    state: ScanState,
+    code: str,
+    message: str,
+    details: Optional[Dict[str, Any]] = None,
+) -> ScanState:
+    """Stop at an explicit repair state; never choose an implicit fallback."""
+    session_id = state.get("websocket_session_id") or state.get("task_id")
+    repair_info = {
+        "code": code,
+        "message": message,
+        "suggestion": "Provide an explicit next task and optional tool parameters to continue.",
+        "details": details or {},
+        "mode": "no_fallback_strict",
+        "enable_fallback": False,
+        "fallback_rule_set": None,
+    }
+    ws_callback = memory_store.get_websocket_callback(session_id)
+    if ws_callback:
+        try:
+            await ws_callback({"type": "repair_prompt_info", "payload": repair_info})
+            await ws_callback({"type": "repair_required", "payload": repair_info})
+        except Exception as exc:
+            logger.warning(f"[{session_id}] failed to send repair prompt: {exc}")
+    return update_state(
+        state,
+        next_task="",
+        task_status="repair_required",
+        pending_action_type="repair_required",
+        fallback_rule_set=None,
+        enable_fallback=False,
+        repair_required=True,
+        repair_prompt_info=repair_info,
+        exec_script="",
+    )
 
 
 def encrypt_auth_info(auth_data: Dict[str, Any]) -> str:
@@ -349,12 +378,7 @@ def _match_tool_via_llm(prompt: str, tools_list: list) -> tuple:
                     break
         return tool_name, llm_params
     except Exception as e:
-        logger.warning(f"LLM工具匹配失败: {e}，使用第一个工具")
-        if tools_list:
-            first_tool = tools_list[0]
-            if hasattr(first_tool, 'name'):
-                return first_tool.name, {}
-            return str(first_tool), {}
+        logger.warning(f"LLM tool matching failed: {e}")
         return "", {}
 
 
@@ -497,7 +521,9 @@ class MemoryStore:
         self._cleanup_task: Optional[asyncio.Task] = None
         self._cleanup_thread: Optional[threading.Thread] = None
         self._stop_cleanup: bool = False
-        self._lock: threading.Lock = threading.Lock()
+        # update_session persists through save_session; use a re-entrant lock
+        # so nested persistence cannot deadlock the workflow thread.
+        self._lock: threading.RLock = threading.RLock()
         self._db_path = None
         self._db_connections: Dict[int, sqlite3.Connection] = {}
         self._init_sqlite()
@@ -678,22 +704,10 @@ class MemoryStore:
         with self._lock:
             now = datetime.now()
             
-            if session_id in self._session_metadata:
-                metadata = self._session_metadata[session_id]
-                metadata.version += 1
-                metadata.updated_at = now
-                metadata.last_activity = now
-            else:
-                metadata = SessionMetadata(
-                    version=1,
-                    created_at=now,
-                    updated_at=now,
-                    last_activity=now
-                )
-                self._session_metadata[session_id] = metadata
-            
-            old_state = self._sessions.get(session_id)
-            old_metadata = self._session_metadata.get(session_id)
+            previous_metadata = self._session_metadata.get(session_id)
+            version = (previous_metadata.version + 1) if previous_metadata else 1
+            created_at = previous_metadata.created_at if previous_metadata else now
+            state = update_state(state, _version=version)
             
             try:
                 state_json = json.dumps(state, ensure_ascii=False, default=str)
@@ -708,22 +722,34 @@ class MemoryStore:
                         conn.execute(
                             """INSERT OR REPLACE INTO sessions (session_id, state_json, created_at, updated_at, version)
                                VALUES (?, ?, ?, ?, ?)""",
-                            (session_id, state_json, metadata.created_at.isoformat(), 
-                             metadata.updated_at.isoformat(), metadata.version)
+                            (session_id, state_json, created_at.isoformat(),
+                             now.isoformat(), version)
                         )
                 except Exception as e:
                     logger.error(f"SQLite 保存会话失败: {e}")
                     return 0
             
+            self._session_metadata[session_id] = SessionMetadata(
+                version=version,
+                created_at=created_at,
+                updated_at=now,
+                last_activity=now,
+            )
             self._sessions[session_id] = state
             self._session_timestamps[session_id] = now
             
-            logger.debug(f"保存会话状态: {session_id}, 版本: {metadata.version}")
-            return metadata.version
+            logger.debug(f"保存会话状态: {session_id}, 版本: {version}")
+            return version
     
     def get_session(self, session_id: str) -> Optional[ScanState]:
         """获取会话状态"""
-        return self._sessions.get(session_id)
+        state = self._sessions.get(session_id)
+        if state is None:
+            return None
+        normalized = update_state(state)
+        if normalized != state:
+            self._sessions[session_id] = normalized
+        return normalized
     
     def get_session_version(self, session_id: str) -> int:
         """获取会话版本号"""
@@ -735,16 +761,8 @@ class MemoryStore:
         with self._lock:
             state = self.get_session(session_id)
             if state:
-                now = datetime.now()
-                state = {**state, **kwargs}
-                self._sessions[session_id] = state
-                self._session_timestamps[session_id] = now
-                
-                if session_id in self._session_metadata:
-                    metadata = self._session_metadata[session_id]
-                    metadata.version += 1
-                    metadata.updated_at = now
-                    metadata.last_activity = now
+                state = update_state(state, **kwargs)
+                self.save_session(session_id, state)
                 
                 logger.debug(f"更新会话状态: {session_id}, 版本: {self._session_metadata[session_id].version}")
             return state
@@ -870,7 +888,7 @@ class MemoryStore:
             for row in cursor.fetchall():
                 session_id, state_json, updated_at_str = row
                 try:
-                    state = json.loads(state_json)
+                    state = update_state(json.loads(state_json))
                     
                     if session_id in self._session_metadata:
                         continue
@@ -938,6 +956,28 @@ class MemoryStore:
                 self._chat_histories[session_id] = self._chat_histories[session_id][-self._max_chat_history:]
                 logger.debug(f"聊天历史自动清理: 移除 {removed} 条旧记录")
     
+            # Mirror chat messages into the LangGraph state for this session.
+            # Deduplicate by role/content to avoid graph + WebSocket double
+            # writes while keeping sessions isolated by session_id.
+            state = self._sessions.get(session_id)
+            if state is not None:
+                state_history = list(state.get("chat_history", []) or [])
+                if not any(
+                    item.get("role") == role and item.get("content") == content
+                    for item in state_history
+                ):
+                    state_history.append({
+                        "role": role,
+                        "content": content,
+                        "timestamp": timestamp,
+                    })
+                    if len(state_history) > self._max_chat_history:
+                        state_history = state_history[-self._max_chat_history:]
+                    self.save_session(
+                        session_id,
+                        update_state(state, chat_history=state_history),
+                    )
+
     def get_chat_history(self, session_id: str) -> List[Dict]:
         """获取聊天历史"""
         return self._chat_histories.get(session_id, [])
@@ -1096,7 +1136,7 @@ class MemoryStore:
             if duplicate_count > 0:
                 logger.info(f"[同步] 会话 {session_id} 去重: 移除 {duplicate_count} 条重复消息")
             
-            return {**state, "chat_history": merged}
+            return update_state(state, chat_history=merged)
     
     def set_pending_interaction(self, session_id: str, interaction_data: Dict):
         """设置待处理的交互请求（同步到SQLite）"""
@@ -1607,8 +1647,7 @@ def tool_check_router(state: ScanState) -> str:
     
     if tool_exists:
         return "direct_tool_execute"
-    else:
-        return "intent_recognition"
+    return "script_upload_process"
 
 
 @with_node_retry(max_retries=3)
@@ -1712,7 +1751,39 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
     
     confirm_result = interrupt(confirm_message)
     memory_store.clear_pending_interaction(session_id)
+
+    if not isinstance(confirm_result, dict) or not confirm_result.get("confirmed", False):
+        return await _require_decision_repair(
+            state,
+            "TOOL_EXECUTION_NOT_CONFIRMED",
+            "The direct tool execution was not confirmed by the user.",
+            {"tool": matched_name or tool_name, "target": target},
+        )
+    confirmed_params = confirm_result.get("params", {}) or {}
+    if not isinstance(confirmed_params, dict):
+        return await _require_decision_repair(
+            state,
+            "INVALID_TOOL_PARAMS",
+            "Confirmed tool parameters must be a JSON object.",
+            {"tool": matched_name or tool_name},
+        )
+    llm_params = {**(llm_params or {}), **confirmed_params}
     
+    if ws_callback:
+        try:
+            await ws_callback({
+                "type": "tool_execution_started",
+                "payload": {
+                    "tool_name": getattr(tool, "name", task),
+                    "target": target,
+                    "params": llm_params or {},
+                    "source": "scan_workflow",
+                    "timestamp": datetime.now().isoformat(),
+                },
+            })
+        except Exception as e:
+            logger.warning(f"[{session_id}] failed to send tool parameters: {e}")
+
     try:
         from .tools import invoke_tool_with_auth, extract_auth_from_result
         
@@ -2188,6 +2259,14 @@ def parse_react_response(response_text: str) -> dict:
 @with_node_retry(max_retries=3)
 async def ai_decision(state: ScanState) -> ScanState:
     """原子1: AI智能决策（RAG增强版）"""
+    # Enforce the policy on every decision pass, including sessions created
+    # before the strict contract was introduced.
+    state = update_state(
+        state,
+        fallback_rule_set=None,
+        enable_fallback=False,
+        exec_script="",
+    )
     task_id = state.get("task_id", "")
     session_id = state.get("websocket_session_id") or state.get("task_id")
     logger.info(f"[{task_id}] AI决策节点开始执行（RAG增强版）")
@@ -2292,15 +2371,16 @@ async def ai_decision(state: ScanState) -> ScanState:
     # 优先级3：AI默认决策（默认序列回退）
     if next_task_assigned is None and len(done) < len(tool_sequence):
         remaining = [t for t in tool_sequence if t not in done]
-        priority_level = "ai_default"
-        logger.warning(f"🤖 [优先级3-AI默认] 回退到默认序列。待处理任务: {remaining}（用户指令和知识库策略均未选出任务）")
-        next_task_assigned = remaining[0] if remaining else None
-        is_react_selected = False
-        
-        if next_task_assigned is None:
-            logger.info("所有任务已完成")
-            return update_state(state, next_task="end", need_generate_script=False,
-                rag_last_strategy=rag_strategy)
+        return await _require_decision_repair(
+            state,
+            "NO_VALID_AI_DECISION",
+            "No valid next task was produced by the decision engine.",
+            {
+                "remaining_tasks": remaining,
+                "react_action": (react_decision or {}).get("action", ""),
+                "rag_available": bool(rag_strategy),
+            },
+        )
 
     if next_task_assigned:
         t = next_task_assigned
@@ -2398,7 +2478,9 @@ async def ai_decision(state: ScanState) -> ScanState:
                         "react_thought": react_decision.get("thought", "")[:100] if react_decision else "",
                         "user_directed": is_user_directed,
                         "user_directed_params": user_directed_params if is_user_directed else {},
-                        "priority_level": priority_level
+                        "priority_level": priority_level,
+                        "available_tasks": [task for task in tool_sequence if task not in done],
+                        "no_fallback_strict": True,
                     }
                 })
             except Exception as e:
@@ -2571,7 +2653,7 @@ async def user_interact(state: ScanState) -> ScanState:
     target = state.get("target", "")
     session_id = state.get("websocket_session_id") or state.get("task_id")
     
-    if next_task == "end":
+    if next_task == "end" or (not next_task and not state.get("repair_required", False)):
         return state
     
     tool = get_tool_by_name(next_task)
@@ -2595,6 +2677,11 @@ async def user_interact(state: ScanState) -> ScanState:
             "target": target,
             "mode": mode,
             "completed_tasks": state.get("completed_tasks", []),
+            "available_tasks": [
+                task for task in get_tool_sequence(mode)
+                if task not in state.get("completed_tasks", [])
+            ],
+            "repair_required": bool(state.get("repair_required", False)),
             "tool_params_info": tool_params_info,
             "auth_status": {
                 "has_auth": bool(state.get("auth_info") or state.get("auth_cookies") or state.get("auth_token")),
@@ -2631,12 +2718,50 @@ async def user_interact(state: ScanState) -> ScanState:
 
     memory_store.clear_pending_interaction(session_id)
     
+    override_next_task = ""
+    override_params = {}
+    chat_content = ""
     if isinstance(user_choice, dict):
+        override_next_task = str(user_choice.get("override_next_task", "") or "").strip()
+        override_params = user_choice.get("params", {}) or {}
+        chat_content = str(user_choice.get("chat_content", "") or "").strip()
+        if not isinstance(override_params, dict):
+            return await _require_decision_repair(
+                state,
+                "INVALID_OVERRIDE_PARAMS",
+                "Human-supplied tool parameters must be a JSON object.",
+            )
+        if override_next_task:
+            allowed_tasks = get_tool_sequence(mode)
+            completed_tasks = set(state.get("completed_tasks", []))
+            if override_next_task not in allowed_tasks or override_next_task in completed_tasks:
+                return await _require_decision_repair(
+                    state,
+                    "INVALID_DECISION_OVERRIDE",
+                    "The requested next task is not available in the active scan plan.",
+                    {"available_tasks": [task for task in allowed_tasks if task not in completed_tasks]},
+                )
+            next_task = override_next_task
         user_choice = user_choice.get("choice", "1")
     
     logger.info(f"👤 用户选择: {user_choice}")
     
-    return update_state(state, user_choice=str(user_choice))
+    merged_params = dict(state.get("user_directed_params", {}) or {})
+    merged_params.update(override_params)
+    return update_state(
+        state,
+        user_choice=str(user_choice),
+        user_input=chat_content or state.get("user_input", ""),
+        user_chat_context=chat_content or state.get("user_chat_context", ""),
+        next_task=next_task,
+        user_directed_next_task=override_next_task or state.get("user_directed_next_task", ""),
+        user_directed_params=merged_params,
+        fallback_rule_set=None,
+        enable_fallback=False,
+        repair_required=False,
+        repair_prompt_info={},
+        exec_script="",
+    )
 
 
 @with_node_retry(max_retries=3)
@@ -2663,6 +2788,7 @@ async def execute_task(state: ScanState) -> ScanState:
                     "payload": {
                         "tool_name": task,
                         "target": target,
+                        "params": state.get("user_directed_params", {}) or {},
                         "description": f"正在执行 {task} 对 {target} 进行扫描",
                         "rejection_count": rejection_count
                     }
@@ -2694,7 +2820,11 @@ async def execute_task(state: ScanState) -> ScanState:
         try:
             await ws_callback({
                 "type": "task_started",
-                "payload": {"tool": task, "target": target}
+                "payload": {
+                    "tool": task,
+                    "target": target,
+                    "params": state.get("user_directed_params", {}) or {},
+                }
             })
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
@@ -2748,6 +2878,21 @@ async def execute_task(state: ScanState) -> ScanState:
     
     if not tool:
         tool = get_tool_by_name(task)
+
+    # The workflow has already selected a concrete tool at this point.  For
+    # authenticated vulnerability scans, explicitly carry the session cookie
+    # into the tool parameters.  This keeps the low-level on-demand injection
+    # contract intact while ensuring a cookie obtained earlier in the same
+    # session is actually usable by subsequent scan scripts.
+    if tool and getattr(tool, "name", "") not in {
+        getattr(t, "name", "") for t in INFO_COLLECTION_TOOLS
+    }:
+        auth_info = state.get("auth_info", {})
+        cookies = (
+            auth_info.get("cookies") if isinstance(auth_info, dict) else None
+        ) or state.get("auth_cookies") or state.get("session_cookies")
+        if cookies and isinstance(llm_params, dict) and "cookies" not in llm_params:
+            llm_params["cookies"] = cookies
 
     if not tool:
         logger.warning(f"工具 {task} 不存在，跳过并继续下一个任务")
@@ -2860,6 +3005,7 @@ async def execute_task(state: ScanState) -> ScanState:
                     "payload": {
                         "tool": task,
                         "target": target,
+                        "params": llm_params or {},
                         "raw_result": sanitize_result_for_display(res),
                         "formatted_result": analysis,
                         **analysis_payload,
@@ -3353,11 +3499,22 @@ async def report_generation(state: ScanState) -> ScanState:
                          result="无扫描结果")
         return update_state(state, is_complete=True, report="无扫描结果")
     
+    auth_info = state.get("auth_info") if isinstance(state.get("auth_info"), dict) else {}
+    auth_cookies = auth_info.get("cookies") or state.get("auth_cookies") or state.get("session_cookies") or {}
     scan_summary = {
         "timestamp": datetime.now().isoformat(),
         "tool_count": len(tool_results),
-        "vulnerability_count": len(vulnerabilities)
+        "vulnerability_count": len(vulnerabilities),
+        "authentication": {
+            "used": bool(state.get("authentication_used")),
+            "credentials_obtained": bool(state.get("credentials_obtained")),
+            "status": state.get("auth_status", "unknown"),
+            "source": auth_info.get("source", ""),
+            "type": auth_info.get("type", ""),
+            "cookie_count": len(auth_cookies) if isinstance(auth_cookies, dict) else 0,
+        },
     }
+    state = update_state(state, task_status="waiting_user_choice")
     
     if ws_callback:
         try:
@@ -3392,6 +3549,14 @@ async def report_generation(state: ScanState) -> ScanState:
             chat_history=chat_history,
             task_history=task_history
         )
+        auth_summary = scan_summary["authentication"]
+        report += (
+            "\n\n## Authentication Context\n"
+            f"- Credentials obtained: {auth_summary['credentials_obtained']}\n"
+            f"- Authentication used by scan tools: {auth_summary['used']}\n"
+            f"- Source: {auth_summary['source'] or 'none'}\n"
+            f"- Cookie count (values omitted): {auth_summary['cookie_count']}\n"
+        )
         
         report_info = report_manager.save_report(
             session_id=session_id,
@@ -3413,6 +3578,8 @@ async def report_generation(state: ScanState) -> ScanState:
             vulnerabilities=vulnerabilities,
             target=target
         )
+        if isinstance(ai_analysis, dict):
+            ai_analysis["authentication"] = auth_summary
         logger.info(f"AI分析完成: 风险等级={ai_analysis.get('risk_assessment', {}).get('overall_risk', 'unknown')}")
         
         html_report_info = report_manager.save_html_report(
@@ -3440,8 +3607,9 @@ async def report_generation(state: ScanState) -> ScanState:
                         "report_preview": report[:1200] if report else "",
                         "html_report_url": html_download_url,
                         "html_report_id": html_report_info.get("report_id", ""),
-                        "scan_summary": scan_summary,
-                        "risk_assessment": risk_assessment,
+                "scan_summary": scan_summary,
+                "authentication": scan_summary["authentication"],
+                "risk_assessment": risk_assessment,
                         "confidence": confidence,
                         "knowledge": knowledge_metadata,
                         "ai_analysis": ai_analysis,
@@ -3472,6 +3640,7 @@ async def report_generation(state: ScanState) -> ScanState:
                 "risk_assessment": risk_assessment,
                 "confidence": confidence,
                 "knowledge": knowledge_metadata,
+                "authentication": scan_summary["authentication"],
             },
         )
     except Exception as e:
@@ -3583,16 +3752,13 @@ async def rejection_handler(state: ScanState) -> ScanState:
             raise ValueError("无法解析替代方案")
             
     except Exception as e:
-        logger.warning(f"[{session_id}] AI 生成替代方案失败: {e}，使用默认方案")
-        alternatives = [
-            {"label": "跳过当前工具", "action": "skip", "description": f"跳过 {rejected_tool}，继续下一个任务"},
-            {"label": "重试当前工具", "action": rejected_tool, "description": f"重新尝试执行 {rejected_tool}"},
-        ]
-        if remaining:
-            alt = remaining[0]
-            if alt != rejected_tool:
-                alternatives.append({"label": f"执行 {alt}", "action": alt, "description": f"改为执行剩余任务: {alt}"})
-        alternatives.append({"label": "停止扫描", "action": "stop", "description": "停止扫描并生成已有结果的报告"})
+        logger.warning(f"[{session_id}] AI alternative generation failed: {e}")
+        return await _require_decision_repair(
+            state,
+            "ALTERNATIVE_DECISION_FAILED",
+            "No valid alternative was generated after the tool was rejected.",
+            {"rejected_tool": rejected_tool, "remaining_tasks": remaining},
+        )
     
     alt_message = {
         "type": "alternative_options",
@@ -3626,9 +3792,21 @@ async def rejection_handler(state: ScanState) -> ScanState:
     if 0 <= choice_idx < len(alternatives):
         selected = alternatives[choice_idx]
     else:
-        selected = alternatives[0] if alternatives else {"action": "skip", "label": "跳过"}
+        return await _require_decision_repair(
+            state,
+            "INVALID_ALTERNATIVE_SELECTION",
+            "The selected alternative is invalid; no default alternative will be executed.",
+            {"alternatives": alternatives},
+        )
     
-    action = selected.get("action", "skip")
+    action = selected.get("action", "")
+    if not action:
+        return await _require_decision_repair(
+            state,
+            "INVALID_ALTERNATIVE_ACTION",
+            "The selected alternative has no executable action.",
+            {"selected": selected},
+        )
     
     logger.info(f"[{session_id}] 用户选择替代方案: {selected.get('label')} -> {action}")
     
@@ -3970,13 +4148,116 @@ class AgentOrchestrator:
             result = await self.run_full_scan(result, websocket_callback)
         
         return result
-    
-    async def run_direct_tool(self, tool_name: str, target: str, session_id: str, websocket_callback: Callable = None) -> Dict[str, Any]:
+
+    async def ensure_session_auth(
+        self,
+        target: str,
+        session_id: str,
+        websocket_callback: Callable = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Optional[ScanState]:
+        """Ensure authenticated credentials exist before vulnerability scans.
+
+        Existing session credentials are reused.  When absent, the explicit
+        ``auto_auth`` option (enabled by default for scan workflows) invokes
+        the project's cookie brute extractor and persists normalized auth
+        metadata.  Values are never sent in status events or report metadata.
+        """
+        state = memory_store.get_session(session_id)
+        if not state:
+            state = create_initial_state(target=target, task_id=session_id)
+            state = update_state(state, websocket_session_id=session_id)
+            memory_store.save_session(session_id, state)
+
+        scan_params = params if isinstance(params, dict) else {}
+        supplied_cookies = scan_params.get("cookies")
+        if isinstance(supplied_cookies, dict) and supplied_cookies:
+            supplied_auth = dict(state.get("auth_info", {}) or {})
+            supplied_auth["cookies"] = supplied_cookies
+            supplied_auth["source"] = supplied_auth.get("source") or "user_supplied"
+            state = update_state(
+                state,
+                auth_info=supplied_auth,
+                auth_cookies=supplied_cookies,
+                session_cookies=supplied_cookies,
+                credentials_obtained=True,
+                authentication_used=True,
+                auth_status="available",
+            )
+            memory_store.save_session(session_id, state)
+
+        auth_info = state.get("auth_info", {})
+        cookies = (
+            auth_info.get("cookies") if isinstance(auth_info, dict) else None
+        ) or state.get("auth_cookies") or state.get("session_cookies")
+        if cookies:
+            return state
+
+        if scan_params.get("auto_auth", True) is False:
+            return state
+
+        event_callback = websocket_callback or memory_store.get_websocket_callback(session_id)
+
+        async def emit(event_type: str, payload: Dict[str, Any]):
+            if event_callback:
+                try:
+                    await event_callback({"type": event_type, "payload": payload})
+                except Exception as exc:
+                    logger.debug("auth status event failed: %s", exc)
+
+        await emit("auth_auto_started", {
+            "session_id": session_id,
+            "target": target,
+            "source": "cookie_brute_extract",
+            "message": "未检测到会话凭证，正在尝试自动获取 Cookie",
+        })
+        try:
+            await self.run_direct_tool(
+                "cookie_brute_extract",
+                target,
+                session_id,
+                websocket_callback=event_callback,
+                params={},
+            )
+            state = memory_store.get_session(session_id) or state
+            auth_info = state.get("auth_info", {})
+            cookies = (
+                auth_info.get("cookies") if isinstance(auth_info, dict) else None
+            ) or state.get("auth_cookies") or state.get("session_cookies")
+            await emit("auth_auto_completed", {
+                "session_id": session_id,
+                "source": "cookie_brute_extract",
+                "success": bool(cookies),
+                "cookie_count": len(cookies) if isinstance(cookies, dict) else 0,
+                "message": "自动 Cookie 获取完成" if cookies else "未获取到可用 Cookie，将继续未认证扫描",
+            })
+        except Exception as exc:
+            logger.warning("[%s] automatic cookie acquisition failed: %s", session_id, exc)
+            await emit("auth_auto_completed", {
+                "session_id": session_id,
+                "source": "cookie_brute_extract",
+                "success": False,
+                "cookie_count": 0,
+                "message": "自动 Cookie 获取失败，将继续未认证扫描",
+                "error": str(exc),
+            })
+        return memory_store.get_session(session_id) or state
+
+    async def run_direct_tool(
+        self,
+        tool_name: str,
+        target: str,
+        session_id: str,
+        websocket_callback: Callable = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """直接执行工具"""
         if websocket_callback:
             memory_store.set_websocket_callback(session_id, websocket_callback)
         
         tool = get_tool_by_name(tool_name)
+        from ..analysis.result_analyzer import sanitize_result_for_display
+        display_params = sanitize_result_for_display(params or {})
         if not tool:
             raise ValueError(f"工具 {tool_name} 不存在")
         
@@ -3984,15 +4265,60 @@ class AgentOrchestrator:
             try:
                 await websocket_callback({
                     "type": "direct_tool_started",
-                    "payload": {"tool": tool_name, "target": target}
+                    "payload": {"tool": tool_name, "target": target, "params": display_params}
                 })
             except Exception as e:
                 logger.error(f"WebSocket推送失败: {e}")
         
         try:
-            result = await asyncio.to_thread(tool.invoke, target)
+            from .tools import invoke_tool_with_auth
+            state = memory_store.get_session(session_id)
+            if not state:
+                state = create_initial_state(target=target, task_id=session_id)
+                state = update_state(state, websocket_session_id=session_id)
+            direct_params = dict(params or {})
+            # Direct executions are user-authorized scan actions.  Make the
+            # session credential explicit at this boundary so the low-level
+            # on-demand policy can still remain conservative for callers that
+            # do not intentionally request authenticated scanning.
+            if "cookies" not in direct_params:
+                auth_info = state.get("auth_info", {}) if isinstance(state, dict) else {}
+                session_cookies = (
+                    auth_info.get("cookies") if isinstance(auth_info, dict) else None
+                ) or state.get("auth_cookies") or state.get("session_cookies")
+                if session_cookies:
+                    direct_params["cookies"] = session_cookies
+            if "headers" not in direct_params:
+                auth_info = state.get("auth_info", {}) if isinstance(state, dict) else {}
+                session_headers = (
+                    auth_info.get("headers") if isinstance(auth_info, dict) else None
+                ) or state.get("auth_headers")
+                if session_headers:
+                    direct_params["headers"] = session_headers
+            display_params = sanitize_result_for_display(direct_params)
+            result = await asyncio.to_thread(
+                invoke_tool_with_auth,
+                tool,
+                target,
+                state,
+                llm_params=direct_params,
+            )
+            # Cookie extraction/brute-force tools return normalized auth data.
+            # Persist it immediately so the next scan in the same session can
+            # reuse the credential without requiring a second login step.
+            from .tools import extract_auth_from_result
+            auth_update = extract_auth_from_result(result)
+            if auth_update:
+                normalized_auth = auth_update.get("auth_info")
+                if isinstance(normalized_auth, dict):
+                    normalized_auth["source"] = normalized_auth.get("source") or tool_name
+                    normalized_auth["type"] = normalized_auth.get("type") or "cookie"
+                auth_update["authentication_used"] = True
+                auth_update["auth_status"] = "available"
+                state = update_state(state, **auth_update, credentials_obtained=True)
+                memory_store.save_session(session_id, state)
             deterministic = format_tool_result(tool_name, target, result)
-            from ..analysis.result_analyzer import get_analyzer, sanitize_result_for_display
+            from ..analysis.result_analyzer import get_analyzer
             analyzer = get_analyzer()
             analyzed_result = await asyncio.to_thread(analyzer.analyze, tool_name, target, result)
             analysis_payload = analyzer.to_websocket_payload(analyzed_result)
@@ -4005,6 +4331,7 @@ class AgentOrchestrator:
                         "payload": {
                             "tool": tool_name,
                             "target": target,
+                            "params": display_params,
                             "formatted_result": formatted,
                             "raw_result": sanitize_result_for_display(result),
                             **analysis_payload,
@@ -4017,6 +4344,7 @@ class AgentOrchestrator:
             return {
                 "tool": tool_name,
                 "target": target,
+                "params": direct_params,
                 "result": result,
                 "formatted_result": formatted,
                 "analysis": analysis_payload,
@@ -4060,6 +4388,13 @@ class AgentOrchestrator:
 
         if not state.get("error"):
             try:
+                memory_store.save_session(session_id, state)
+                state = await self.ensure_session_auth(
+                    state.get("target", ""),
+                    session_id,
+                    websocket_callback=websocket_callback,
+                    params=state.get("user_directed_params", {}) or {},
+                ) or state
                 state = update_state(state, mode="vuln_scan")
                 state = await self.vuln_graph.ainvoke(
                     state,
@@ -4108,6 +4443,13 @@ class AgentOrchestrator:
         if websocket_callback:
             memory_store.set_websocket_callback(session_id, websocket_callback)
         
+        memory_store.save_session(session_id, state)
+        state = await self.ensure_session_auth(
+            state.get("target", ""),
+            session_id,
+            websocket_callback=websocket_callback,
+            params=state.get("user_directed_params", {}) or {},
+        ) or state
         state = update_state(state, mode="vuln_scan")
         return await self.vuln_graph.ainvoke(
             state,

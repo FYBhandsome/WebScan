@@ -107,6 +107,12 @@
             placeholder="输入目标URL或IP"
             @keydown.enter="runTool"
           >
+          <textarea
+            v-model="execution.paramsText"
+            class="params-editor"
+            rows="4"
+            placeholder='Tool parameters JSON (optional), e.g. {"timeout": 15}'
+          ></textarea>
           <button 
             id="executeToolBtn" 
             class="primary-btn" 
@@ -266,6 +272,7 @@ const execution = reactive({
   show: false,
   toolName: '',
   target: '',
+  paramsText: '{}',
   resultText: '',
   resultData: null,
   analysisData: null,
@@ -684,6 +691,7 @@ const renderedAnalysis = computed(() => {
 const openExecution = (tool) => {
   execution.toolName = tool.name
   execution.target = ''
+  execution.paramsText = '{}'
   execution.resultText = ''
   execution.isExecuting = false
   execution.show = true
@@ -693,6 +701,7 @@ const closeExecution = () => {
   execution.show = false
   execution.toolName = ''
   execution.target = ''
+  execution.paramsText = '{}'
   execution.resultText = ''
   execution.resultData = null
   execution.analysisData = null
@@ -712,7 +721,19 @@ const runTool = async () => {
   execution.resultData = null
 
   try {
-    const result = await API.executeTool(execution.toolName, target)
+    let params = {}
+    try {
+      params = execution.paramsText.trim() ? JSON.parse(execution.paramsText) : {}
+      if (!params || Array.isArray(params) || typeof params !== 'object') {
+        throw new Error('Parameters must be a JSON object')
+      }
+    } catch (error) {
+      execution.resultText = `Invalid parameter JSON: ${error.message}`
+      showToast('参数 JSON 无效', 'warning')
+      execution.isExecuting = false
+      return
+    }
+    const result = await API.executeTool(execution.toolName, target, params)
     const outputData = result.data || result
     execution.resultData = outputData
     execution.analysisData = outputData.analysis || null

@@ -16,7 +16,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from TOSKill.AI.state import create_initial_state, update_state
 from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm as _get_llm
 from TOSKill.AI.core import CHAT_SYSTEM_PROMPT
-from TOSKill.AI.tools import get_tool_by_name, get_all_tool_names
+from TOSKill.AI.tools import get_tool_by_name, get_all_tool_names, get_tool_sequence
 from TOSKill.AI.log_collector import log_collector
 from TOSKill.AI.task_status_store import (
     get_task_status_store,
@@ -25,6 +25,7 @@ from TOSKill.AI.task_status_store import (
     STATUS_COMPLETED,
     STATUS_EXCEPTION,
     STATUS_WAITING_USER_INPUT,
+    STATUS_WAITING_USER_CHOICE,
     STATUS_WAITING_SCRIPT_UPLOAD,
 )
 from TOSKill.utils.error_handler import create_error_response, format_tool_error, ErrorSource, ErrorCategory
@@ -98,6 +99,10 @@ def _sync_interrupt_status(session_id: str, result: Dict) -> None:
     if not result:
         return
     task_status = result.get("task_status", "")
+    if task_status == "waiting_user_choice":
+        interaction = memory_store.get_pending_interaction(session_id) or {}
+        _safe_set_task_status(session_id, STATUS_WAITING_USER_CHOICE, stage="等待用户选择", interaction=interaction.get("payload", interaction))
+        return
     if task_status == "waiting_script_upload":
         _safe_set_task_status(
             session_id, STATUS_WAITING_SCRIPT_UPLOAD, stage="等待脚本上传",
@@ -121,6 +126,10 @@ class AIChatManager:
         self.tasks: Dict[str, asyncio.Task] = {}
         self.llm = None
         self._last_confirm_time: Dict[str, float] = {}
+        # Serialize concurrent workflow events per session and expose a
+        # monotonically increasing sequence for deterministic client rendering.
+        self._send_locks: Dict[str, asyncio.Lock] = {}
+        self._event_sequences: Dict[str, int] = {}
     
     def _get_llm(self):
         if not self.llm:
@@ -200,6 +209,21 @@ class AIChatManager:
                 self.tasks.pop(session_id, None)
     
     async def _send(self, session_id: str, message: Dict):
+        """Serialize outbound events so the UI receives a causal sequence."""
+        lock = self._send_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._send_locks[session_id] = lock
+        async with lock:
+            event_seq = self._event_sequences.get(session_id, 0) + 1
+            outbound = dict(message)
+            outbound["event_seq"] = event_seq
+            outbound.setdefault("emitted_at", datetime.now().isoformat())
+            delivered = await self._send_unlocked(session_id, outbound)
+            if delivered:
+                self._event_sequences[session_id] = event_seq
+
+    async def _send_unlocked(self, session_id: str, message: Dict):
         """发送WebSocket消息，带连接状态检查"""
         if ws := self.connections.get(session_id):
             try:
@@ -212,6 +236,7 @@ class AIChatManager:
                         return
 
                 await ws.send_json(message)
+                return True
             except Exception as e:
                 logger.error(f"[{session_id}] 发送消息失败: {e}")
                 # 发送失败时清理连接
@@ -237,6 +262,13 @@ class AIChatManager:
     async def handle_message(self, session_id: str, message: Dict):
         msg_type = message.get("type")
         payload = message.get("payload", {})
+        if not isinstance(payload, dict):
+            await self._send_error(
+                session_id,
+                "payload must be a JSON object.",
+                error_code="INVALID_PAYLOAD",
+            )
+            return
         
         logger.info(f"[{session_id}] 收到WebSocket消息: type={msg_type}, payload={payload}")
         log_debug(f"收到消息: {msg_type}", category="api", node="ai_chat", session_id=session_id,
@@ -247,10 +279,13 @@ class AIChatManager:
             "user_confirm": self._handle_user_confirm,
             "user_choice": self._handle_user_confirm,
             "start_scan": self._handle_start_scan,
+            "stop_scan": self._handle_stop_scan,
             "get_history": self._handle_get_history,
             "get_status": self._handle_get_status,
             "chat": self._handle_chat,
             "scan_chat": self._handle_scan_chat,
+            "interaction_chat": self._handle_interaction_chat,
+            "decision_override": self._handle_decision_override,
             "execute_tool": self._handle_execute_tool,
             "script_content": self._handle_script_content,
             "script_description": self._handle_script_description,
@@ -273,6 +308,11 @@ class AIChatManager:
                 await self._send_error(session_id, f"处理请求失败: {str(e)}")
         else:
             logger.warning(f"[{session_id}] 未知消息类型: {msg_type}")
+            await self._send_error(
+                session_id,
+                f"Unknown WebSocket message type: {msg_type}",
+                error_code="UNKNOWN_MESSAGE_TYPE",
+            )
     
     async def _handle_user_input(self, session_id: str, payload: Dict):
         content = payload.get("content", "")
@@ -292,6 +332,10 @@ class AIChatManager:
         self._last_confirm_time[session_id] = now
         
         choice = payload.get("choice", "confirm")
+        choice = str(choice)
+        if choice not in {"1", "2", "3", "4", "5", "confirm"}:
+            await self._send_error(session_id, "Unsupported interaction choice.", error_code="INVALID_CHOICE")
+            return
         
         orchestrator = get_agent_orchestrator()
         await orchestrator._ensure_initialized()
@@ -303,6 +347,31 @@ class AIChatManager:
             
             try:
                 result = await orchestrator.resume_workflow(session_id, choice)
+                if result and result.get("is_complete") and not result.get("report") and result.get("tool_results"):
+                    result = await orchestrator.run_report(result)
+
+                if result and result.get("__interrupt__"):
+                    if choice == "4":
+                        _safe_set_task_status(
+                            session_id, STATUS_WAITING_SCRIPT_UPLOAD,
+                            stage="等待脚本上传",
+                            waiting_script={"capability": "custom_scan", "params": []},
+                        )
+                    elif choice == "5":
+                        _safe_set_task_status(
+                            session_id, STATUS_WAITING_USER_INPUT,
+                            stage="等待脚本需求描述",
+                            waiting_input={
+                                "context": "script_generate",
+                                "fields": [{
+                                    "name": "script_description", "type": "text",
+                                    "description": "请描述希望 AI 生成的扫描脚本功能",
+                                    "required": True,
+                                }],
+                            },
+                        )
+                    else:
+                        _sync_interrupt_status(session_id, result)
                 
                 if result:
                     await self._send(session_id, {
@@ -322,7 +391,13 @@ class AIChatManager:
                                 "target": result.get("target", ""),
                                 "completed_tasks": result.get("completed_tasks", []),
                                 "vulnerabilities_count": len(result.get("vulnerabilities", [])),
-                                "report": result.get("report", "")
+                                "vulnerabilities": result.get("vulnerabilities", [])[:20],
+                                "report": result.get("report", ""),
+                                "report_url": result.get("report_url", ""),
+                                "report_id": result.get("report_id", ""),
+                                "html_report_url": result.get("html_report_url", ""),
+                                "report_analysis": result.get("report_analysis", {}),
+                                "errors": result.get("errors", [])
                             }
                         })
                 else:
@@ -340,6 +415,11 @@ class AIChatManager:
     async def _handle_start_scan(self, session_id: str, payload: Dict):
         target = payload.get("target", "")
         scan_mode = payload.get("scan_mode", "info")
+        initial_params = payload.get("params") or {}
+
+        previous_task = self.tasks.get(session_id)
+        if previous_task and not previous_task.done():
+            previous_task.cancel()
         
         logger.info(f"[{session_id}] ========== 开始扫描请求 ==========")
         logger.info(f"[{session_id}] 原始目标: {target}")
@@ -350,11 +430,14 @@ class AIChatManager:
             logger.error(f"[{session_id}] 目标地址为空")
             await self._send_error(session_id, "目标地址不能为空", error_code="INVALID_TARGET")
             return
+        if not isinstance(initial_params, dict):
+            await self._send_error(session_id, "Scan parameters must be a JSON object.", error_code="INVALID_PARAMS")
+            return
         
-        import re
+        from urllib.parse import urlparse
         target = target.strip()
-        target_pattern = r'^[a-zA-Z0-9\.-]+(:\d+)?$|^https?://[a-zA-Z0-9\.-]+(:\d+)?(/.*)?$'
-        if not re.match(target_pattern, target):
+        parsed_target = urlparse(target if "://" in target else f"http://{target}")
+        if parsed_target.scheme not in {"http", "https"} or not parsed_target.hostname:
             logger.error(f"[{session_id}] 目标地址格式无效: {target}")
             await self._send_error(
                 session_id, 
@@ -369,6 +452,11 @@ class AIChatManager:
         
         state = create_initial_state(target=target, task_id=session_id, mode=mode)
         state["websocket_session_id"] = session_id
+        state = update_state(
+            state,
+            user_directed_params=dict(initial_params),
+            __extend_params=dict(initial_params),
+        )
         memory_store.save_session(session_id, state)
         # SubTask 4.3: 任务入队状态同步
         _safe_set_task_status(session_id, STATUS_QUEUED, stage="排队", progress=0)
@@ -377,6 +465,26 @@ class AIChatManager:
         log_collector.add_log(session_id, "handle_start_scan", "info", f"扫描开始: 目标={target}, 模式={mode}")
         self.tasks[session_id] = asyncio.create_task(self._run_scan(session_id, target, mode, state))
         logger.info(f"[{session_id}] 扫描任务已创建并启动")
+
+    async def _handle_stop_scan(self, session_id: str, payload: Dict):
+        task = self.tasks.get(session_id)
+        if task and not task.done():
+            task.cancel()
+            _safe_set_task_status(session_id, STATUS_EXCEPTION, stage="已取消", error="用户取消扫描")
+            return
+
+        state = memory_store.get_session(session_id)
+        if state:
+            memory_store.save_session(session_id, update_state(
+                state,
+                should_continue=False,
+                task_status="cancelled",
+                is_complete=False,
+            ))
+        await self._send(session_id, {
+            "type": "scan_cancelled",
+            "payload": {"session_id": session_id, "reason": "no_active_task"},
+        })
 
     async def _run_scan(self, session_id: str, target: str, mode: str, state: Dict):
         logger.info(f"[{session_id}] ========== _run_scan 开始执行 ==========")
@@ -411,6 +519,10 @@ class AIChatManager:
             logger.info(f"[{session_id}] 调用扫描方法: {method.__name__}")
             
             result = await method(state)
+            # Guarantee report generation when a mode-specific or resumed
+            # graph completes without visiting the report node.
+            if result and result.get("is_complete") and not result.get("report") and result.get("tool_results"):
+                result = await orchestrator.run_report(result)
             logger.info(f"[{session_id}] 扫描方法执行完成，结果类型: {type(result)}")
             
             if result and result.get("__interrupt__"):
@@ -537,7 +649,7 @@ class AIChatManager:
 
         # 尝试提取扫描指令
         user_directed_next_task = ""
-        user_directed_params = {}
+        user_directed_params = dict(state.get("user_directed_params", {}) or {})
 
         try:
             from TOSKill.AI.tools import get_tool_sequence
@@ -574,7 +686,7 @@ class AIChatManager:
             json_match = re.search(r'\{[\s\S]*\}', resp_text)
             if json_match:
                 extraction_result = json.loads(json_match.group())
-                if extraction_result.get("has_directive"):
+                if extraction_result.get("has_directive") or extraction_result.get("params"):
                     directed_task = extraction_result.get("next_task", "")
                     if directed_task in remaining:
                         user_directed_next_task = directed_task
@@ -602,12 +714,115 @@ class AIChatManager:
                 "received": True,
                 "next_task": user_directed_next_task,
                 "params": user_directed_params,
-                "message": f"已接收您的指令" + (f"，下一步将执行: {user_directed_next_task}" if user_directed_next_task else "，将影响后续扫描决策")
+                "message": (
+                    f"已接收用户指令，下一步将执行: {user_directed_next_task}"
+                    if user_directed_next_task
+                    else "已接收用户参数，将影响后续扫描决策"
+                )
             }
         })
 
         logger.info(f"[{session_id}] 扫描中聊天消息已处理，user_chat_context已更新")
     
+    async def _handle_interaction_chat(self, session_id: str, payload: Dict):
+        """Resume a pending interaction through the graph chat branch."""
+        content = str(payload.get("content", "") or "").strip()
+        if not content:
+            await self._send_error(session_id, "Chat content cannot be empty.", error_code="EMPTY_CHAT")
+            return
+
+        orchestrator = get_agent_orchestrator()
+        await orchestrator._ensure_initialized()
+        if not orchestrator.has_pending_interaction(session_id):
+            await self._send_error(session_id, "No pending agent interaction.", error_code="NO_PENDING_INTERACTION")
+            return
+
+        memory_store.append_chat(session_id, "user", content)
+        result = await orchestrator.resume_workflow(
+            session_id,
+            {"choice": "3", "chat_content": content},
+        )
+        if result and result.get("__interrupt__"):
+            _sync_interrupt_status(session_id, result)
+        await self._send(session_id, {
+            "type": "workflow_resumed",
+            "payload": {"choice": "3", "chat": True, "resumed": result is not None},
+        })
+
+    async def _handle_decision_override(self, session_id: str, payload: Dict):
+        """Apply an explicit human decision without creating an automatic fallback."""
+        state = memory_store.get_session(session_id)
+        if not state:
+            await self._send_error(session_id, "No active scan session.")
+            return
+
+        next_task = str(payload.get("next_task", "") or "").strip()
+        params = payload.get("params") or {}
+        reason = str(payload.get("reason", "") or "").strip()
+        if not isinstance(params, dict):
+            await self._send_error(session_id, "Decision parameters must be a JSON object.")
+            return
+
+        allowed = get_tool_sequence(state.get("mode", "full_scan"))
+        completed = set(state.get("completed_tasks", []))
+        if next_task and (next_task not in allowed or next_task in completed):
+            repair_info = {
+                "code": "INVALID_DECISION_OVERRIDE",
+                "message": "The selected next task is not available in the current scan plan.",
+                "suggestion": "Choose one of the unfinished tasks supplied by the decision card.",
+                "available_tasks": [task for task in allowed if task not in completed],
+                "mode": "no_fallback_strict",
+            }
+            memory_store.save_session(session_id, update_state(
+                state,
+                fallback_rule_set=None,
+                enable_fallback=False,
+                repair_required=True,
+                repair_prompt_info=repair_info,
+                exec_script="",
+                task_status="repair_required",
+            ))
+            await self._send(session_id, {"type": "repair_prompt_info", "payload": repair_info})
+            return
+
+        merged_params = dict(state.get("user_directed_params", {}) or {})
+        merged_params.update(params)
+        updated_state = update_state(
+            state,
+            user_directed_next_task=next_task or state.get("user_directed_next_task", ""),
+            user_directed_params=merged_params,
+            user_chat_context=reason or state.get("user_chat_context", ""),
+            fallback_rule_set=None,
+            enable_fallback=False,
+            repair_required=False,
+            repair_prompt_info={},
+            exec_script="",
+            last_activity_time=datetime.now().isoformat(),
+        )
+        memory_store.save_session(session_id, updated_state)
+
+        resumed = False
+        orchestrator = get_agent_orchestrator()
+        await orchestrator._ensure_initialized()
+        if orchestrator.has_pending_interaction(session_id):
+            result = await orchestrator.resume_workflow(session_id, {
+                "choice": "1",
+                "override_next_task": next_task,
+                "params": params,
+            })
+            resumed = result is not None
+
+        await self._send(session_id, {
+            "type": "decision_override_applied",
+            "payload": {
+                "next_task": next_task,
+                "params": params,
+                "reason": reason,
+                "resumed": resumed,
+                "mode": "no_fallback_strict",
+            }
+        })
+
     async def _handle_execute_tool(self, session_id: str, payload: Dict):
         tool_name = payload.get("tool_name", "")
         target = payload.get("target", "")
@@ -622,9 +837,41 @@ class AIChatManager:
             return
         
         try:
-            await self._send(session_id, {"type": "tool_execution_started", "payload": {"tool_name": tool_name, "target": target}})
-            result = tool.invoke(target)
-            await self._send(session_id, {"type": "tool_execution_completed", "payload": {"tool_name": tool_name, "result": result}})
+            params = payload.get("params") or {}
+            if not isinstance(params, dict):
+                await self._send_error(session_id, "Tool parameters must be a JSON object.")
+                return
+            await self._send(session_id, {
+                "type": "tool_execution_started",
+                "payload": {
+                    "tool_name": tool_name,
+                    "target": target,
+                    "params": params,
+                    "source": "direct_websocket",
+                    "timestamp": datetime.now().isoformat(),
+                },
+            })
+            orchestrator = get_agent_orchestrator()
+            await orchestrator._ensure_initialized()
+            result = await orchestrator.run_direct_tool(
+                tool_name,
+                target,
+                session_id,
+                websocket_callback=lambda event: self._send(session_id, event),
+                params=params,
+            )
+            await self._send(session_id, {
+                "type": "tool_execution_completed",
+                "payload": {
+                    "tool_name": tool_name,
+                    "target": target,
+                    "params": params,
+                    "result": result.get("result"),
+                    "formatted_result": result.get("formatted_result", ""),
+                    "analysis": result.get("analysis", {}),
+                    "timestamp": datetime.now().isoformat(),
+                },
+            })
         except Exception as e:
             await self._send_error(session_id, f"工具执行失败: {str(e)}", tool_name=tool_name)
     
@@ -870,6 +1117,37 @@ class AIChatManager:
                         "message": f"AI生成的脚本已注册为工具: {result['tool_name']}"
                     }
                 })
+                # A generated tool may satisfy a graph interruption caused by
+                # a missing capability. Resume with the registered name just
+                # as the uploaded-script path does.
+                try:
+                    orchestrator = get_agent_orchestrator()
+                    await orchestrator._ensure_initialized()
+                    resumed_result = await orchestrator.resume_workflow(
+                        session_id,
+                        {
+                            "script_content": script_code,
+                            "script_name": result["tool_name"],
+                            "tool_name": result["tool_name"],
+                        },
+                    )
+                    if resumed_result and resumed_result.get("__interrupt__"):
+                        _sync_interrupt_status(session_id, resumed_result)
+                    elif resumed_result and resumed_result.get("is_complete"):
+                        _safe_set_task_status(session_id, STATUS_COMPLETED, progress=100, stage="completed")
+                    else:
+                        _safe_set_task_status(session_id, STATUS_RUNNING, stage="resumed")
+                    await self._send(session_id, {
+                        "type": "workflow_resumed",
+                        "payload": {"session_id": session_id, "resumed": resumed_result is not None},
+                    })
+                except Exception as resume_error:
+                    logger.error("[%s] generated script workflow resume failed: %s", session_id, resume_error)
+                    await self._send_error(
+                        session_id,
+                        f"Script registered but workflow resume failed: {resume_error}",
+                        error_code="RESUME_FAILED",
+                    )
             else:
                 await self._send(session_id, {
                     "type": "script_generation_progress",
@@ -913,6 +1191,12 @@ class AIChatManager:
             await orchestrator._ensure_initialized()
             result = await orchestrator.resume_workflow(session_id, {"params": params})
 
+            # Resumed workflows can finish directly after the interrupt and
+            # therefore bypass the report node; keep completion behavior
+            # identical to a normal scan.
+            if result and result.get("is_complete") and not result.get("report") and result.get("tool_results"):
+                result = await orchestrator.run_report(result)
+
             # 同步任务状态
             if result and result.get("__interrupt__"):
                 _sync_interrupt_status(session_id, result)
@@ -935,7 +1219,13 @@ class AIChatManager:
                         "target": result.get("target", ""),
                         "completed_tasks": result.get("completed_tasks", []),
                         "vulnerabilities_count": len(result.get("vulnerabilities", [])),
-                        "report": result.get("report", "")
+                        "vulnerabilities": result.get("vulnerabilities", [])[:20],
+                        "report": result.get("report", ""),
+                        "report_url": result.get("report_url", ""),
+                        "report_id": result.get("report_id", ""),
+                        "html_report_url": result.get("html_report_url", ""),
+                        "report_analysis": result.get("report_analysis", {}),
+                        "errors": result.get("errors", [])
                     }
                 })
 
@@ -1024,7 +1314,14 @@ class AIChatManager:
             memory_store.append_chat(session_id, "system", "用户确认执行工具")
 
             try:
-                result = await orchestrator.resume_workflow(session_id, {"confirmed": True})
+                params = payload.get("params") or {}
+                if not isinstance(params, dict):
+                    await self._send_error(session_id, "Tool parameters must be a JSON object.")
+                    return
+                result = await orchestrator.resume_workflow(
+                    session_id,
+                    {"confirmed": True, "params": params},
+                )
                 if result:
                     await self._send(session_id, {
                         "type": "tool_execution_proceed",

@@ -92,16 +92,16 @@ class ApiService {
   }
 
   // --- Scan ---
-  async startInfoScan(target) {
-    return this.post('/scan/info', { target });
+  async startInfoScan(target, params = {}) {
+    return this.post('/scan/info', { target, params });
   }
 
-  async startVulnScan(target) {
-    return this.post('/scan/vuln', { target });
+  async startVulnScan(target, params = {}) {
+    return this.post('/scan/vuln', { target, params });
   }
 
-  async startFullScan(target) {
-    return this.post('/scan/full', { target });
+  async startFullScan(target, params = {}) {
+    return this.post('/scan/full', { target, params });
   }
 
   /**
@@ -120,6 +120,11 @@ class ApiService {
     return this.get(`/scan/tasks/${taskId}/status`);
   }
 
+  async generateScanReport(sessionId) {
+    if (!sessionId) throw new Error('sessionId is required');
+    return this.post(`/reports/generate/${encodeURIComponent(sessionId)}`, {});
+  }
+
   // --- Tools ---
   // 修正：移除多余的 /toskill 前缀
   async getTools() {
@@ -130,12 +135,12 @@ class ApiService {
     return this.get('/tools/categories');
   }
 
-  async executeTool(toolName, target) {
-    return this.post('/tools/execute', { tool_name: toolName, target });
+  async executeTool(toolName, target, params = {}, analyze = true) {
+    return this.post('/tools/execute', { tool_name: toolName, target, params, analyze });
   }
 
-  async executeToolsBatch(toolNames, target) {
-    return this.post('/tools/execute/batch', { tool_names: toolNames, target });
+  async executeToolsBatch(toolNames, target, params = {}) {
+    return this.post('/tools/execute/batch', { tool_names: toolNames, target, params });
   }
 
   // --- Reports ---

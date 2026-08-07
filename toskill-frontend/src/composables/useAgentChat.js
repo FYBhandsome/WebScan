@@ -1,4 +1,4 @@
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ws } from '../services/websocket.js'
 import { showToast, globalState } from '../store.js'
 import { API } from '../services/api.js'
@@ -15,8 +15,108 @@ export function useAgentChat() {
   const scanProgress = ref({ current: 0, total: 0, activeTool: '' })
   const pendingInputRequest = ref(null)
   const scanStatus = ref('idle')
+  const authCookies = ref({})
+  const authCookieMeta = ref({ source: '', obtainedAt: '', cookieCount: 0 })
+  const lastEventSequence = ref(0)
+  const pendingEventQueue = new Map()
+  const AUTH_COOKIE_STORAGE_KEY = 'toskill_auth_cookies'
+
+  const parseCookieString = (raw) => Object.fromEntries(
+    String(raw || '').split(';').map(item => item.trim()).filter(Boolean)
+      .map(item => {
+        const index = item.indexOf('=')
+        return index > 0 ? [item.slice(0, index).trim(), item.slice(index + 1)] : null
+      }).filter(Boolean)
+  )
+
+  const loadAuthCookies = () => {
+    try {
+      const saved = sessionStorage.getItem(AUTH_COOKIE_STORAGE_KEY)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        authCookies.value = parsed.cookies || {}
+        authCookieMeta.value = parsed.meta || { source: 'session_storage', cookieCount: Object.keys(authCookies.value).length }
+      }
+    } catch (error) {
+      console.warn('Failed to restore authentication cookies:', error)
+    }
+  }
+
+  const setAuthCookies = (cookies, source = 'user') => {
+    if (!cookies || typeof cookies !== 'object' || Array.isArray(cookies)) return false
+    authCookies.value = { ...cookies }
+    authCookieMeta.value = { source, obtainedAt: new Date().toISOString(), cookieCount: Object.keys(authCookies.value).length }
+    try {
+      sessionStorage.setItem(AUTH_COOKIE_STORAGE_KEY, JSON.stringify({ cookies: authCookies.value, meta: authCookieMeta.value }))
+    } catch (error) {
+      console.warn('Failed to persist authentication cookies:', error)
+    }
+    return Object.keys(authCookies.value).length > 0
+  }
+
+  const clearAuthCookies = () => {
+    authCookies.value = {}
+    authCookieMeta.value = { source: '', obtainedAt: '', cookieCount: 0 }
+    try { sessionStorage.removeItem(AUTH_COOKIE_STORAGE_KEY) } catch (_) { /* storage may be unavailable */ }
+  }
+
+  const prepareCookieSession = async (target) => {
+    if (Object.keys(authCookies.value).length) return authCookies.value
+    if (typeof document !== 'undefined' && document.cookie) {
+      const browserCookies = parseCookieString(document.cookie)
+      if (setAuthCookies(browserCookies, 'browser')) return browserCookies
+    }
+    try {
+      const response = await API.executeTool('cookie_brute_extract', target, {}, false)
+      const result = response?.data?.result || response?.result || {}
+      const cookies = result?.data?.cookies || result?.cookies_obtained || result?.cookies
+      if (setAuthCookies(cookies, 'cookie_brute_extract')) return authCookies.value
+    } catch (error) {
+      addInfoBlock(`Cookie auto acquisition deferred: ${error.message}`)
+    }
+    return {}
+  }
 
   const scanActive = ref(false)
+  const WORKSPACE_STORAGE_KEY = 'toskill_workspace_state_v2'
+
+  const restoreWorkspaceState = () => {
+    try {
+      const saved = sessionStorage.getItem(WORKSPACE_STORAGE_KEY)
+      if (!saved) return
+      const state = JSON.parse(saved)
+      if (Array.isArray(state.workspaceBlocks)) workspaceBlocks.value = state.workspaceBlocks
+      if (state.scanProgress) scanProgress.value = state.scanProgress
+      if (state.scanStatus) scanStatus.value = state.scanStatus
+      if (typeof state.scanActive === 'boolean') scanActive.value = state.scanActive
+      if (typeof state.inputText === 'string') inputText.value = state.inputText
+    } catch (error) {
+      console.warn('Failed to restore workspace state:', error)
+    }
+  }
+
+  const persistWorkspaceState = () => {
+    try {
+      const blocks = workspaceBlocks.value.slice(-300).map(block => ({
+        ...block,
+        content: typeof block.content === 'string' ? block.content.slice(0, 12000) : block.content,
+        raw_result: undefined
+      }))
+      sessionStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify({
+        workspaceBlocks: blocks,
+        scanProgress: scanProgress.value,
+        scanStatus: scanStatus.value,
+        scanActive: scanActive.value,
+        inputText: inputText.value,
+        savedAt: new Date().toISOString()
+      }))
+    } catch (error) {
+      console.warn('Failed to persist workspace state:', error)
+    }
+  }
+
+  restoreWorkspaceState()
+  watch([workspaceBlocks, scanProgress, scanStatus, scanActive, inputText], persistWorkspaceState, { deep: true })
   const pendingModeSelect = ref(null)
   const showModeSelect = ref(false)
   const scriptQueue = ref([])
@@ -166,6 +266,18 @@ export function useAgentChat() {
   }
 
   const streamingTypes = ['script_analyzing', 'script_generating', 'ai_thinking', 'ai_thinking_start']
+  // Keep tool parameter input generic: plugins can receive JSON without a
+  // frontend schema update for each individual tool.
+  const parseJsonParams = (raw) => {
+    const text = String(raw || '').trim()
+    if (!text) return {}
+    const parsed = JSON.parse(text)
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+      throw new Error('Tool parameters must be a JSON object.')
+    }
+    return parsed
+  }
+
   const checkStopStreaming = (data) => {
     if (!streamingTypes.includes(data.type)) stopStreaming()
   }
@@ -183,7 +295,11 @@ export function useAgentChat() {
         ws.sendConfirm('2')
         waitingForChoice.value = false
       } else if (ws.isConnected()) {
-        ws.sendChat(text)
+        if (scanActive.value) {
+          ws.sendScanChat(text)
+        } else {
+          ws.sendChat(text)
+        }
       }
       return
     }
@@ -251,7 +367,11 @@ export function useAgentChat() {
           return
         }
         
-        ws.sendChat(text)
+        if (scanActive.value) {
+          ws.sendScanChat(text)
+        } else {
+          ws.sendChat(text)
+        }
         
       } catch (error) {
         console.error('Intent parsing failed:', error)
@@ -272,7 +392,7 @@ export function useAgentChat() {
     block.resolved = true
     showScanConfirm.value = false
     
-    const { target, mode } = pendingScanConfirm.value || {}
+    const { target, mode, params = {} } = pendingScanConfirm.value || {}
     if (!target) {
       showToast('扫描目标丢失', 'error')
       isTyping.value = false
@@ -304,11 +424,17 @@ export function useAgentChat() {
     isTyping.value = true
     currentThinking.value = ''
     isThinking.value = true
+    const payload = { target, scan_mode: finalMode, params: params || {} }
     
-    const payload = { target, scan_mode: finalMode }
     console.log('[handleScanConfirm] 准备发送 start_scan:', payload)
     
-    const sent = ws.startScan(target, finalMode)
+    let scanParams = { ...(params || {}) }
+    if (finalMode !== 'info' && scanParams.auto_auth !== false) {
+      addInfoBlock('Preparing session Cookie for authenticated vulnerability checks')
+      const cookies = await prepareCookieSession(target)
+      if (Object.keys(cookies).length && !scanParams.cookies) scanParams.cookies = cookies
+    }
+    const sent = ws.startScan(target, finalMode, scanParams)
     console.log('[handleScanConfirm] startScan 发送结果:', sent)
     
     if (!sent) {
@@ -472,13 +598,80 @@ export function useAgentChat() {
     })
   }
 
+  const showDecisionOverrideForm = (block, allowTaskChange = true) => {
+    const availableTasks = Array.isArray(block.availableTasks) ? block.availableTasks : []
+    addBlock('agent_input_request', {
+      type: 'agent_input_request',
+      title: allowTaskChange ? 'Modify next AI decision' : 'Edit tool parameters',
+      description: allowTaskChange
+        ? 'Choose an unfinished task or supply parameters. In no_fallback_strict mode, an invalid or missing decision will not be replaced automatically.'
+        : 'The updated parameters will be used after you confirm this tool.',
+      fields: [
+        ...(allowTaskChange ? [{
+          field: 'next_task',
+          label: 'Next task',
+          description: 'Only unfinished tasks in the active plan are accepted. Leave blank to keep the task unchanged.',
+          placeholder: '',
+          required: false,
+          validation: '',
+          options: availableTasks,
+          value: ''
+        }] : []),
+        {
+          field: 'params_json',
+          label: 'Tool parameters (JSON)',
+          description: 'Optional JSON object, for example {"timeout": 15}.',
+          placeholder: '{"timeout": 15}',
+          required: false,
+          validation: 'json',
+          options: [],
+          value: JSON.stringify(block.toolParams || block.paramsPayload || {}, null, 2)
+        },
+        {
+          field: 'reason',
+          label: 'Reason',
+          description: 'Optional audit note for this human decision.',
+          placeholder: 'Prioritize login verification',
+          required: false,
+          validation: 'text',
+          options: [],
+          value: ''
+        }
+      ],
+      resolved: false,
+      context: allowTaskChange ? 'decision_override' : 'tool_param_override',
+      sourceBlock: block
+    })
+  }
+
+  const showInteractionChatForm = (block) => {
+    addBlock('agent_input_request', {
+      type: 'agent_input_request',
+      title: '与扫描智能体对话',
+      description: '输入问题、补充信息或后续扫描要求。提交后智能体会从聊天分支继续工作流。',
+      fields: [{
+        field: 'chat_message',
+        label: '聊天内容',
+        description: '',
+        placeholder: '请输入要告诉智能体的内容',
+        required: true,
+        validation: 'text',
+        options: [],
+        value: ''
+      }],
+      resolved: false,
+      context: 'interaction_chat',
+      sourceBlock: block
+    })
+  }
+
   const handleStop = () => {
     if (scriptLoopActive.value) scriptLoopActive.value = false
     scanActive.value = false
     isTyping.value = false
     isThinking.value = false
     showModeSelect.value = false
-    ws.send('stop_scan', {})
+    ws.sendStopScan()
     addBlock('agent_info', { content: '已发送停止请求' })
   }
 
@@ -496,13 +689,55 @@ export function useAgentChat() {
     switch (block.actionSource) {
       case 'interaction_required':
         waitingForChoice.value = false
-        ws.sendConfirm(choiceKey)
+        if (String(choiceKey) === '3') {
+          isTyping.value = false
+          showInteractionChatForm(block)
+        } else if (String(choiceKey) === '4') {
+          ws.sendConfirm(choiceKey)
+          pendingUploadScript.value = true
+          showUploadScriptForm(block)
+        } else if (String(choiceKey) === '5') {
+          ws.sendConfirm(choiceKey)
+          pendingGenerateScript.value = true
+          showGenerateScriptForm(block)
+        } else {
+          ws.sendConfirm(choiceKey)
+        }
         break
       case 'high_risk':
         ws.send('high_risk_confirm', { choice: choiceKey })
         break
       case 'tool_confirm':
-        ws.sendToolConfirm(choiceKey === 'approve')
+        if (choiceKey === 'edit_params') {
+          isTyping.value = false
+          showDecisionOverrideForm(block, false)
+        } else {
+          ws.sendToolConfirm(choiceKey === 'approve')
+        }
+        break
+      case 'missing_tool':
+        isTyping.value = false
+        if (choiceKey === 'upload') {
+          pendingUploadScript.value = true
+          showUploadScriptForm(block)
+        } else if (choiceKey === 'generate') {
+          pendingGenerateScript.value = true
+          showGenerateScriptForm(block)
+        } else {
+          addInfoBlock('Choose an available tool or provide a new scan instruction.')
+        }
+        break
+      case 'ai_decision':
+        if (choiceKey === 'change_direction') {
+          isTyping.value = false
+          showDecisionOverrideForm(block, true)
+        } else if (choiceKey === 'edit_params') {
+          isTyping.value = false
+          showDecisionOverrideForm(block, false)
+        } else {
+          isTyping.value = false
+          addInfoBlock('AI decision acknowledged. The workflow will request confirmation before tool execution.')
+        }
         break
       case 'alternative_options':
         ws.sendAlternativeSelected(choiceKey, choiceLabel)
@@ -513,7 +748,7 @@ export function useAgentChat() {
           script.status = 'running'
           isTyping.value = true
           addBlock('agent_info', { content: `正在执行脚本: ${script.tool_name}` })
-          ws.send('execute_tool', { tool_name: script.tool_name, target: script.target })
+          ws.sendExecuteTool(script.tool_name, script.target, script.params || {})
         } else if (choiceKey === 'skip') {
           currentScriptIndex.value++
           addBlock('agent_info', { content: `已跳过: ${scriptQueue.value[currentScriptIndex.value - 1]?.tool_name || '-'}` })
@@ -536,10 +771,12 @@ export function useAgentChat() {
 
   const submitBlockInput = (block, val) => {
     if (!val) return showToast('内容不能为空', 'warning')
+    const field = block?.field || block?.payload?.field
+    if (!field) return showToast('输入字段缺失，请重新发起请求', 'error')
     block.resolved = true
     addBlock('user_command', { content: `[参数输入]: ${val}` })
     isTyping.value = true
-    ws.send('input_response', { field: block.payload.field, value: val })
+    ws.send('input_response', { field, value: val })
   }
 
   const handleInputResponse = (block, value) => {
@@ -553,7 +790,13 @@ export function useAgentChat() {
       block.resolved = true
       pendingInputRequest.value = null
 
-      if (block.context === 'upload_script') {
+      if (block.context === 'interaction_chat') {
+        const content = fields.find(f => f.field === 'chat_message')?.value || ''
+        addBlock('user_command', { content: `[智能体对话]: ${content}` })
+        isTyping.value = true
+        ws.send('interaction_chat', { content })
+        return
+      } else if (block.context === 'upload_script') {
         pendingUploadScript.value = false
         const scriptName = fields.find(f => f.field === 'script_name')?.value || null
         const scriptContent = fields.find(f => f.field === 'script_content')?.value || ''
@@ -569,16 +812,46 @@ export function useAgentChat() {
         isTyping.value = true
         ws.send('script_description', { description: description })
         return
+      } else if (block.context === 'decision_override') {
+        let params
+        try {
+          params = parseJsonParams(fields.find(f => f.field === 'params_json')?.value)
+        } catch (error) {
+          block.resolved = false
+          return showToast(error.message, 'warning')
+        }
+        const nextTask = fields.find(f => f.field === 'next_task')?.value || ''
+        const reason = fields.find(f => f.field === 'reason')?.value || ''
+        if (!nextTask && Object.keys(params).length === 0) {
+          block.resolved = false
+          return showToast('请至少指定下一步任务或工具参数', 'warning')
+        }
+        addBlock('user_command', { content: `[人工决策修改]: ${nextTask || '仅更新参数'}` })
+        isTyping.value = true
+        ws.sendDecisionOverride(nextTask, params, reason)
+        return
+      } else if (block.context === 'tool_param_override') {
+        let params
+        try {
+          params = parseJsonParams(fields.find(f => f.field === 'params_json')?.value)
+        } catch (error) {
+          block.resolved = false
+          return showToast(error.message, 'warning')
+        }
+        addBlock('user_command', { content: '[工具参数已编辑，确认执行]' })
+        isTyping.value = true
+        ws.sendToolConfirm(true, params)
+        return
       }
 
       const fieldLabels = fields.map(f => `${f.label}=${f.value}`).join(', ')
       addBlock('user_command', { content: `[参数提交]: ${fieldLabels}` })
       isTyping.value = true
-      for (const field of fields) {
-        if (field.value) {
-          ws.send('input_response', { field: field.field, value: field.value })
-        }
-      }
+      ws.send('input_response', {
+        fields: fields
+          .filter(field => field.value !== undefined && field.value !== null && field.value !== '')
+          .map(field => ({ field: field.field, value: field.value }))
+      })
       return
     }
     if (!value && block.required) return showToast('此字段为必填项', 'warning')
@@ -590,7 +863,7 @@ export function useAgentChat() {
   }
 
   // === WebSocket 消息路由 ===
-  const handleWSMessage = (data) => {
+  const processWSMessage = (data) => {
     checkStopStreaming(data)
 
     switch (data.type) {
@@ -647,11 +920,29 @@ export function useAgentChat() {
       case 'interaction_required':
         isTyping.value = false
         waitingForChoice.value = true
+        const interactionPayload = data.payload || {}
+        const interactionOptions = Array.isArray(interactionPayload.options) && interactionPayload.options.length
+          ? interactionPayload.options
+          : [
+              { key: '1', label: '执行' },
+              { key: '2', label: '停止' },
+              { key: '3', label: '聊天' },
+              { key: '4', label: '上传脚本' },
+              { key: '5', label: '生成脚本' }
+            ]
         addBlock('agent_action_request', {
           actionSource: 'interaction_required',
           title: '需要进一步指令',
-          description: `目标: ${data.payload.target} | 规划节点: ${data.payload.next_task}`,
-          options: data.payload.options.map(opt => ({ key: opt.key, label: opt.label, style: 'btn-secondary' })),
+          description: `目标: ${interactionPayload.target || '-'} | 规划节点: ${interactionPayload.next_task || '-'}`,
+          options: interactionOptions.map(opt => {
+            const normalized = typeof opt === 'string' ? { key: opt, label: opt } : (opt || {})
+            return {
+              key: normalized.key ?? normalized.value ?? '',
+              label: normalized.label ?? normalized.name ?? normalized.key ?? '',
+              description: normalized.description || '',
+              style: normalized.style || 'btn-secondary'
+            }
+          }).filter(opt => opt.key && opt.label),
           resolved: false
         })
         break
@@ -710,9 +1001,24 @@ export function useAgentChat() {
         addInfoBlock(`进度: ${data.payload?.stage || '...'} (${data.payload?.completed || 0}/${data.payload?.total || 0})`)
         break
 
+      case 'task_executing':
+        addInfoBlock(
+          `Task queued: ${data.payload?.tool_name || '-'} → ${data.payload?.target || '-'}\n` +
+          `Params: ${JSON.stringify(data.payload?.params || {}, null, 2)}`
+        )
+        break
+
       case 'task_started':
         scanProgress.value.activeTool = data.payload?.tool || ''
         addInfoBlock(`执行工具: ${data.payload?.tool || '-'} → ${data.payload?.target || '-'}`)
+        break
+
+      case 'tool_execution_started':
+        addBlock('agent_info', {
+          content: `Tool started: ${data.payload?.tool_name || '-'}\n` +
+            `Target: ${data.payload?.target || '-'}\n` +
+            `Params: ${JSON.stringify(data.payload?.params || {}, null, 2)}`
+        })
         break
 
       case 'task_completed':
@@ -729,6 +1035,7 @@ export function useAgentChat() {
             status: 'completed',
             vulnerable: data.payload?.vulnerable || false,
             analysis: analysis,
+            params: data.payload?.params || {},
             raw_result: data.payload?.raw_result || {},
             auth_obtained: data.payload?.auth_obtained || false,
             timestamp: data.payload?.timestamp || new Date().toISOString()
@@ -763,11 +1070,63 @@ export function useAgentChat() {
 
       case 'ai_decision':
         const reactInfo = data.payload?.react_selected ? ` | ReACT: ${data.payload?.react_thought || ''}` : ''
-        addInfoBlock(`AI 决策: ${data.payload?.next_task || '-'} | 进度: ${data.payload?.progress || ''}${reactInfo}`)
+        isTyping.value = false
+        addBlock('agent_action_request', {
+          actionSource: 'ai_decision',
+          title: `AI 决策: ${data.payload?.next_task || '-'}`,
+          description: `进度: ${data.payload?.progress || ''}${reactInfo}\n你可以在执行前修改下一步任务或传入工具参数。`,
+          params: {
+            'Decision source': data.payload?.priority_level || '-',
+            'RAG enabled': String(Boolean(data.payload?.rag_enabled)),
+            'User directed': String(Boolean(data.payload?.user_directed))
+          },
+          toolParams: data.payload?.user_directed_params || {},
+          availableTasks: data.payload?.available_tasks || [],
+          options: [
+            { key: 'accept', label: '接受决策', style: 'btn-primary' },
+            { key: 'change_direction', label: '修改下一步', style: 'btn-outline' },
+            { key: 'edit_params', label: '编辑参数', style: 'btn-outline' }
+          ],
+          resolved: false
+        })
         break
 
       case 'ai_decision_complete':
         addInfoBlock('所有任务决策完成')
+        break
+
+      case 'decision_override_applied':
+        isTyping.value = false
+        addInfoBlock(`人工决策已应用: ${data.payload?.next_task || '参数更新'}${data.payload?.resumed ? '；工作流已恢复。' : '；将在下一次决策时生效。'}`)
+        break
+
+      case 'user_directive_ack':
+        isTyping.value = false
+        addInfoBlock(data.payload?.message || '已接收你的扫描指令。')
+        break
+
+      case 'repair_prompt_info':
+      case 'repair_required':
+        isTyping.value = false
+        addErrorBlock(
+          data.payload?.message || data.payload?.repair_message || 'AI 无法在严格无回退模式下生成有效决策，需要人工指定下一步。',
+          {
+            source: 'ai_model',
+            code: data.payload?.code || 'REPAIR_REQUIRED',
+            suggestion: data.payload?.suggestion || '请选择一个未完成任务，并可补充工具参数后继续。'
+          }
+        )
+        addBlock('agent_action_request', {
+          actionSource: 'ai_decision',
+          title: '需要人工修复 AI 决策',
+          description: '严格无回退模式不会自动跳过或替换任务，请明确指定下一步。',
+          availableTasks: data.payload?.available_tasks || data.payload?.details?.available_tasks || [],
+          options: [
+            { key: 'change_direction', label: '指定下一步', style: 'btn-outline' },
+            { key: 'edit_params', label: '仅编辑参数', style: 'btn-outline' }
+          ],
+          resolved: false
+        })
         break
 
       case 'intent_recognized':
@@ -830,9 +1189,11 @@ export function useAgentChat() {
           actionSource: 'tool_confirm',
           title: `确认执行: ${data.payload?.tool_name || '-'}`,
           description: data.payload?.description || `目标: ${data.payload?.target || '-'}`,
-          params: { 'Tool': data.payload?.tool_name || '-', 'Target': data.payload?.target || '-' },
+          params: { 'Tool': data.payload?.tool_name || '-', 'Target': data.payload?.target || '-', ...data.payload?.llm_params },
+          toolParams: data.payload?.llm_params || {},
           options: [
             { key: 'approve', label: '确认执行', style: 'btn-primary' },
+            { key: 'edit_params', label: '编辑参数', style: 'btn-outline' },
             { key: 'reject', label: '拒绝', style: 'btn-ghost' }
           ],
           resolved: false
@@ -843,7 +1204,7 @@ export function useAgentChat() {
         isTyping.value = false
         const notFoundOpts = (data.payload?.options || []).map(o => ({ key: o.key, label: o.label, style: 'btn-secondary' }))
         addBlock('agent_action_request', {
-          actionSource: 'interaction_required',
+          actionSource: 'missing_tool',
           title: `工具未找到: ${data.payload?.tool_name || '-'}`,
           description: data.payload?.message || '请选择替代工具',
           options: notFoundOpts,
@@ -851,12 +1212,11 @@ export function useAgentChat() {
         })
         break
 
-      case 'tool_execution_started':
-        addInfoBlock(`工具执行开始: ${data.payload?.tool_name || '-'}`)
-        break
-
       case 'tool_execution_completed':
-        addInfoBlock(`工具执行完成: ${data.payload?.tool_name || '-'}`)
+        addInfoBlock(
+          `Tool completed: ${data.payload?.tool_name || '-'}\n` +
+          `Params: ${JSON.stringify(data.payload?.params || {}, null, 2)}`
+        )
         break
 
       case 'direct_tool_started':
@@ -923,6 +1283,19 @@ export function useAgentChat() {
 
       case 'auth_refresh_success':
         addInfoBlock(`认证刷新成功 | 来源: ${data.payload?.source_tool || '-'} | 类型: ${data.payload?.auth_type || '-'}`)
+        break
+
+      case 'auth_auto_started':
+        addInfoBlock(data.payload?.message || 'Automatically acquiring Cookie...')
+        break
+
+      case 'auth_auto_completed':
+        authCookieMeta.value = {
+          source: data.payload?.source || 'backend',
+          obtainedAt: new Date().toISOString(),
+          cookieCount: data.payload?.cookie_count || 0
+        }
+        addInfoBlock(`${data.payload?.message || 'Cookie acquisition completed'} | Cookie count: ${data.payload?.cookie_count || 0}`)
         break
 
       case 'auth_retry_exhausted':
@@ -1022,6 +1395,17 @@ export function useAgentChat() {
         break
 
       case 'script_upload_request':
+        isTyping.value = false
+        addBlock('agent_action_request', {
+          actionSource: 'missing_tool',
+          title: 'Custom script required',
+          description: data.payload?.message || 'Provide a script or generate one from a requirement.',
+          options: [
+            { key: 'upload', label: 'Upload script', style: 'btn-primary' },
+            { key: 'generate', label: 'Generate script', style: 'btn-outline' }
+          ],
+          resolved: false
+        })
         addInfoBlock(`${data.payload?.message || '请在输入框中粘贴脚本内容'}`)
         break
 
@@ -1030,6 +1414,8 @@ export function useAgentChat() {
         break
 
       case 'script_generate_request':
+        isTyping.value = false
+        showGenerateScriptForm({ type: 'script_generate_request', payload: data.payload })
         addInfoBlock(`${data.payload?.message || '请描述需要生成的脚本功能'}`)
         break
 
@@ -1145,7 +1531,36 @@ export function useAgentChat() {
     }
   }
 
+  const handleWSMessage = (data) => {
+    const sequence = Number(data?.event_seq)
+    if (!Number.isFinite(sequence)) {
+      processWSMessage(data)
+      return
+    }
+    // A reconnect may resume at a persisted sequence greater than zero.
+    if (lastEventSequence.value === 0) {
+      lastEventSequence.value = sequence
+      processWSMessage(data)
+      return
+    }
+    if (sequence <= lastEventSequence.value) return
+    if (sequence > lastEventSequence.value + 1) {
+      pendingEventQueue.set(sequence, data)
+      return
+    }
+    processWSMessage(data)
+    lastEventSequence.value = sequence
+    while (pendingEventQueue.has(lastEventSequence.value + 1)) {
+      const nextSequence = lastEventSequence.value + 1
+      const nextEvent = pendingEventQueue.get(nextSequence)
+      pendingEventQueue.delete(nextSequence)
+      processWSMessage(nextEvent)
+      lastEventSequence.value = nextSequence
+    }
+  }
+
   onMounted(() => {
+    loadAuthCookies()
     ws.on('*', handleWSMessage)
     
     ws.onConnect(() => {
@@ -1204,6 +1619,11 @@ export function useAgentChat() {
     scriptUploadProgress,
     scriptGenerationProgress,
     scriptHistory,
+    authCookies,
+    authCookieMeta,
+    setAuthCookies,
+    clearAuthCookies,
+    prepareCookieSession,
     validateScriptFile,
     handleScriptFileSelect,
     loadScriptHistory,

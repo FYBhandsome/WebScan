@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 STATUS_QUEUED = "queued"
 STATUS_PLANNING = "planning"
 STATUS_WAITING_USER_INPUT = "waiting_user_input"
+STATUS_WAITING_USER_CHOICE = "waiting_user_choice"
 STATUS_WAITING_SCRIPT_UPLOAD = "waiting_script_upload"
 STATUS_RUNNING = "running"
 STATUS_COMPLETED = "completed"
@@ -31,6 +32,7 @@ VALID_STATUSES = frozenset({
     STATUS_QUEUED,
     STATUS_PLANNING,
     STATUS_WAITING_USER_INPUT,
+    STATUS_WAITING_USER_CHOICE,
     STATUS_WAITING_SCRIPT_UPLOAD,
     STATUS_RUNNING,
     STATUS_COMPLETED,

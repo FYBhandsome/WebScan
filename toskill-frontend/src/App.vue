@@ -7,11 +7,11 @@
 
       <main class="main-content">
         <!-- 页面路由 -->
-        <ConsoleView v-if="currentPage === 'console'" />
-        <ScanView v-if="currentPage === 'scan'" />
-        <ToolsView v-if="currentPage === 'tools'" />
-        <ReportsView v-if="currentPage === 'reports'" />
-        <SettingsView v-if="currentPage === 'settings'" />
+        <ConsoleView v-show="currentPage === 'console'" />
+        <ScanView v-show="currentPage === 'scan'" />
+        <ToolsView v-show="currentPage === 'tools'" />
+        <ReportsView v-show="currentPage === 'reports'" />
+        <SettingsView v-show="currentPage === 'settings'" />
       </main>
     </div>
 
