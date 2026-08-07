@@ -878,5 +878,152 @@
         "current_level": "low"
       }
     }
+  },
+  "2ca94a83": {
+    "report_id": "scan_report_2ca94a83_20260807_200218",
+    "session_id": "2ca94a83",
+    "report_file": "scan_report_2ca94a83_20260807_200218.html",
+    "target": "",
+    "created_at": "2026-08-07 20:02:18",
+    "download_url": "/api/reports/download/scan_report_2ca94a83_20260807_200218.html",
+    "format": "html",
+    "vulnerabilities_count": 0,
+    "tool_results": {},
+    "vulnerabilities": [],
+    "ai_analysis": {
+      "executive_summary": "本次扫描未发现任何漏洞（0 个漏洞），整体安全状况良好。系统当前未暴露 OWASP Top 10 核心弱点，无需紧急修复。建议立即执行安全加固，部署 WAF 规则拦截已知攻击模式，并建立定期复测机制以确保持续安全状态。",
+      "risk_assessment": {
+        "overall_risk": "low",
+        "risk_score": 15,
+        "risk_justification": "扫描结果显示无高危、中危或低危漏洞发现。风险等级主要取决于系统架构复杂度、数据敏感性及现有防护策略的有效性。当前风险评分较低，但需持续监控。",
+        "risk_matrix": {
+          "likelihood": "低",
+          "impact": "低",
+          "current_level": "low"
+        }
+      },
+      "vulnerability_analysis": [],
+      "attack_chain_analysis": {
+        "description": "由于未发现任何可利用漏洞，攻击链无法启动。攻击者无法通过代码缺陷、配置错误或逻辑漏洞获取访问权限、窃取数据或执行任意操作。",
+        "attack_paths": [
+          "无",
+          "无"
+        ],
+        "lateral_movement_risk": "无",
+        "kill_chain_mapping": {
+          "reconnaissance": [],
+          "weaponization": [],
+          "delivery": [],
+          "exploitation": [],
+          "installation": [],
+          "command_and_control": [],
+          "actions_on_objectives": []
+        },
+        "data_flow_risk": "无敏感数据泄露风险"
+      },
+      "compliance_impact": {
+        "standards": [
+          "等保 2.0（GB/T 22239-2019）: 第 7.1.2 条（安全审计）",
+          "OWASP Top 10 2021: 无",
+          "GDPR: 第 32 条（数据完整性）",
+          "PCI DSS: 第 1.2 条（系统安全）",
+          "ISO 27001: A.12.1（安全审计）"
+        ],
+        "risk_points": [
+          {
+            "standard": "等保 2.0 第 7.1.2 条",
+            "violation": "未进行安全审计",
+            "description": "未发现漏洞意味着缺乏针对性的安全审计，不符合等保要求。",
+            "remediation": "立即安排安全审计，针对现有架构进行漏洞扫描和渗透测试。"
+          }
+        ],
+        "compliance_score": 90,
+        "regulatory_penalties": "若因未进行必要的安全审计导致合规检查不通过，可能面临监管警告或罚款。"
+      },
+      "remediation_recommendations": [
+        {
+          "priority": 1,
+          "vulnerability": "无",
+          "recommendation": "部署 Web 应用防火墙（WAF）规则集，拦截 SQL 注入、XSS 等已知攻击向量。",
+          "verification": "使用 WAF 日志和扫描工具验证拦截率，确认攻击请求被有效阻断。",
+          "estimated_effort": "低",
+          "references": "OWASP WAF Cheat Sheet"
+        },
+        {
+          "priority": 2,
+          "vulnerability": "无",
+          "recommendation": "实施代码静态分析（SAST）和动态分析（DAST）自动化流程，纳入 CI/CD 流水线。",
+          "verification": "在每次代码提交后自动运行扫描，确保无新漏洞产生。",
+          "estimated_effort": "中",
+          "references": "DevSecOps 最佳实践"
+        }
+      ],
+      "security_hardening": {
+        "short_term": [
+          "启用 HTTPS 强制协议",
+          "配置 WAF 基础规则",
+          "更新所有依赖库至最新版本"
+        ],
+        "mid_term": [
+          "实施代码审计（Code Review）",
+          "优化身份认证与授权机制",
+          "部署数据加密存储方案"
+        ],
+        "long_term": [
+          "建立持续安全运营（CSM）流程",
+          "全员安全意识培训",
+          "定期安全架构评审"
+        ],
+        "monitoring": [
+          "部署 SIEM 系统，配置异常登录和访问尝试告警",
+          "启用应用日志审计，记录所有关键操作",
+          "设置安全基线监控，定期对比实际状态与基线"
+        ]
+      },
+      "confidence": {
+        "total": 17,
+        "breakdown": {
+          "kb_match": 0,
+          "coverage": 0,
+          "consistency": 70,
+          "completeness": 100
+        }
+      },
+      "knowledge": {
+        "used": true,
+        "sources": [
+          "11_ai_decision_guide.md",
+          "07_scanning_workflow.md",
+          "15_penetration_plan.md"
+        ]
+      },
+      "authentication": {
+        "used": false,
+        "credentials_obtained": false,
+        "status": "",
+        "source": "",
+        "type": "",
+        "cookie_count": 0
+      }
+    },
+    "confidence": {
+      "total": 17,
+      "breakdown": {
+        "kb_match": 0,
+        "coverage": 0,
+        "consistency": 70,
+        "completeness": 100
+      }
+    },
+    "risk_assessment": {
+      "overall_risk": "low",
+      "risk_score": 15,
+      "risk_justification": "扫描结果显示无高危、中危或低危漏洞发现。风险等级主要取决于系统架构复杂度、数据敏感性及现有防护策略的有效性。当前风险评分较低，但需持续监控。",
+      "risk_matrix": {
+        "likelihood": "低",
+        "impact": "低",
+        "current_level": "low"
+      }
+    }
   }
 }
