@@ -29,6 +29,7 @@ class WSManager {
         this.sessionId = storageService.getActiveSessionId() || null;
         this._firstConnect = true;
         this._shouldReconnect = true;
+        this.subscribedSessions = new Set();
     }
 
     // 设置或者更新 WS 地址
@@ -87,6 +88,11 @@ class WSManager {
                         this.sendGetStatus();
                     }
                     this._firstConnect = false;
+
+                    // 恢复多会话订阅
+                    if (this.subscribedSessions.size > 0) {
+                        this.send('subscribe_multi', { session_ids: Array.from(this.subscribedSessions) });
+                    }
                 };
 
                 this.ws.onmessage = (event) => {
@@ -169,6 +175,30 @@ class WSManager {
         }
     }
 
+    // 切换到指定的后端 session：断开当前连接，用新 session_id 重连
+    // 传 null 则创建全新 session
+    switchSession(sessionId = null) {
+        this.sessionId = sessionId;
+        if (sessionId) {
+            storageService.setActiveSessionId(sessionId);
+        }
+        this._shouldReconnect = false;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        this.cleanupConnectPromise(new Error('Switching session'));
+        if (this.ws) {
+            this.ws.close();
+            this.ws = null;
+            this.connected = false;
+        }
+        this._shouldReconnect = true;
+        this.reconnectAttempts = 0;
+        this._firstConnect = true;
+        return this.connect();
+    }
+
     send(type, payload = {}) {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
             LOG.error('WebSocket is not connected');
@@ -234,6 +264,21 @@ class WSManager {
     sendSubscribe(sessionId) { return this.send('subscribe', { session_id: sessionId }); }
     sendGetHistory() { return this.send('get_history', {}); }
     sendGetStatus() { return this.send('get_status', {}); }
+    sendStopScan() { return this.send('stop_scan', {}); }
+
+    subscribeSession(sessionId) {
+        if (!sessionId || this.subscribedSessions.has(sessionId)) return;
+        this.subscribedSessions.add(sessionId);
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.send('subscribe_multi', { session_ids: [sessionId] });
+        }
+    }
+
+    unsubscribeSession(sessionId) {
+        if (this.subscribedSessions.delete(sessionId)) {
+            this.send('unsubscribe', { session_id: sessionId });
+        }
+    }
 }
 
 // 导出单例，确保整个项目使用的是同一个 WebSocket 连接

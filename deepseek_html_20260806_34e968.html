@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>安全分析研判报告</title>
+    <style>
+        /* ===================== 全局统一规范 ===================== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background-color: #f7f8fa;
+            padding: 32px;
+            color: #222;
+            line-height: 1.8;
+            font-family: "Source Han Sans CN", "Microsoft YaHei UI", sans-serif;
+            -webkit-font-smoothing: antialiased;
+            font-smoothing: antialiased;
+        }
+        :root {
+            --gap-sm: 10px;
+            --gap-md: 12px;
+            --gap-lg: 24px;
+            --gap-xl: 24px;
+            --card-radius: 4px;
+            --border-color: #e5e7eb;
+            --primary-blue: #165DFF;
+            --risk-red: #D93025;
+            --risk-orange: #E67E22;
+            --risk-yellow: #D4A017;
+            --risk-blue: #165DFF;
+            --risk-gray: #888888;
+            --bg-emergency: #fef2f2;
+            --bg-deadline: #fffbeb;
+            --bg-longterm: #f9fafb;
+            --confidence-high: #165DFF;
+            --confidence-mid: #E67E22;
+            --confidence-low: #D93025;
+        }
+        .icon-svg {
+            width: 20px;
+            height: 20px;
+            fill: var(--primary-blue);
+            flex-shrink: 0;
+        }
+        .card {
+            background: #ffffff;
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            padding: var(--gap-lg);
+            width: 100%;
+            height: 100%;
+        }
+        .module-title {
+            display: flex;
+            align-items: center;
+            gap: var(--gap-sm);
+            font-size: 18px;
+            font-weight: 700;
+            padding-bottom: var(--gap-sm);
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: var(--gap-lg);
+        }
+        .text-body {
+            font-family: "Source Han Serif CN", "SimSun", serif;
+            font-size: 14px;
+            color: #333;
+            text-align: justify;
+            word-break: break-all;
+        }
+        .text-tip {
+            font-size: 13px;
+            color: #666;
+            font-family: "Source Han Serif CN", "SimSun", serif;
+        }
+        .list-uniform {
+            list-style: none;
+        }
+        .list-uniform li {
+            display: flex;
+            gap: var(--gap-sm);
+            margin-bottom: var(--gap-sm);
+            font-family: "Source Han Serif CN", "SimSun", serif;
+            font-size: 15px;
+        }
+        .list-uniform li::before {
+            content: "—";
+            color: #666;
+            flex-shrink: 0;
+        }
+
+        /* ===================== 头部报告标题区 ===================== */
+        .report-header {
+            background: #fff;
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            padding: var(--gap-lg);
+            margin-bottom: var(--gap-xl);
+        }
+        .header-top {
+            display: flex;
+            align-items: center;
+            gap: var(--gap-sm);
+            font-size: 22px;
+            font-weight: 700;
+            margin-bottom: var(--gap-sm);
+        }
+        .header-subtitle {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: var(--gap-lg);
+            font-family: "Source Han Serif CN", "SimSun", serif;
+        }
+        .meta-wrap {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: var(--gap-md);
+        }
+        .meta-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .meta-label {
+            font-weight: 500;
+            color: #444;
+            white-space: nowrap;
+        }
+
+        /* ===================== 综合风险概览模块 ===================== */
+        .risk-overview {
+            margin-bottom: var(--gap-xl);
+        }
+        .risk-head-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: var(--gap-lg);
+            margin-bottom: var(--gap-md);
+        }
+        .risk-score-box {
+            display: flex;
+            align-items: baseline;
+            gap: var(--gap-sm);
+        }
+        .score-num {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--risk-red);
+        }
+        .score-desc {
+            font-size: 14px;
+            color: var(--risk-red);
+        }
+        .risk-bar-group {
+            display: flex;
+            gap: var(--gap-md);
+            flex: 1;
+            min-width: 520px;
+        }
+        .risk-bar-item {
+            flex: 1;
+            text-align: center;
+        }
+        .bar-label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 4px;
+        }
+        .bar-outer {
+            height: 6px;
+            background: #eee;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .bar-inner {
+            height: 100%;
+        }
+        .bar-severity {
+            background: var(--risk-red);
+        }
+        .bar-high {
+            background: var(--risk-orange);
+        }
+        .bar-mid {
+            background: var(--risk-yellow);
+        }
+        .bar-low {
+            background: var(--risk-blue);
+        }
+        .bar-info {
+            background: var(--risk-gray);
+        }
+        .bar-count {
+            font-size: 13px;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+        .risk-desc-block {
+            margin-top: var(--gap-md);
+        }
+        .risk-desc-block p {
+            margin-bottom: var(--gap-sm);
+        }
+
+        /* ===================== 🆕 AI等保评估置信度模块 ===================== */
+        .confidence-module {
+            margin-bottom: var(--gap-xl);
+        }
+        .confidence-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: var(--gap-sm);
+            margin-bottom: var(--gap-md);
+            padding-bottom: var(--gap-sm);
+            border-bottom: 1px solid var(--border-color);
+        }
+        .confidence-header .standard-badge {
+            font-size: 13px;
+            background: #e8f0fe;
+            color: var(--primary-blue);
+            padding: 2px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(22, 93, 255, 0.15);
+            white-space: nowrap;
+            font-weight: 500;
+        }
+        .confidence-summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: var(--gap-lg);
+            margin-bottom: var(--gap-md);
+        }
+        .confidence-score-wrap {
+            display: flex;
+            align-items: baseline;
+            gap: var(--gap-sm);
+        }
+        .confidence-number {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--confidence-high);
+        }
+        .confidence-number-label {
+            font-size: 14px;
+            color: #444;
+            font-weight: 500;
+        }
+        .confidence-level-badge {
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            background: #e8f0fe;
+            color: var(--confidence-high);
+            border: 1px solid rgba(22, 93, 255, 0.2);
+            white-space: nowrap;
+        }
+        .confidence-level-badge.level-high {
+            background: #e8f0fe;
+            color: var(--confidence-high);
+            border-color: rgba(22, 93, 255, 0.25);
+        }
+        .confidence-level-badge.level-mid {
+            background: #fef3e8;
+            color: var(--confidence-mid);
+            border-color: rgba(230, 126, 34, 0.25);
+        }
+        .confidence-level-badge.level-low {
+            background: #fde8e8;
+            color: var(--confidence-low);
+            border-color: rgba(217, 48, 37, 0.25);
+        }
+
+        .confidence-details {
+            display: flex;
+            flex-direction: column;
+            gap: var(--gap-md);
+            margin-bottom: var(--gap-md);
+        }
+        .confidence-item {
+            display: flex;
+            align-items: center;
+            gap: var(--gap-sm);
+        }
+        .confidence-item .item-label {
+            font-size: 14px;
+            color: #444;
+            font-family: "Source Han Serif CN", "SimSun", serif;
+            min-width: 140px;
+            flex-shrink: 0;
+        }
+        .confidence-item .item-bar-track {
+            flex: 1;
+            height: 6px;
+            background: #eee;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .confidence-item .item-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            background: var(--confidence-high);
+            transition: width 0.6s ease;
+        }
+        .confidence-item .item-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #222;
+            min-width: 42px;
+            text-align: right;
+            font-family: "Source Han Sans CN", "Microsoft YaHei UI", sans-serif;
+        }
+
+        /* 等保符合度附加行 */
+        .compliance-extra {
+            display: flex;
+            align-items: center;
+            gap: var(--gap-lg);
+            padding: var(--gap-sm) 0;
+            margin-top: var(--gap-sm);
+            border-top: 1px dashed var(--border-color);
+            flex-wrap: wrap;
+        }
+        .compliance-extra .extra-item {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            font-size: 14px;
+            color: #444;
+            font-family: "Source Han Serif CN", "SimSun", serif;
+        }
+        .compliance-extra .extra-item .extra-value {
+            font-weight: 700;
+            color: #222;
+        }
+        .compliance-extra .extra-item .extra-tag {
+            background: #f0f2f5;
+            padding: 0 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .confidence-note {
+            padding-top: var(--gap-md);
+            border-top: 1px dashed var(--border-color);
+            font-size: 13px;
+            color: #666;
+            font-family: "Source Han Serif CN", "SimSun", serif;
+            line-height: 1.7;
+        }
+        .confidence-note strong {
+            color: #222;
+        }
+        .confidence-note .kb-ref {
+            display: inline-block;
+            background: #f0f4ff;
+            padding: 0 6px;
+            border-radius: 3px;
+            font-size: 12px;
+            color: var(--primary-blue);
+            border: 1px solid rgba(22, 93, 255, 0.1);
+        }
+
+        /* ===================== 核心模块：左（漏洞明细）+ 右（攻击链路+合规影响） ===================== */
+        .two-col-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--gap-lg);
+            margin-bottom: var(--gap-xl);
+            align-items: stretch;
+        }
+        .left-col {
+            flex: 0 0 calc(50% - var(--gap-lg)/2);
+            height: 100%;
+        }
+        .right-col {
+            flex: 0 0 calc(50% - var(--gap-lg)/2);
+            display: flex;
+            flex-direction: column;
+            gap: var(--gap-lg);
+            height: 100%;
+        }
+        .right-col .card {
+            flex: 1;
+        }
+        @media (max-width: 1200px) {
+            .two-col-container {
+                flex-direction: column;
+            }
+            .left-col,
+            .right-col {
+                flex: 0 0 100%;
+            }
+        }
+        @media (max-width: 768px) {
+            .two-col-container {
+                flex-direction: column;
+            }
+            .left-col,
+            .right-col {
+                flex: 0 0 100%;
+            }
+        }
+
+        .vuln-list-wrap {
+            display: flex;
+            flex-direction: column;
+            gap: var(--gap-md);
+        }
+        .vuln-item {
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            padding: var(--gap-md);
+            transition: background 0.2s;
+            cursor: pointer;
+        }
+        .vuln-item:hover {
+            background: #f7f8fa;
+        }
+        .vuln-title-row {
+            display: flex;
+            align-items: center;
+            gap: var(--gap-sm);
+            font-weight: 500;
+            font-size: 15px;
+        }
+        .risk-tag {
+            padding: 3px 8px;
+            border-radius: 2px;
+            font-size: 13px;
+            color: #fff;
+            white-space: nowrap;
+        }
+        .tag-high {
+            background: var(--risk-orange);
+        }
+        .tag-mid {
+            background: var(--risk-yellow);
+        }
+        .tag-low {
+            background: var(--risk-blue);
+        }
+        .vuln-tip-text {
+            margin-top: var(--gap-sm);
+            font-size: 14px;
+            color: #444;
+            font-family: "Source Han Serif CN", "SimSun", serif;
+        }
+
+        /* ===================== 分层加固整改方案 ===================== */
+        .fix-plan-container {
+            margin-bottom: var(--gap-xl);
+        }
+        .fix-three-col {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: var(--gap-lg);
+        }
+        .fix-block-emergency {
+            background: var(--bg-emergency);
+            border: 1px solid #fecdd3;
+            border-radius: var(--card-radius);
+            padding: var(--gap-lg);
+        }
+        .fix-block-deadline {
+            background: var(--bg-deadline);
+            border: 1px solid #fed7aa;
+            border-radius: var(--card-radius);
+            padding: var(--gap-lg);
+        }
+        .fix-block-longterm {
+            background: var(--bg-longterm);
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            padding: var(--gap-lg);
+        }
+        .fix-block-title {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: var(--gap-md);
+            padding-bottom: var(--gap-sm);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        /* ===================== 底部原始扫描数据附录 ===================== */
+        .appendix-card {
+            background: #fff;
+            border: 1px solid var(--border-color);
+            border-radius: var(--card-radius);
+            padding: var(--gap-lg);
+        }
+        .appendix-summary {
+            display: flex;
+            align-items: center;
+            gap: var(--gap-sm);
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--primary-blue);
+        }
+        .appendix-content {
+            margin-top: var(--gap-md);
+            padding-top: var(--gap-md);
+            border-top: 1px dashed var(--border-color);
+            font-size: 13px;
+            color: #666;
+            font-family: "Source Han Serif CN", "SimSun", serif;
+        }
+
+        /* ===================== 响应式微调 ===================== */
+        @media (max-width: 768px) {
+            body {
+                padding: 16px;
+            }
+            .risk-bar-group {
+                min-width: unset;
+                flex-wrap: wrap;
+                gap: var(--gap-sm);
+            }
+            .risk-bar-item {
+                flex: 1 1 40%;
+                min-width: 60px;
+            }
+            .confidence-summary {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .confidence-item {
+                flex-wrap: wrap;
+            }
+            .confidence-item .item-label {
+                min-width: 100px;
+                font-size: 13px;
+            }
+            .compliance-extra {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: var(--gap-sm);
+            }
+            .meta-wrap {
+                grid-template-columns: 1fr;
+            }
+            .header-top {
+                font-size: 18px;
+            }
+            .score-num {
+                font-size: 20px;
+            }
+            .confidence-number {
+                font-size: 24px;
+            }
+        }
+        @media (max-width: 480px) {
+            .risk-bar-item {
+                flex: 1 1 100%;
+            }
+            .confidence-item .item-label {
+                min-width: 80px;
+            }
+            .confidence-level-badge {
+                font-size: 12px;
+                padding: 2px 10px;
+            }
+            .confidence-header .standard-badge {
+                font-size: 11px;
+                padding: 0 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ==================== 头部报告信息区 ==================== -->
+    <div class="report-header">
+        <div class="header-top">
+            <svg class="icon-svg" viewBox="0 0 24 24">
+                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.2-7.2c0 1.3-1.1 2.3-2.4 2.3H11c-.6 0-1-.4-1-1v-6c0-.6.4-1 1-1h1.8c1.3 0 2.4 1 2.4 2.3z"/>
+            </svg>
+            安全分析研判报告
+        </div>
+        <div class="header-subtitle">标准化渗透扫描安全评估文书 | 等保合规专项检测</div>
+        <div class="meta-wrap">
+            <div class="meta-item">
+                <span class="meta-label">报告编号：</span>
+                <span class="text-body">SEC-20260517-001</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">扫描目标：</span>
+                <span class="text-body">http://127.0.0.1/dvwa/vulnerabilities/sql</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">扫描执行时间：</span>
+                <span class="text-body">2026-05-17</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">报告生成时间：</span>
+                <span class="text-body">2026-05-17 21:35:08</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">漏洞总数量：</span>
+                <span class="text-body">12 项</span>
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">编制责任人：</span>
+                <span class="text-body">安全审计专员</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 综合风险概览模块 ==================== -->
+    <div class="card risk-overview">
+        <div class="module-title">
+            <svg class="icon-svg" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/>
+            </svg>
+            综合风险概览
+        </div>
+        <div class="risk-head-row">
+            <div class="risk-score-box">
+                <span class="score-num">75</span>
+                <span class="score-desc">综合风险等级：高危(HIGH)</span>
+            </div>
+            <div class="risk-bar-group">
+                <div class="risk-bar-item">
+                    <div class="bar-label">严重漏洞</div>
+                    <div class="bar-outer"><div class="bar-inner bar-severity" style="width:0%"></div></div>
+                    <div class="bar-count">0</div>
+                </div>
+                <div class="risk-bar-item">
+                    <div class="bar-label">高危漏洞</div>
+                    <div class="bar-outer"><div class="bar-inner bar-high" style="width:0%"></div></div>
+                    <div class="bar-count">0</div>
+                </div>
+                <div class="risk-bar-item">
+                    <div class="bar-label">中危漏洞</div>
+                    <div class="bar-outer"><div class="bar-inner bar-mid" style="width:50%"></div></div>
+                    <div class="bar-count">4</div>
+                </div>
+                <div class="risk-bar-item">
+                    <div class="bar-label">低危漏洞</div>
+                    <div class="bar-outer"><div class="bar-inner bar-low" style="width:50%"></div></div>
+                    <div class="bar-count">4</div>
+                </div>
+                <div class="risk-bar-item">
+                    <div class="bar-label">信息类配置缺陷</div>
+                    <div class="bar-outer"><div class="bar-inner bar-info" style="width:50%"></div></div>
+                    <div class="bar-count">4</div>
+                </div>
+            </div>
+        </div>
+        <div class="risk-desc-block text-body">
+            <p>本次资产扫描共计检出12项安全风险，包含4项中危漏洞、4项低危漏洞、4项信息类配置缺陷。资产核心存在SQL注入高危风险，可直接导致数据库数据泄露、篡改，为本次整改最高优先级事项。</p>
+            <p>同步存在Apache服务器敏感配置泄露、PHP程序错误详情外溢、全站HTTP明文传输、缺失X-Frame-Options防劫持头、Cookie安全属性缺失等多项配置缺陷。攻击者可依托SQL注入获取数据库权限，结合服务器泄露信息完成内网横向渗透，业务存在用户隐私泄露、系统越权访问风险，不符合等保2.0、OWASP Top10安全规范相关要求，需按照风险优先级逐项完成加固整改。</p>
+        </div>
+    </div>
+
+    <!-- ==================== 🆕 AI等保评估置信度模块（升级版） ==================== -->
+    <div class="card confidence-module">
+        <div class="module-title">
+            <svg class="icon-svg" viewBox="0 0 24 24">
+                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.2-7.2c0 1.3-1.1 2.3-2.4 2.3H11c-.6 0-1-.4-1-1v-6c0-.6.4-1 1-1h1.8c1.3 0 2.4 1 2.4 2.3z"/>
+            </svg>
+            AI等保评估置信度
+        </div>
+
+        <!-- 等保标准标识 -->
+        <div class="confidence-header">
+            <span style="font-size:14px; color:#555; font-weight:500;">基于等保2.0（GB/T 22239-2019）三级标准</span>
+            <span class="standard-badge">📚 知识库版本 v2.3.1</span>
+        </div>
+
+        <!-- 综合置信度 -->
+        <div class="confidence-summary">
+            <div class="confidence-score-wrap">
+                <span class="confidence-number">87%</span>
+                <span class="confidence-number-label">综合等保评估置信度</span>
+            </div>
+            <span class="confidence-level-badge level-high">高置信度</span>
+        </div>
+
+        <!-- 分项置信度（替换为等保相关维度） -->
+        <div class="confidence-details">
+            <div class="confidence-item">
+                <span class="item-label">漏洞检测准确性</span>
+                <div class="item-bar-track">
+                    <div class="item-bar-fill" style="width:92%;"></div>
+                </div>
+                <span class="item-value">92%</span>
+            </div>
+            <div class="confidence-item">
+                <span class="item-label">等保控制项映射准确度</span>
+                <div class="item-bar-track">
+                    <div class="item-bar-fill" style="width:88%;"></div>
+                </div>
+                <span class="item-value">88%</span>
+            </div>
+            <div class="confidence-item">
+                <span class="item-label">风险等级判定一致性</span>
+                <div class="item-bar-track">
+                    <div class="item-bar-fill" style="width:85%;"></div>
+                </div>
+                <span class="item-value">85%</span>
+            </div>
+            <div class="confidence-item">
+                <span class="item-label">整改方案合规性（等保针对性）</span>
+                <div class="item-bar-track">
+                    <div class="item-bar-fill" style="width:82%;"></div>
+                </div>
+                <span class="item-value">82%</span>
+            </div>
+        </div>
+
+        <!-- 等保符合度附加信息 -->
+        <div class="compliance-extra">
+            <span class="extra-item">
+                <span>📊 等保三级符合度预估：</span>
+                <span class="extra-value">72%</span>
+                <span class="extra-tag">±5%</span>
+            </span>
+            <span class="extra-item">
+                <span>📌 知识库检索条目：</span>
+                <span class="extra-value" style="font-weight:400; font-size:13px; color:#666;">KB-2024-034, KB-2024-089, KB-2025-012</span>
+            </span>
+            <span class="extra-item">
+                <span>⚙️ 扫描模式：</span>
+                <span class="extra-value" style="font-weight:400; font-size:13px; color:#666;">全自动扫描（基础系数 +0%）</span>
+            </span>
+        </div>
+
+        <!-- 说明文字（强调知识库、等保、人工复核） -->
+        <div class="confidence-note">
+            <strong>📋 评估说明：</strong>本置信度由AI综合漏洞扫描结果与
+            <span class="kb-ref">等保2.0知识库</span> 进行多维匹配得出。
+            其中 <strong>“等保控制项映射准确度”</strong> 基于每个漏洞与等保安全控制点的语义相似度计算，
+            <strong>“风险等级判定一致性”</strong> 参照知识库中同类漏洞的标准等级进行校验。
+            整体置信度达到 <strong>87%</strong>，表明评估结果具有较高参考价值。
+            建议安全专家结合业务实际，对低置信度项（＜70%）进行人工复核，确保等保合规整改的准确性。
+        </div>
+    </div>
+
+    <!-- ==================== 核心模块：左（漏洞明细）+ 右（攻击链路+合规影响） ==================== -->
+    <div class="two-col-container">
+        <!-- 左侧：漏洞明细 -->
+        <div class="left-col card">
+            <div class="module-title">
+                <svg class="icon-svg" viewBox="0 0 24 24">
+                    <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.2-7.2c0 1.3-1.1 2.3-2.4 2.3H11c-.6 0-1-.4-1-1v-6c0-.6.4-1 1-1h1.8c1.3 0 2.4 1 2.4 2.3z"/>
+                </svg>
+                漏洞明细（按风险优先级排序）
+            </div>
+            <div class="vuln-list-wrap">
+                <div class="vuln-item">
+                    <div class="vuln-title-row">
+                        <span class="risk-tag tag-high">高危</span>
+                        SQL注入漏洞
+                    </div>
+                    <div class="vuln-tip-text">风险简述：未做参数化输入过滤，可窃取、篡改数据库数据；整改建议：使用预编译SQL语句。</div>
+                </div>
+                <div class="vuln-item">
+                    <div class="vuln-title-row">
+                        <span class="risk-tag tag-mid">中危</span>
+                        Apache服务器配置信息暴露
+                    </div>
+                    <div class="vuln-tip-text">风险简述：开放server-info页面泄露服务器配置；整改建议：注释httpd.conf对应配置项。</div>
+                </div>
+                <div class="vuln-item">
+                    <div class="vuln-title-row">
+                        <span class="risk-tag tag-mid">中危</span>
+                        应用错误详情泄露
+                    </div>
+                    <div class="vuln-tip-text">风险简述：前端输出PHP报错堆栈泄露路径；整改建议：关闭前端报错，统一自定义错误页。</div>
+                </div>
+                <div class="vuln-item">
+                    <div class="vuln-title-row">
+                        <span class="risk-tag tag-mid">中危</span>
+                        未加密HTTP明文传输
+                    </div>
+                    <div class="vuln-tip-text">风险简述：数据明文传输易被抓包窃取；整改建议：全站部署HTTPS并强制跳转。</div>
+                </div>
+                <div class="vuln-item">
+                    <div class="vuln-title-row">
+                        <span class="risk-tag tag-low">低危</span>
+                        X-Frame-Options 响应头缺失
+                    </div>
+                    <div class="vuln-tip-text">风险简述：存在点击劫持攻击风险；整改建议：全局添加防劫持安全头。</div>
+                </div>
+                <div class="vuln-item">
+                    <div class="vuln-title-row">
+                        <span class="risk-tag tag-low">低危</span>
+                        Cookie未配置HttpOnly属性
+                    </div>
+                    <div class="vuln-tip-text">风险简述：Cookie可被JS读取，易遭XSS窃取会话；整改建议：补充HttpOnly、SameSite属性。</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：攻击链路 + 合规影响 -->
+        <div class="right-col">
+            <!-- 攻击链路推演 -->
+            <div class="card">
+                <div class="module-title">
+                    <svg class="icon-svg" viewBox="0 0 24 24">
+                        <path d="M4 15v2h6v2l3-3-3-3v2H5v2h2v2H4v-2zm15-4h-2V7h-4V5h6v8zm-2-4h-2V7h2v2zm4-6H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14z"/>
+                    </svg>
+                    攻击链路推演
+                </div>
+                <ul class="list-uniform">
+                    <li>攻击路径：SQL注入 → Apache信息泄露 → 错误页面路径窃取 → 内网横向移动</li>
+                    <li>渗透风险等级：高，攻击者可依托泄露的服务器配置，进一步渗透同网段其他业务系统</li>
+                </ul>
+            </div>
+
+            <!-- 合规影响说明 -->
+            <div class="card">
+                <div class="module-title">
+                    <svg class="icon-svg" viewBox="0 0 24 24">
+                        <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-2V9h-2V7h4v10z"/>
+                    </svg>
+                    合规影响说明
+                </div>
+                <ul class="list-uniform">
+                    <li>合规风险：违反等保2.0数据传输、访问控制相关安全要求</li>
+                    <li>OWASP风险：覆盖OWASP Top10注入类、不安全配置两类高危风险</li>
+                    <li>配置缺失：全站缺失HTTPS加密、防点击劫持、Cookie安全防护配置</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 分层加固整改方案 ==================== -->
+    <div class="card fix-plan-container">
+        <div class="module-title">
+            <svg class="icon-svg" viewBox="0 0 24 24">
+                <path d="M2.01 3L2 10l15 2-15 2 .01 7L23 12 2.01 3z"/>
+            </svg>
+            分层加固整改方案
+        </div>
+        <div class="fix-three-col">
+            <div class="fix-block-emergency">
+                <div class="fix-block-title">紧急修复（7日内完成）</div>
+                <ul class="list-uniform">
+                    <li>禁用TRACE危险HTTP请求方法</li>
+                    <li>配置全站HTTP自动跳转HTTPS</li>
+                    <li>全局添加X-Frame-Options安全响应头</li>
+                </ul>
+            </div>
+            <div class="fix-block-deadline">
+                <div class="fix-block-title">限期整改（30日内完成）</div>
+                <ul class="list-uniform">
+                    <li>配置CSP内容安全策略，防御XSS跨站攻击</li>
+                    <li>Cookie补充SameSite、HttpOnly安全属性</li>
+                    <li>关闭Apache server-info、server-status敏感页面</li>
+                </ul>
+            </div>
+            <div class="fix-block-longterm">
+                <div class="fix-block-title">常态化长效优化</div>
+                <ul class="list-uniform">
+                    <li>定期更新PHP、Apache版本，隐藏服务版本标识</li>
+                    <li>开发统一自定义错误页面，屏蔽服务器路径泄露</li>
+                    <li>建立月度自动化安全扫描巡检机制，持续监测漏洞</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 底部原始扫描数据附录 ==================== -->
+    <div class="appendix-card">
+        <details>
+            <summary class="appendix-summary">
+                <svg class="icon-svg" viewBox="0 0 24 24">
+                    <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6-6-6z"/>
+                </svg>
+                查看原始扫描完整数据（Payload、请求参数、服务配置详情）
+            </summary>
+            <div class="appendix-content">
+                <p>扫描目标地址：http://127.0.0.1/dvwa/vulnerabilities/sql</p>
+                <p>Apache信息泄露漏洞访问地址：http://127.0.0.1/dvwa/</p>
+                <p>本次扫描所有漏洞无自定义攻击载荷（Payload：N/A）</p>
+                <p>扫描引擎版本：安全审计扫描引擎 V2.6</p>
+            </div>
+        </details>
+    </div>
+
+</body>
+</html>

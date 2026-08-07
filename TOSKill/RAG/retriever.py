@@ -71,11 +71,88 @@ def initialize_rag(force: bool = False) -> bool:
 def rebuild_knowledge_base() -> bool:
     """
     重建知识库索引
-    
+
     在添加/修改知识库文档后调用，重新生成向量索引。
-    
+
     Returns:
         bool: 重建是否成功
     """
     from .rag_engine import rebuild_knowledge_base as _rebuild
     return _rebuild()
+
+
+# ==================== 等保评估检索接口 ====================
+
+
+def get_mlps_assessment_context(
+    target: str,
+    vulnerabilities: List[Dict[str, Any]],
+    tool_results: Dict[str, Any]
+) -> str:
+    """检索等保评估上下文（供置信度评估器调用）
+
+    返回知识库中的等保2.0标准条款、漏洞→控制项映射、历史评估案例
+    等专业知识片段。RAG未就绪时降级为关键词检索。
+
+    Args:
+        target: 扫描目标URL
+        vulnerabilities: 漏洞列表
+        tool_results: 工具执行结果
+
+    Returns:
+        str: 检索到的等保知识上下文，失败时返回空字符串
+    """
+    if not settings.RAG_ENABLED:
+        return ""
+    engine = get_rag_engine()
+    return engine.retrieve_mlps_context(
+        target=target,
+        vulnerabilities=vulnerabilities,
+        tool_results=tool_results
+    )
+
+
+def get_confidence_rules() -> str:
+    """检索置信度评判规则
+
+    从知识库中检索置信度评分标准、等级阈值、评估维度权重
+    等规则内容，供AI评估时参考。
+
+    Returns:
+        str: 检索到的置信度评判规则文本，失败时返回空字符串
+    """
+    if not settings.RAG_ENABLED:
+        return ""
+    engine = get_rag_engine()
+    if not engine.retriever:
+        return ""
+    try:
+        nodes = engine.retriever.retrieve("置信度评判规则 评分标准 等级阈值 评估维度权重 误差范围")
+        if not nodes:
+            return ""
+        parts = []
+        for i, node in enumerate(nodes[:3]):
+            score = getattr(node, 'score', 0) or 0
+            text = node.node.text if hasattr(node, 'node') else str(node)
+            metadata = node.node.metadata if hasattr(node, 'node') else {}
+            fname = metadata.get("file_name", "unknown")
+            parts.append(f"[规则{i+1}] 来源:{fname} 相关度:{score:.3f}\n{text[:1500]}")
+        return "\n\n---\n\n".join(parts)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"置信度规则检索失败: {e}")
+        return ""
+
+
+def get_kb_version() -> str:
+    """获取知识库版本号
+
+    返回当前知识库的版本标识，用于报告展示。
+    版本号格式如 v2.17.20260806（v2.文档数.日期）。
+
+    Returns:
+        str: 知识库版本号，不可用时返回空字符串
+    """
+    if not settings.RAG_ENABLED:
+        return ""
+    return get_rag_engine().get_kb_version()

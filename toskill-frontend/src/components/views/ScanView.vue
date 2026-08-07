@@ -254,9 +254,18 @@ const restoreScanState = () => {
   const saved = storageService.getScanState()
   if (!saved) return
 
+  // TTL 校验：超过 24 小时的数据视为过期
+  const SCAN_TTL = 24 * 60 * 60 * 1000
+  const savedAt = saved.savedAt ? new Date(saved.savedAt).getTime() : 0
+  if (savedAt && Date.now() - savedAt > SCAN_TTL) {
+    storageService.remove('scan_workspace')
+    return
+  }
+
   form.target = saved.form?.target || ''
   form.mode = saved.form?.mode || 'info'
-  isScanning.value = Boolean(saved.isScanning)
+  // isScanning 不再持久化恢复，始终初始化为 false，依赖后端 get_status 同步
+  isScanning.value = false
   progress.value = Number(saved.progress) || 0
   statusText.value = saved.statusText || '准备中...'
   showResults.value = Boolean(saved.showResults)
@@ -271,7 +280,7 @@ const persistScanState = () => {
   storageService.saveScanState({
     sessionId: ws.getSessionId() || storageService.getActiveSessionId(),
     form: { ...form },
-    isScanning: isScanning.value,
+    // isScanning 不再持久化，避免刷新后误显示"扫描中"
     progress: progress.value,
     statusText: statusText.value,
     showResults: showResults.value,

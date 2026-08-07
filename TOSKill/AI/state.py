@@ -102,6 +102,7 @@ class ScanState(TypedDict, total=False):
     risk_summary: NotRequired[Dict[str, int]]
     skip_remaining_tasks: NotRequired[bool]
     current_task_vulnerabilities: NotRequired[List[Dict[str, Any]]]
+    scan_mode: NotRequired[str]
 
 
 def create_initial_state(target: str, task_id: str = None, mode: str = "info_collection") -> ScanState:
@@ -114,6 +115,7 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         task_id=task_id or str(uuid.uuid4())[:8],
         run_id="",
         mode=mode,
+        scan_mode="人机交互",
         planned_tasks=[],
         completed_tasks=[],
         failed_tasks=[],

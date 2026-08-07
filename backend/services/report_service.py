@@ -84,6 +84,48 @@ class AIAnalysisData:
 
 
 @dataclass
+class ConfidenceDimension:
+    """置信度分项维度"""
+    label: str = ""
+    value: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ConfidenceData:
+    """AI 等保评估置信度数据
+
+    评估规则未接入前可保持默认值，模板会进行降级展示。
+    """
+    overall_score: float = 0.0
+    level: str = "info"
+    standard_text: str = "基于等保2.0（GB/T 22239-2019）三级标准"
+    kb_version: str = ""
+    dimensions: List[ConfidenceDimension] = field(default_factory=list)
+    compliance_estimate: float = 0.0
+    compliance_margin: str = ""
+    kb_refs: str = ""
+    scan_mode: str = ""
+    note: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "overall_score": self.overall_score,
+            "level": self.level,
+            "standard_text": self.standard_text,
+            "kb_version": self.kb_version,
+            "dimensions": [d.to_dict() for d in self.dimensions],
+            "compliance_estimate": self.compliance_estimate,
+            "compliance_margin": self.compliance_margin,
+            "kb_refs": self.kb_refs,
+            "scan_mode": self.scan_mode,
+            "note": self.note,
+        }
+
+
+@dataclass
 class WorkflowExecutionRecord:
     """工作流执行记录"""
     node_id: str = ""
@@ -165,7 +207,8 @@ class ReportData:
     risk_assessment: RiskAssessment = field(default_factory=RiskAssessment)
     vulnerabilities: List[Dict[str, Any]] = field(default_factory=list)
     ai_analysis: Optional[AIAnalysisData] = None
-    
+    confidence: Optional[ConfidenceData] = None
+
     execution_history: List[Dict[str, Any]] = field(default_factory=list)
     tool_results: Dict[str, Any] = field(default_factory=dict)
     target_context: Dict[str, Any] = field(default_factory=dict)
@@ -188,6 +231,8 @@ class ReportData:
         }
         if self.ai_analysis:
             data["ai_analysis"] = self.ai_analysis.to_dict()
+        if self.confidence:
+            data["confidence"] = self.confidence.to_dict()
         if self.workflow:
             data["workflow"] = self.workflow.to_dict()
         return data
@@ -636,6 +681,19 @@ class ReportService:
             "compliance": "合规影响说明" if is_zh else "Compliance Impact",
             "fix_plan": "分层加固整改方案" if is_zh else "Remediation Plan",
             "appendix": "查看原始扫描完整数据（Payload、证据、服务配置详情）" if is_zh else "View complete raw scan data",
+            "confidence_title": "AI等保评估置信度" if is_zh else "AI MLPS Assessment Confidence",
+            "confidence_overall": "综合等保评估置信度" if is_zh else "Overall Confidence",
+            "confidence_level_high": "高置信度" if is_zh else "High Confidence",
+            "confidence_level_mid": "中置信度" if is_zh else "Medium Confidence",
+            "confidence_level_low": "低置信度" if is_zh else "Low Confidence",
+            "confidence_level_info": "待评估" if is_zh else "Pending",
+            "compliance_estimate": "等保三级符合度预估" if is_zh else "MLPS L3 Compliance Estimate",
+            "kb_refs": "知识库检索条目" if is_zh else "KB References",
+            "scan_mode": "扫描模式" if is_zh else "Scan Mode",
+            "confidence_note_title": "评估说明" if is_zh else "Assessment Note",
+            "confidence_kb_ref": "等保2.0知识库" if is_zh else "MLPS 2.0 Knowledge Base",
+            "confidence_placeholder": "AI等保评估置信度模块尚在规则接入中，暂未生成置信度数据" if is_zh else "Confidence module is pending rule integration, no data yet",
+            "confidence_kb_version": "知识库版本" if is_zh else "KB Version",
         }
 
         total = max(summary.total_vulnerabilities, 1)
@@ -660,6 +718,7 @@ class ReportService:
         vuln_items_html = self._render_vulnerabilities_html(ordered_vulns, language)
         workflow_html = self._render_workflow_html(report_data.workflow, language) if report_data.workflow else ""
         ai_analysis_html = self._render_ai_analysis_html(report_data.ai_analysis, language) if report_data.ai_analysis else ""
+        confidence_html = self._render_confidence_html(report_data.confidence, language, labels)
 
         count_parts = [f"{count}{'项' if is_zh else ''}{label}" for _, label, count in severity_rows if count]
         top_vuln = ordered_vulns[0].get("title", ordered_vulns[0].get("name", "")) if ordered_vulns else ""
@@ -747,11 +806,11 @@ class ReportService:
 
         styles = """
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        :root { --gap-sm: 10px; --gap-md: 12px; --gap-lg: 24px; --gap-xl: 24px; --radius: 4px; --border: #e5e7eb; --primary: #165dff; --critical: #d93025; --high: #e67e22; --medium: #d4a017; --low: #165dff; --info: #888; }
+        :root { --gap-sm: 10px; --gap-md: 12px; --gap-lg: 24px; --gap-xl: 24px; --radius: 4px; --border: #e5e7eb; --primary: #165dff; --critical: #d93025; --high: #e67e22; --medium: #d4a017; --low: #165dff; --info: #888; --confidence-high: #165dff; --confidence-mid: #e67e22; --confidence-low: #d93025; }
         body { background: #f7f8fa; padding: 32px; color: #222; line-height: 1.8; font-family: "Source Han Sans CN", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
         .report-shell { width: min(1440px, 100%); margin: 0 auto; }
         .card, .report-header, .appendix-card { background: #fff; border: 1px solid var(--border); border-radius: var(--radius); padding: var(--gap-lg); }
-        .report-header, .risk-overview, .two-col-container, .fix-plan-container, .workflow-section, .ai-section { margin-bottom: var(--gap-xl); }
+        .report-header, .risk-overview, .confidence-module, .two-col-container, .fix-plan-container, .workflow-section, .ai-section { margin-bottom: var(--gap-xl); }
         .header-top, .module-title { display: flex; align-items: center; gap: var(--gap-sm); font-weight: 700; }
         .header-top { font-size: 22px; margin-bottom: var(--gap-sm); }
         .header-subtitle { font: 13px "Source Han Serif CN", SimSun, serif; color: #666; margin-bottom: var(--gap-lg); }
@@ -810,9 +869,50 @@ class ReportService:
         pre { max-height: 360px; overflow: auto; margin-top: 8px; padding: 12px; background: #f7f8fa; border: 1px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; font: 12px Consolas, monospace; }
         .empty-state { padding: 24px; color: #666; text-align: center; }
         .footer { padding: 20px; color: #666; text-align: center; font-size: 12px; }
+        .confidence-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--gap-sm); margin-bottom: var(--gap-md); padding-bottom: var(--gap-sm); border-bottom: 1px solid var(--border); }
+        .confidence-header .standard-badge { font-size: 13px; background: #e8f0fe; color: var(--primary); padding: 2px 12px; border-radius: 12px; border: 1px solid rgba(22, 93, 255, 0.15); white-space: nowrap; font-weight: 500; }
+        .confidence-standard-text { font-size: 14px; color: #555; font-weight: 500; }
+        .confidence-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--gap-lg); margin-bottom: var(--gap-md); }
+        .confidence-score-wrap { display: flex; align-items: baseline; gap: var(--gap-sm); }
+        .confidence-number { font-size: 28px; font-weight: 700; color: var(--confidence-high); }
+        .confidence-number-label { font-size: 14px; color: #444; font-weight: 500; }
+        .confidence-level-badge { padding: 4px 14px; border-radius: 20px; font-size: 14px; font-weight: 600; letter-spacing: 0.3px; background: #e8f0fe; color: var(--confidence-high); border: 1px solid rgba(22, 93, 255, 0.2); white-space: nowrap; }
+        .confidence-level-badge.level-high { background: #e8f0fe; color: var(--confidence-high); border-color: rgba(22, 93, 255, 0.25); }
+        .confidence-level-badge.level-mid { background: #fef3e8; color: var(--confidence-mid); border-color: rgba(230, 126, 34, 0.25); }
+        .confidence-level-badge.level-low { background: #fde8e8; color: var(--confidence-low); border-color: rgba(217, 48, 37, 0.25); }
+        .confidence-level-badge.level-info { background: #f0f2f5; color: var(--info); border-color: var(--border); }
+        .confidence-details { display: flex; flex-direction: column; gap: var(--gap-md); margin-bottom: var(--gap-md); }
+        .confidence-item { display: flex; align-items: center; gap: var(--gap-sm); }
+        .confidence-item .item-label { font-size: 14px; color: #444; font-family: "Source Han Serif CN", SimSun, serif; min-width: 140px; flex-shrink: 0; }
+        .confidence-item .item-bar-track { flex: 1; height: 6px; background: #eee; border-radius: 3px; overflow: hidden; }
+        .confidence-item .item-bar-fill { height: 100%; border-radius: 3px; background: var(--confidence-high); transition: width 0.6s ease; }
+        .confidence-item .item-value { font-size: 14px; font-weight: 600; color: #222; min-width: 42px; text-align: right; font-family: "Source Han Sans CN", "Microsoft YaHei UI", sans-serif; }
+        .compliance-extra { display: flex; align-items: center; gap: var(--gap-lg); padding: var(--gap-sm) 0; margin-top: var(--gap-sm); border-top: 1px dashed var(--border); flex-wrap: wrap; }
+        .compliance-extra .extra-item { display: flex; align-items: baseline; gap: 6px; font-size: 14px; color: #444; font-family: "Source Han Serif CN", SimSun, serif; }
+        .compliance-extra .extra-item .extra-value { font-weight: 700; color: #222; }
+        .compliance-extra .extra-item .extra-tag { background: #f0f2f5; padding: 0 8px; border-radius: 4px; font-size: 12px; color: #666; }
+        .confidence-note { padding-top: var(--gap-md); border-top: 1px dashed var(--border); font-size: 13px; color: #666; font-family: "Source Han Serif CN", SimSun, serif; line-height: 1.7; }
+        .confidence-note strong { color: #222; }
+        .confidence-note .kb-ref { display: inline-block; background: #f0f4ff; padding: 0 6px; border-radius: 3px; font-size: 12px; color: var(--primary); border: 1px solid rgba(22, 93, 255, 0.1); }
+        .confidence-placeholder { padding: 24px; color: #888; text-align: center; font-size: 14px; font-family: "Source Han Serif CN", SimSun, serif; }
         @media (max-width: 900px) { body { padding: 16px; } .two-col-container, .fix-three-col { grid-template-columns: 1fr; } .risk-bar-group { min-width: 100%; overflow-x: auto; } }
-        @media (max-width: 560px) { body { padding: 10px; } .card, .report-header, .appendix-card { padding: 16px; } .meta-wrap { grid-template-columns: 1fr; } .risk-bar-group { display: grid; grid-template-columns: repeat(2, 1fr); } }
-        @media print { @page { size: A4; margin: 12mm; } body { padding: 0; background: #fff; } .report-shell { width: 100%; } .card, .report-header, .appendix-card { break-inside: avoid; } details { display: block; } details > .appendix-content { display: block; } }
+        @media (max-width: 768px) { .confidence-summary { flex-direction: column; align-items: flex-start; } .confidence-item { flex-wrap: wrap; } .confidence-item .item-label { min-width: 100px; font-size: 13px; } .compliance-extra { flex-direction: column; align-items: flex-start; gap: var(--gap-sm); } .score-num { font-size: 20px; } .confidence-number { font-size: 24px; } }
+        @media (max-width: 560px) { body { padding: 10px; } .card, .report-header, .appendix-card { padding: 16px; } .meta-wrap { grid-template-columns: 1fr; } .risk-bar-group { display: grid; grid-template-columns: repeat(2, 1fr); } .confidence-item .item-label { min-width: 80px; } .confidence-level-badge { font-size: 12px; padding: 2px 10px; } .confidence-header .standard-badge { font-size: 11px; padding: 0 8px; } }
+        @media print { @page { size: A4; margin: 12mm; } body { padding: 0; background: #fff; } .report-shell { width: 100%; } .card, .report-header, .appendix-card { break-inside: avoid; } .confidence-module { break-inside: avoid; } details { display: block; } details > .appendix-content { display: block; } }
+        .md-content { line-height: 1.8; }
+        .md-content h1, .md-content h2, .md-content h3, .md-content h4 { margin: 0.6em 0 0.3em; font-weight: 600; color: #1a1a1a; }
+        .md-content h1 { font-size: 1.2em; }
+        .md-content h2 { font-size: 1.1em; }
+        .md-content h3 { font-size: 1em; }
+        .md-content ul, .md-content ol { margin: 0.3em 0; padding-left: 1.5em; }
+        .md-content li { margin: 0.2em 0; }
+        .md-content code { background: rgba(0,0,0,0.06); padding: 0.1em 0.4em; border-radius: 3px; font-family: 'SF Mono', Consolas, monospace; font-size: 0.9em; }
+        .md-content pre { background: rgba(0,0,0,0.04); padding: 0.8em; border-radius: 6px; overflow-x: auto; margin: 0.5em 0; }
+        .md-content pre code { background: none; padding: 0; }
+        .md-content strong { font-weight: 600; }
+        .md-content em { font-style: italic; }
+        .md-content blockquote { border-left: 3px solid #165dff; padding-left: 1em; color: #555; margin: 0.5em 0; }
+        .md-content p { margin: 0.3em 0; }
         """
 
         icon = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>'
@@ -849,6 +949,8 @@ class ReportService:
             </div>
             <div class="risk-desc-block text-body"><p>{escape(risk_summary)}</p></div>
         </section>
+
+        {confidence_html}
 
         <div class="two-col-container">
             <section class="card left-col">
@@ -918,7 +1020,21 @@ class ReportService:
             """
         
         return html
-    
+
+    @staticmethod
+    def _md_to_html(text: str) -> str:
+        """将Markdown文本转换为HTML，保留标题/列表/粗体等格式"""
+        import markdown as md
+        html = md.markdown(
+            str(text),
+            extensions=['sane_lists'],
+            output_format='html'
+        )
+        # 移除外层<p>标签（模板已有容器包裹，避免双重嵌套）
+        if html.startswith('<p>') and html.endswith('</p>'):
+            html = html[3:-4]
+        return html
+
     def _render_ai_analysis_html(self, ai_analysis: AIAnalysisData, language: Language) -> str:
         """渲染 AI 分析 HTML"""
         if not ai_analysis:
@@ -936,27 +1052,27 @@ class ReportService:
 
         blocks = []
         if ai_analysis.summary:
-            blocks.append(f'<div class="analysis-block"><h3>{labels["summary"]}</h3><p class="text-body">{escape(str(ai_analysis.summary))}</p></div>')
+            blocks.append(f'<div class="analysis-block"><h3>{labels["summary"]}</h3><div class="text-body md-content">{self._md_to_html(ai_analysis.summary)}</div></div>')
 
         if ai_analysis.causes:
-            items = "".join(f"<li>{escape(str(cause))}</li>" for cause in ai_analysis.causes)
+            items = "".join(f"<li>{self._md_to_html(cause)}</li>" for cause in ai_analysis.causes)
             blocks.append(f'<div class="analysis-block"><h3>{labels["causes"]}</h3><ul class="list-uniform">{items}</ul></div>')
 
         if ai_analysis.risks:
-            items = "".join(f"<li>{escape(str(risk))}</li>" for risk in ai_analysis.risks)
+            items = "".join(f"<li>{self._md_to_html(risk)}</li>" for risk in ai_analysis.risks)
             blocks.append(f'<div class="analysis-block"><h3>{labels["risks"]}</h3><ul class="list-uniform">{items}</ul></div>')
 
         if ai_analysis.priorities:
             priority_label = "优先级" if is_zh else "Priority"
             items = "".join(
-                f'<li>{escape(str(p.get("vulnerability", "")))}：{priority_label} {escape(str(p.get("priority", 0)))}'
-                f'{("，" + escape(str(p.get("reason")))) if p.get("reason") else ""}</li>'
+                f'<li>{self._md_to_html(p.get("vulnerability", ""))}：{priority_label} {p.get("priority", 0)}'
+                f'{("，" + self._md_to_html(p.get("reason"))) if p.get("reason") else ""}</li>'
                 for p in ai_analysis.priorities
             )
             blocks.append(f'<div class="analysis-block"><h3>{labels["priorities"]}</h3><ul class="list-uniform">{items}</ul></div>')
 
         if ai_analysis.recommendations:
-            items = "".join(f"<li>{escape(str(item))}</li>" for item in ai_analysis.recommendations)
+            items = "".join(f"<li>{self._md_to_html(item)}</li>" for item in ai_analysis.recommendations)
             blocks.append(f'<div class="analysis-block"><h3>{labels["recommendations"]}</h3><ul class="list-uniform">{items}</ul></div>')
 
         if not blocks:
@@ -964,7 +1080,151 @@ class ReportService:
 
         icon = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>'
         return f'<section class="card ai-section"><h2 class="module-title">{icon}{labels["ai_analysis"]}</h2><div class="ai-grid">{"".join(blocks)}</div></section>'
-    
+
+    def _render_confidence_html(self, confidence: Optional["ConfidenceData"], language: Language, labels: Dict[str, str]) -> str:
+        """渲染 AI 等保评估置信度 HTML
+
+        当 confidence 为 None 或尚未填充数据时，展示降级占位说明，
+        便于在评判规则接入前保持模块可见。
+        """
+        is_zh = language == Language.ZH_CN
+        icon = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.2-7.2c0 1.3-1.1 2.3-2.4 2.3H11c-.6 0-1-.4-1-1v-6c0-.6.4-1 1-1h1.8c1.3 0 2.4 1 2.4 2.3z"/></svg>'
+
+        # 降级占位：评判规则尚未接入
+        if not confidence or (confidence.overall_score <= 0 and not confidence.dimensions):
+            placeholder = labels["confidence_placeholder"]
+            return (
+                f'<section class="card confidence-module">'
+                f'<h2 class="module-title">{icon}{labels["confidence_title"]}</h2>'
+                f'<p class="confidence-placeholder">{escape(placeholder)}</p>'
+                f'</section>'
+            )
+
+        # 等级判定：>=80 高 / 60-79 中 / <60 低
+        score = max(0.0, min(100.0, float(confidence.overall_score or 0)))
+        level_key = str(confidence.level or "").lower()
+        if level_key not in ("high", "mid", "low", "info"):
+            if score >= 80:
+                level_key = "high"
+            elif score >= 60:
+                level_key = "mid"
+            elif score > 0:
+                level_key = "low"
+            else:
+                level_key = "info"
+
+        level_label_map = {
+            "high": labels["confidence_level_high"],
+            "mid": labels["confidence_level_mid"],
+            "low": labels["confidence_level_low"],
+            "info": labels["confidence_level_info"],
+        }
+        level_label = level_label_map.get(level_key, labels["confidence_level_info"])
+
+        # 标准标识行
+        standard_text = escape(str(confidence.standard_text or ""))
+        kb_version = escape(str(confidence.kb_version or ""))
+        standard_badge_html = (
+            f'<span class="standard-badge">{labels["confidence_kb_version"]} {kb_version}</span>'
+            if kb_version else ""
+        )
+        header_html = (
+            f'<div class="confidence-header">'
+            f'<span class="confidence-standard-text">{standard_text}</span>'
+            f'{standard_badge_html}'
+            f'</div>'
+        )
+
+        # 综合置信度
+        score_display = f"{score:.0f}%" if score > 0 else "—"
+        summary_html = (
+            f'<div class="confidence-summary">'
+            f'<div class="confidence-score-wrap">'
+            f'<span class="confidence-number">{score_display}</span>'
+            f'<span class="confidence-number-label">{labels["confidence_overall"]}</span>'
+            f'</div>'
+            f'<span class="confidence-level-badge level-{level_key}">{escape(level_label)}</span>'
+            f'</div>'
+        )
+
+        # 分项置信度
+        details_html = ""
+        if confidence.dimensions:
+            items_html = ""
+            for dim in confidence.dimensions:
+                dim_value = max(0.0, min(100.0, float(dim.value or 0)))
+                dim_label = escape(str(dim.label or ""))
+                items_html += (
+                    f'<div class="confidence-item">'
+                    f'<span class="item-label">{dim_label}</span>'
+                    f'<div class="item-bar-track"><div class="item-bar-fill" style="width:{dim_value:.1f}%;"></div></div>'
+                    f'<span class="item-value">{dim_value:.0f}%</span>'
+                    f'</div>'
+                )
+            details_html = f'<div class="confidence-details">{items_html}</div>'
+
+        # 等保符合度附加信息
+        extra_html = ""
+        extra_items = []
+        if confidence.compliance_estimate > 0:
+            margin = escape(str(confidence.compliance_margin or "")) if confidence.compliance_margin else ""
+            margin_tag = f'<span class="extra-tag">{margin}</span>' if margin else ""
+            extra_items.append(
+                f'<span class="extra-item">'
+                f'<span>📊 {labels["compliance_estimate"]}：</span>'
+                f'<span class="extra-value">{confidence.compliance_estimate:.0f}%</span>'
+                f'{margin_tag}'
+                f'</span>'
+            )
+        if confidence.kb_refs:
+            extra_items.append(
+                f'<span class="extra-item">'
+                f'<span>📌 {labels["kb_refs"]}：</span>'
+                f'<span class="extra-value" style="font-weight:400; font-size:13px; color:#666;">{escape(str(confidence.kb_refs))}</span>'
+                f'</span>'
+            )
+        if confidence.scan_mode:
+            extra_items.append(
+                f'<span class="extra-item">'
+                f'<span>⚙️ {labels["scan_mode"]}：</span>'
+                f'<span class="extra-value" style="font-weight:400; font-size:13px; color:#666;">{escape(str(confidence.scan_mode))}</span>'
+                f'</span>'
+            )
+        if extra_items:
+            extra_html = f'<div class="compliance-extra">{"".join(extra_items)}</div>'
+
+        # 评估说明
+        note_html = ""
+        note_text = confidence.note or ""
+        if not note_text:
+            # 默认说明模板
+            if is_zh:
+                note_text = (
+                    f'<strong>📋 {labels["confidence_note_title"]}：</strong>本置信度由AI综合漏洞扫描结果与'
+                    f'<span class="kb-ref">{labels["confidence_kb_ref"]}</span> 进行多维匹配得出。'
+                    f'整体置信度达到 <strong>{score_display}</strong>，'
+                    f'建议安全专家结合业务实际，对低置信度项（＜70%）进行人工复核，确保等保合规整改的准确性。'
+                )
+            else:
+                note_text = (
+                    f'<strong>📋 {labels["confidence_note_title"]}:</strong> Confidence is computed by matching '
+                    f'scan results against the <span class="kb-ref">{labels["confidence_kb_ref"]}</span>. '
+                    f'Overall confidence is <strong>{score_display}</strong>. '
+                    f'Review items below 70% manually to ensure compliance accuracy.'
+                )
+        note_html = f'<div class="confidence-note">{note_text}</div>'
+
+        return (
+            f'<section class="card confidence-module">'
+            f'<h2 class="module-title">{icon}{labels["confidence_title"]}</h2>'
+            f'{header_html}'
+            f'{summary_html}'
+            f'{details_html}'
+            f'{extra_html}'
+            f'{note_html}'
+            f'</section>'
+        )
+
     def _render_workflow_html(self, workflow: WorkflowData, language: Language) -> str:
         """渲染工作流数据 HTML"""
         if not workflow:

@@ -1,6 +1,10 @@
 import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { ws } from '../services/websocket.js'
-import { showToast, globalState, scanProgressState, scanStatusState } from '../store.js'
+import { showToast, globalState, scanProgressState, scanStatusState,
+  conversationState, loadConversationIndex, createNewConversation,
+  deleteConversation, renameConversation, updateConversationStatus,
+  setCurrentConversation, saveConversationBlocks, loadConversationBlocks,
+  setConversationSessionId } from '../store.js'
 import { API } from '../services/api.js'
 import { storageService } from '../services/storageService.js'
 import { addLog } from './useLogBus.js'
@@ -102,48 +106,190 @@ export function useAgentChat() {
     localStorage.setItem('toskill_script_history', JSON.stringify(scriptHistory.value))
   }
 
+  // 从 localStorage 恢复当前会话的 workspaceBlocks 与 inputText
+  // - 恢复后将所有 running 状态的 agent_run 标记为 cancelled（避免刷新后卡在"运行中"）
+  // - 等待后端 get_status / run_snapshot 响应后更新为实际状态
   const restoreConsoleState = (sessionId) => {
     if (!sessionId) return
-    const saved = storageService.getConsoleState(sessionId)
-    if (!saved) return
-
-    workspaceBlocks.value = Array.isArray(saved.workspaceBlocks)
-      ? saved.workspaceBlocks.filter(block => {
-          const emptyRun = block.type === 'agent_run' && !block.target && !block.total && !block.completed
-          const transientStatus = block.type === 'agent_text' && /^会话状态: (空闲|扫描中|已完成)$/.test(block.content || '')
-          return !emptyRun && !transientStatus
-        })
-      : []
-    scanActive.value = Boolean(saved.scanActive)
-    waitingForChoice.value = Boolean(saved.waitingForChoice)
-    pendingScanConfirm.value = saved.pendingScanConfirm || null
-    showScanConfirm.value = Boolean(saved.showScanConfirm && saved.pendingScanConfirm)
-    if (saved.currentTarget) globalState.currentTarget = saved.currentTarget
-    if (saved.scanProgress) scanProgress.value = saved.scanProgress
-    if (saved.scanStatus) scanStatus.value = saved.scanStatus
+    const data = loadConversationBlocks(sessionId)
+    if (data && data.blocks) {
+      // 遍历将 running 状态的 agent_run 标记为 cancelled
+      for (const block of data.blocks) {
+        if (block.type === 'agent_run' && block.status === 'running') {
+          block.status = 'cancelled'
+          block.summary = block.summary || '页面刷新，状态已重置'
+        }
+        // 同步将 steps 中的 running/waiting 状态也标记
+        if (block.type === 'agent_run' && Array.isArray(block.steps)) {
+          for (const step of block.steps) {
+            if (step.status === 'running' || step.status === 'waiting') {
+              step.status = 'cancelled'
+            }
+            // 重置未解决的交互：页面刷新后旧交互已失效，避免 hasOpenInteraction 误判
+            // 导致后端重新发送的 interaction_required（相同 interactionId）被跳过
+            if (step.interaction && !step.interaction.resolved) {
+              step.interaction.resolved = true
+              step.interaction.selectedChoice = step.interaction.selectedChoice || '页面刷新，已失效'
+            }
+          }
+        }
+      }
+      workspaceBlocks.value = data.blocks
+      inputText.value = data.inputText || ''
+    } else {
+      // localStorage 无数据，依赖后端 get_history 恢复简单聊天
+      workspaceBlocks.value = []
+      inputText.value = ''
+    }
   }
 
+  // 立即持久化当前会话的 workspaceBlocks 与 inputText 到 localStorage
   const persistConsoleState = () => {
-    const sessionId = activeSessionId.value || ws.getSessionId()
-    if (!sessionId) return
-    storageService.saveConsoleState(sessionId, {
-      workspaceBlocks: workspaceBlocks.value,
-      scanActive: scanActive.value,
-      waitingForChoice: waitingForChoice.value,
-      pendingScanConfirm: pendingScanConfirm.value,
-      showScanConfirm: showScanConfirm.value,
-      currentTarget: globalState.currentTarget,
-      scanProgress: scanProgress.value,
-      scanStatus: scanStatus.value
-    })
+    const currentId = conversationState.currentId
+    if (!currentId) return
+    // 仅在有内容时保存
+    if (workspaceBlocks.value.length === 0 && !inputText.value) return
+    saveConversationBlocks(currentId, workspaceBlocks.value, inputText.value)
+    // 同步更新会话索引的 lastActiveAt
+    const conv = conversationState.conversations.find(c => c.id === currentId)
+    if (conv) {
+      conv.lastActiveAt = new Date().toISOString()
+    }
   }
 
+  // 防抖持久化（500ms）
   const scheduleConsolePersist = () => {
     if (persistTimer) clearTimeout(persistTimer)
-    persistTimer = setTimeout(persistConsoleState, 200)
+    persistTimer = setTimeout(() => {
+      persistConsoleState()
+    }, 500)
   }
 
-  restoreConsoleState(activeSessionId.value)
+  // === 多会话管理方法 ===
+  const getConvTitle = (id) => {
+    return conversationState.conversations.find(c => c.id === id)?.title || '未知会话'
+  }
+
+  const handleNewConversation = async () => {
+    // 先保存当前会话的 blocks 到 localStorage
+    if (conversationState.currentId) {
+      persistConsoleState()
+    }
+    if (scanActive.value) {
+      showToast('当前扫描将在后台继续，已创建新对话', 'info')
+    }
+    // 先创建前端对话（sessionId 暂为 null）
+    const result = createNewConversation()
+    if (!result.success) {
+      showToast(result.error, 'warning')
+      return
+    }
+    // 清空当前内存状态
+    workspaceBlocks.value = []
+    inputText.value = ''
+    isTyping.value = false
+    isThinking.value = false
+    scanActive.value = false
+    waitingForChoice.value = false
+    pendingScanConfirm.value = null
+    showScanConfirm.value = false
+    // 断开重连，创建新后端 session（传 null = 不带 session_id，后端分配新 ID）
+    try {
+      await ws.switchSession(null)
+    } catch (e) {
+      showToast('连接新会话失败，请重试', 'warning')
+      return
+    }
+    // connected 消息会自动回填 activeSessionId 和 conversation.sessionId
+    showToast('已创建新对话', 'success')
+  }
+
+  const handleSwitchConversation = async (id) => {
+    if (id === conversationState.currentId) return
+    // 先保存当前会话的 blocks 到 localStorage
+    if (conversationState.currentId) {
+      persistConsoleState()
+    }
+    // 获取目标对话的后端 session_id
+    const targetConv = conversationState.conversations.find(c => c.id === id)
+    const targetSessionId = targetConv?.sessionId || null
+
+    setCurrentConversation(id)
+    // 从 localStorage 恢复目标会话的 blocks
+    restoreConsoleState(id)
+    isTyping.value = false
+    isThinking.value = false
+    scanActive.value = false
+    waitingForChoice.value = false
+    pendingScanConfirm.value = null
+    showScanConfirm.value = false
+
+    // 切换后端 session（如果有 sessionId 则恢复，否则创建新的）
+    try {
+      await ws.switchSession(targetSessionId)
+    } catch (e) {
+      showToast('切换会话失败，请重试', 'warning')
+      return
+    }
+    // connected 消息会自动处理 history/status 恢复
+  }
+
+  const handleDeleteConversation = (id) => {
+    const conv = conversationState.conversations.find(c => c.id === id)
+    if (!conv) return
+    if (id === conversationState.currentId && scanActive.value) {
+      showToast('扫描进行中，无法删除当前会话', 'warning')
+      return
+    }
+    // 用后端 sessionId 取消订阅
+    if (conv.sessionId) {
+      ws.unsubscribeSession(conv.sessionId)
+    }
+    deleteConversation(id)
+    if (conversationState.currentId) {
+      handleSwitchConversation(conversationState.currentId)
+    } else {
+      workspaceBlocks.value = []
+      scanActive.value = false
+    }
+    showToast('会话已删除', 'success')
+  }
+
+  const handleRenameConversation = (id, title) => {
+    renameConversation(id, title)
+    showToast('会话已重命名', 'success')
+  }
+
+  const handleBackgroundSessionMessage = (sessionId, data) => {
+    switch (data.type) {
+      case 'task_started':
+      case 'scan_started':
+      case 'scan_flow_started':
+        updateConversationStatus(sessionId, 'scanning')
+        break
+      case 'scan_completed':
+      case 'workflow_completed':
+        updateConversationStatus(sessionId, 'completed')
+        showToast(`会话"${getConvTitle(sessionId)}"扫描已完成`, 'success')
+        break
+      case 'workflow_error':
+      case 'workflow_timeout':
+        updateConversationStatus(sessionId, 'failed')
+        showToast(`会话"${getConvTitle(sessionId)}"已出错`, 'warning')
+        break
+      case 'scan_cancelled':
+        updateConversationStatus(sessionId, 'cancelled')
+        showToast(`会话"${getConvTitle(sessionId)}"已停止`, 'info')
+        break
+      case 'interaction_required':
+        // 后台会话需要交互时，仅提示用户（不阻塞当前会话）
+        showToast(`会话"${getConvTitle(sessionId)}"等待您的指令`, 'info')
+        updateConversationStatus(sessionId, 'waiting')
+        break
+      default:
+        break
+    }
+  }
 
   // === UI 辅助方法 ===
   const addBlock = (type, data = {}) => {
@@ -890,15 +1036,42 @@ export function useAgentChat() {
   const handleWSMessage = (data) => {
     checkStopStreaming(data)
 
+    // 多会话路由：非当前后端 session 的消息仅更新状态
+    // 注意：msgSessionId 是后端 WebSocket session_id（8位hex），
+    // 必须用 activeSessionId（后端 session_id）比较，不能用 conversationState.currentId（前端 conv_xxx）
+    const msgSessionId = data.payload?.session_id
+    const currentBackendSessionId = activeSessionId.value
+    if (msgSessionId && currentBackendSessionId && msgSessionId !== currentBackendSessionId) {
+      handleBackgroundSessionMessage(msgSessionId, data)
+      return
+    }
+
     switch (data.type) {
       case 'connected':
         if (data.payload?.session_id) {
           const connectedSessionId = data.payload.session_id
           if (activeSessionId.value !== connectedSessionId) {
             activeSessionId.value = connectedSessionId
-            restoreConsoleState(connectedSessionId)
           }
           storageService.setActiveSessionId(connectedSessionId)
+          // 回填当前对话的 sessionId
+          if (conversationState.currentId) {
+            setConversationSessionId(conversationState.currentId, connectedSessionId)
+          }
+          // 初始化会话列表（首次连接时）
+          if (conversationState.conversations.length === 0) {
+            loadConversationIndex()
+          }
+          if (conversationState.conversations.length === 0) {
+            createNewConversation(connectedSessionId)
+          }
+          // 确保当前会话已订阅（用后端 sessionId）
+          if (conversationState.currentId) {
+            const conv = conversationState.conversations.find(c => c.id === conversationState.currentId)
+            if (conv?.sessionId) {
+              ws.subscribeSession(conv.sessionId)
+            }
+          }
           ws.sendGetHistory()
           ws.sendGetStatus()
         }
@@ -935,7 +1108,8 @@ export function useAgentChat() {
         isTyping.value = false
         waitingForChoice.value = true
         const interactionId = data.payload?.interaction_id || data.interaction_id
-        if (hasOpenInteraction(interactionId)) break
+        // 不跳过已存在的交互：后端可能重发相同 interactionId 的消息（如会话恢复），
+        // attachRunInteraction 内部会通过 Object.assign 更新现有交互内容
         updateRun(data.payload || {}, { status: 'waiting' })
         attachRunInteraction(data.payload || {}, {
           type: 'actions',
@@ -985,6 +1159,7 @@ export function useAgentChat() {
       case 'scan_started':
         if (!acceptRunEvent(data.payload || {})) break
         scanStatus.value = 'scanning'
+        scanActive.value = true
         isThinking.value = false
         currentThinking.value = ''
         scanProgress.value = { current: 0, total: data.payload?.total_tasks || 0, activeTool: '' }
@@ -993,6 +1168,9 @@ export function useAgentChat() {
           target: data.payload?.target || '',
           status: 'running'
         })
+        if (conversationState.currentId) {
+          updateConversationStatus(conversationState.currentId, 'scanning')
+        }
         break
 
       case 'scan_flow_started':
@@ -1012,13 +1190,20 @@ export function useAgentChat() {
         scanActive.value = false
         isTyping.value = false
         isThinking.value = false
+        waitingForChoice.value = false
+        pendingScanConfirm.value = null
+        showScanConfirm.value = false
         const tasks = data.payload?.completed_tasks || []
         const vulnCount = data.payload?.vulnerabilities_count ?? 0
         let summary = `扫描完成\n目标: ${data.payload?.target || '-'}\n已完成工具: ${tasks.length} 个\n发现漏洞: ${vulnCount} 个`
         if (data.payload?.report) summary += `\n报告: ${data.payload.report}`
         const completedRun = updateRun(data.payload || {}, { status: 'completed', completed: tasks.length, summary })
-        const workflowStep = completedRun.steps.find(step => step.stepId === 'workflow')
-        if (workflowStep?.status === 'running') workflowStep.status = 'completed'
+        completedRun.steps.forEach(step => {
+          if (step.status === 'running') step.status = 'completed'
+        })
+        if (conversationState.currentId) {
+          updateConversationStatus(conversationState.currentId, 'completed')
+        }
         break
 
       case 'scan_cancelled':
@@ -1027,7 +1212,16 @@ export function useAgentChat() {
         scanProgress.value.activeTool = ''
         scanActive.value = false
         isTyping.value = false
-        updateRun(data.payload || {}, { status: 'cancelled', summary: '扫描已取消' })
+        waitingForChoice.value = false
+        pendingScanConfirm.value = null
+        showScanConfirm.value = false
+        const cancelledRun = updateRun(data.payload || {}, { status: 'cancelled', summary: '扫描已取消' })
+        cancelledRun.steps.forEach(step => {
+          if (step.status === 'running') step.status = 'cancelled'
+        })
+        if (conversationState.currentId) {
+          updateConversationStatus(conversationState.currentId, 'cancelled')
+        }
         break
 
       case 'scan_terminated':
@@ -1079,6 +1273,15 @@ export function useAgentChat() {
           rawResult: data.payload?.raw_result || {},
           completedAt: data.payload?.timestamp || new Date().toISOString()
         })
+        // 同步更新 execute_task step（由 workflow_log 创建，stepId 不同）
+        const runBlock = ensureRunBlock(data.payload || {})
+        const executeStep = runBlock.steps.find(step =>
+          step.stepId === 'workflow:execute_task' || step.title === 'execute_task'
+        )
+        if (executeStep?.status === 'running') {
+          executeStep.status = 'completed'
+          executeStep.completedAt = data.payload?.timestamp || new Date().toISOString()
+        }
         if (scriptLoopActive.value && currentScriptIndex.value < scriptQueue.value.length) {
           const script = scriptQueue.value[currentScriptIndex.value]
           script.status = 'completed'
@@ -1330,7 +1533,7 @@ export function useAgentChat() {
           status: 'failed',
           message: '此前执行失败'
         }))
-        ;(snapshot.logs || []).forEach(entry => appendRunLog({ ...snapshot, ...entry }))
+        ;(snapshot.logs || []).forEach(entry => appendRunLog({ run_id: snapshot.run_id, ...entry }))
         break
       }
 
@@ -1520,24 +1723,38 @@ export function useAgentChat() {
         isTyping.value = false
         isThinking.value = false
         scanStatus.value = 'error'
+        scanActive.value = false
+        waitingForChoice.value = false
+        pendingScanConfirm.value = null
+        showScanConfirm.value = false
         addErrorBlock(`工作流错误: ${data.payload?.error || '未知错误'}`, {
           source: 'backend',
           category: data.payload?.code || 'WORKFLOW_ERROR',
           suggestion: data.payload?.suggestion || '请刷新页面重试',
           details: JSON.stringify(data.payload, null, 2)
         })
+        if (conversationState.currentId) {
+          updateConversationStatus(conversationState.currentId, 'failed')
+        }
         break
 
       case 'workflow_timeout':
         isTyping.value = false
         isThinking.value = false
         scanStatus.value = 'idle'
+        scanActive.value = false
+        waitingForChoice.value = false
+        pendingScanConfirm.value = null
+        showScanConfirm.value = false
         addErrorBlock(`工作流超时: ${data.payload?.message || '已超过30分钟未响应，自动结束'}`, {
           source: 'backend',
           category: 'WORKFLOW_TIMEOUT',
           suggestion: '请重新发起扫描',
           details: `超时时间: ${data.payload?.elapsed_seconds || 'N/A'}秒`
         })
+        if (conversationState.currentId) {
+          updateConversationStatus(conversationState.currentId, 'failed')
+        }
         break
 
       case 'tool_execution_proceed':
@@ -1596,23 +1813,25 @@ export function useAgentChat() {
   }
 
   watch(
-    [
-      workspaceBlocks,
-      scanActive,
-      waitingForChoice,
-      pendingScanConfirm,
-      showScanConfirm,
-      scanProgress,
-      scanStatus,
-      () => globalState.currentTarget
-    ],
+    [workspaceBlocks, inputText],
     scheduleConsolePersist,
     { deep: true }
   )
 
   onMounted(() => {
+    // 初始化会话列表
+    loadConversationIndex()
+    if (conversationState.conversations.length === 0) {
+      createNewConversation()
+    } else if (conversationState.currentId) {
+      // 恢复当前会话的 workspaceBlocks
+      restoreConsoleState(conversationState.currentId)
+    }
+    // scanActive 初始为 false，等待 WebSocket connected → get_status 响应决定
+    scanActive.value = false
+
     ws.on('*', handleWSMessage)
-    
+
     ws.onConnect(() => {
       addLog({ level: 'INFO', message: 'WebSocket 连接成功', timestamp: new Date().toISOString() })
     })
@@ -1634,9 +1853,10 @@ export function useAgentChat() {
   })
 
   onUnmounted(() => {
+    // 组件卸载时立即保存当前会话（页面切换/组件销毁场景）
+    persistConsoleState()
     ws.off('*', handleWSMessage)
     if (persistTimer) clearTimeout(persistTimer)
-    persistConsoleState()
   })
 
   return {
@@ -1668,6 +1888,10 @@ export function useAgentChat() {
     validateScriptFile,
     handleScriptFileSelect,
     loadScriptHistory,
-    saveScriptHistory
+    saveScriptHistory,
+    handleNewConversation,
+    handleSwitchConversation,
+    handleDeleteConversation,
+    handleRenameConversation,
   }
 }

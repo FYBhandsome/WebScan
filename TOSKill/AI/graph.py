@@ -2358,7 +2358,7 @@ async def ai_decision(state: ScanState) -> ScanState:
                         "rag_enabled": True,
                         "rag_reference": rag_strategy,
                         "react_selected": is_react_selected,
-                        "react_thought": react_decision.get("thought", "")[:100] if react_decision else ""
+                        "react_thought": react_decision.get("thought", "") if react_decision else ""
                     }
                 })
             except Exception as e:
@@ -3067,14 +3067,36 @@ async def report_generation(state: ScanState) -> ScanState:
             report_content=report,
         )
         logger.info(f"HTML分析数据已生成: 风险等级={ai_analysis.get('risk_assessment', {}).get('overall_risk', 'unknown')}")
-        
+
+        # AI等保评估置信度（独立try/except，失败不中断报告生成）
+        confidence = None
+        try:
+            scan_mode = state.get("scan_mode", "人机交互")
+            logger.info(f"[置信度诊断] 开始评估: vulns={len(vulnerabilities)}, tools={len(tool_results)}, mode={scan_mode}")
+            if vulnerabilities:
+                logger.info(f"[置信度诊断] 首个漏洞: {vulnerabilities[0]}")
+            confidence = await report_manager.generate_confidence_async(
+                vulnerabilities=vulnerabilities,
+                tool_results=tool_results,
+                target=target,
+                scan_mode=scan_mode
+            )
+            if confidence:
+                logger.info(f"置信度评估完成: {confidence.get('overall_score', 0):.0f}% ({confidence.get('level', 'info')})")
+            else:
+                logger.info("置信度评估未生成数据，报告将显示占位")
+        except Exception as e:
+            logger.warning(f"置信度评估失败，降级为占位: {e}")
+            confidence = None
+
         html_report_info = report_manager.save_html_report(
             session_id=session_id,
             target=target,
             scan_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             vulnerabilities=vulnerabilities,
             tool_results=tool_results,
-            ai_analysis=ai_analysis
+            ai_analysis=ai_analysis,
+            confidence=confidence
         )
         
         html_download_url = html_report_info.get("download_url", "")

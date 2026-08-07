@@ -11,10 +11,12 @@ import threading
 import functools
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+from datetime import datetime
 
-# 移除离线模式，允许首次从HuggingFace下载模型
-# os.environ.setdefault("HF_HUB_OFFLINE", "1")
-# os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+# 启用离线模式：网络无法访问 huggingface.co 时避免 4 分钟重试刷屏
+# 模型未缓存时 RAG 降级到关键词检索，不影响扫描主流程
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from llama_index.core import (
     VectorStoreIndex,
@@ -72,6 +74,31 @@ SCENARIO_KEYWORDS = {
     "waf_bypass": ["WAF绕过", "防火墙绕过", "编码绕过"],
     "error_handle": ["错误处理", "异常恢复", "失败重试"],
     "high_risk": ["高危漏洞", "严重漏洞", "紧急处理"],
+}
+
+MLPS_VULN_MAPPING = {
+    "sqli": ["SQL注入", "8.1.3.2", "访问控制", "数据库安全", "注入防护"],
+    "xss": ["XSS", "8.1.3.3", "安全审计", "跨站脚本", "输入过滤"],
+    "rce": ["命令注入", "8.1.3.1", "身份鉴别", "远程代码执行", "权限控制"],
+    "fileupload": ["文件上传", "8.1.3.2", "访问控制", "WebShell", "文件类型校验"],
+    "ssrf": ["SSRF", "8.1.1.2", "通信传输", "服务端请求", "内网隔离"],
+    "weakpass": ["弱口令", "8.1.3.1", "身份鉴别", "密码策略", "暴力破解防护"],
+    "lfi": ["文件包含", "8.1.3.2", "访问控制", "路径穿越", "文件读取"],
+    "csrf": ["CSRF", "8.1.3.2", "访问控制", "跨站请求", "Token验证"],
+    "info_leak": ["信息泄露", "8.1.3.3", "安全审计", "敏感信息", "错误处理"],
+    "infoleak": ["信息泄露", "8.1.3.3", "安全审计", "敏感信息", "错误处理"],
+    "auth_bypass": ["认证绕过", "8.1.3.1", "身份鉴别", "未授权访问", "权限控制"],
+}
+
+MLPS_SCENARIO_KEYWORDS = {
+    "confidence_assessment": [
+        "等保2.0", "置信度评估", "风险等级判定", "合规性评估",
+        "控制项映射", "评估依据", "置信度评判规则",
+    ],
+    "compliance_check": [
+        "等保三级", "符合度", "安全计算环境", "安全区域边界",
+        "安全通信网络", "安全管理中心",
+    ],
 }
 
 
@@ -225,6 +252,8 @@ class TOSKillRAGEngine:
             "embed_model": settings.RAG_EMBED_MODEL,
             "knowledge_fingerprint": self._knowledge_fingerprint(),
             "document_count": self._document_count,
+            "version": f"v2.{self._document_count}.{datetime.now().strftime('%Y%m%d')}",
+            "indexed_at": datetime.now().isoformat(),
         }
         _MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -472,6 +501,161 @@ class TOSKillRAGEngine:
         matches.sort(key=lambda item: item[0], reverse=True)
         parts = [f"[知识{i + 1}] 来源:{name}\n{content[:600]}" for i, (_, name, content) in enumerate(matches[:3])]
         return "【关键词知识库检索结果】\n\n" + "\n\n---\n\n".join(parts)
+
+    # ==================== 等保评估检索 ====================
+
+    def retrieve_mlps_context(
+        self,
+        target: str,
+        vulnerabilities: List[Dict[str, Any]],
+        tool_results: Dict[str, Any]
+    ) -> str:
+        """检索等保评估上下文（标准条款+漏洞映射+历史案例）
+
+        供置信度评估器调用，返回等保2.0标准条款、漏洞→控制项映射、
+        历史评估案例等知识库内容。
+
+        Args:
+            target: 扫描目标URL
+            vulnerabilities: 漏洞列表
+            tool_results: 工具执行结果
+
+        Returns:
+            str: 检索到的等保知识上下文
+        """
+        if not self.retriever:
+            if settings.RAG_KEYWORD_FALLBACK:
+                logger.warning("RAG未就绪，使用关键词降级检索等保上下文")
+                return self._retrieve_mlps_keyword_fallback(vulnerabilities)
+            logger.warning("RAG检索器未初始化，返回空结果")
+            return ""
+
+        self._total_queries += 1
+
+        query = self._build_mlps_query(vulnerabilities, tool_results)
+        cache_key = hashlib.md5(("mlps:" + query).encode()).hexdigest()
+        if cache_key in self._query_cache:
+            self._cache_hits += 1
+            logger.debug(f"MLPS RAG缓存命中: {cache_key[:8]}")
+            return self._query_cache[cache_key]
+
+        try:
+            nodes: List[NodeWithScore] = self.retriever.retrieve(query)
+            if not nodes:
+                logger.warning(f"MLPS RAG检索无结果: query='{query[:50]}...'")
+                return ""
+
+            parts = []
+            sources = []
+            for i, node in enumerate(nodes[:5]):
+                score = getattr(node, 'score', 0) or 0
+                metadata = node.node.metadata if hasattr(node, 'node') else {}
+                fname = metadata.get("file_name", "unknown")
+                sources.append(fname)
+
+                text = node.node.text if hasattr(node, 'node') else str(node)
+
+                if score > 0.7:
+                    text_content = text[:1200]
+                elif score > 0.5:
+                    text_content = text[:800]
+                else:
+                    text_content = text[:400]
+
+                parts.append(f"[知识{i+1}] 来源:{fname} 相关度:{score:.3f}\n{text_content}")
+
+            result = "\n\n---\n\n".join(parts)
+
+            # MLPS上下文限制3000字符（区别于扫描策略的1500-2000）
+            if len(result) > 3000:
+                result = result[:3000] + "\n\n...[内容已截断]"
+
+            if len(self._query_cache) < 200:
+                self._query_cache[cache_key] = result
+
+            logger.info(f"MLPS RAG检索成功: query='{query[:50]}...' sources={sources}")
+            return result
+
+        except Exception as e:
+            logger.error(f"MLPS RAG检索失败: {e}")
+            return ""
+
+    def _build_mlps_query(
+        self,
+        vulnerabilities: List[Dict[str, Any]],
+        tool_results: Dict[str, Any]
+    ) -> str:
+        """构建等保评估检索查询"""
+        query_parts = []
+        query_parts.extend(MLPS_SCENARIO_KEYWORDS["confidence_assessment"])
+        query_parts.extend(MLPS_SCENARIO_KEYWORDS["compliance_check"])
+
+        for v in vulnerabilities[:5]:
+            vtype = str(v.get("type") or v.get("vuln_type", "")).lower()
+            if vtype in MLPS_VULN_MAPPING:
+                query_parts.extend(MLPS_VULN_MAPPING[vtype])
+
+        tool_count = len(tool_results)
+        if tool_count >= 8:
+            query_parts.append("多工具交叉验证 置信度高 全覆盖")
+        elif tool_count >= 5:
+            query_parts.append("多工具检测 交叉验证 置信度")
+        elif tool_count <= 2:
+            query_parts.append("单工具检测 置信度评估 误报风险 覆盖度不足")
+
+        if not query_parts:
+            query_parts = ["等保2.0三级标准 置信度评估 风险等级判定 合规性评估"]
+
+        return " ".join(query_parts)
+
+    def _retrieve_mlps_keyword_fallback(
+        self,
+        vulnerabilities: List[Dict[str, Any]]
+    ) -> str:
+        """RAG不可用时的等保上下文关键词降级检索"""
+        query = " ".join(MLPS_SCENARIO_KEYWORDS["confidence_assessment"])
+        keywords = [word.lower() for word in query.split() if len(word) > 1]
+
+        for v in vulnerabilities[:3]:
+            vtype = str(v.get("type") or v.get("vuln_type", "")).lower()
+            if vtype in MLPS_VULN_MAPPING:
+                keywords.extend(k.lower() for k in MLPS_VULN_MAPPING[vtype])
+
+        matches = []
+        for md_file in _KNOWLEDGE_DIR.glob("*.md"):
+            try:
+                content = md_file.read_text(encoding="utf-8")
+                lowered = content.lower()
+                score = sum(lowered.count(keyword) for keyword in keywords)
+                if score:
+                    matches.append((score, md_file.name, content))
+            except Exception as e:
+                logger.warning(f"MLPS关键词检索读取失败 {md_file}: {e}")
+
+        if not matches:
+            return ""
+
+        matches.sort(key=lambda item: item[0], reverse=True)
+        parts = [
+            f"[知识{i+1}] 来源:{name}\n{content[:800]}"
+            for i, (_, name, content) in enumerate(matches[:3])
+        ]
+        return "【MLPS关键词知识库检索结果】\n\n" + "\n\n---\n\n".join(parts)
+
+    def get_kb_version(self) -> str:
+        """获取知识库版本号"""
+        try:
+            if _MANIFEST_PATH.exists():
+                with open(_MANIFEST_PATH, 'r', encoding='utf-8') as f:
+                    manifest = json.load(f)
+                version = manifest.get("version", "")
+                if version:
+                    return version
+                doc_count = manifest.get("document_count", 0)
+                return f"v2.{doc_count}"
+        except Exception as e:
+            logger.debug(f"读取知识库版本失败: {e}")
+        return ""
 
     def rebuild_index(self) -> bool:
         """重建向量索引（知识库更新后调用）"""

@@ -79,6 +79,32 @@
       </div>
 
       <div class="settings-card">
+        <div class="card-header">
+          <Database :size="20" class="card-icon" />
+          <span class="card-title">数据管理</span>
+        </div>
+        <div class="card-body">
+          <div class="field-row data-info-row">
+            <div class="data-info-item">
+              <span class="data-info-label">记忆数据占用</span>
+              <span class="data-info-value">{{ storageUsage.label }}</span>
+            </div>
+            <div class="data-info-item">
+              <span class="data-info-label">会话数量</span>
+              <span class="data-info-value">{{ conversationState.conversations.length }} / 20</span>
+            </div>
+          </div>
+          <p class="data-hint">记忆数据包括：会话记录、扫描状态、界面偏好（不含服务器配置与脚本历史）。超过 24 小时的数据将自动清理。</p>
+          <div class="card-footer-actions">
+            <button class="btn-clear-memory" @click="confirmClearMemory">
+              <Trash2 :size="14" />
+              清除所有记忆数据
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-card">
         <div class="card-body card-body--action">
           <button class="btn-save" @click="save">
             <Save :size="16" />
@@ -91,11 +117,11 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
-import { Server, Globe, Radio, Clock, Save, Wifi, Loader } from 'lucide-vue-next'
+import { reactive, ref, onMounted } from 'vue'
+import { Server, Globe, Radio, Clock, Save, Wifi, Loader, Database, Trash2 } from 'lucide-vue-next'
 import { API } from '../../services/api.js'
 import { ws } from '../../services/websocket.js'
-import { showToast } from '../../store.js'
+import { showToast, showModal, conversationState, clearAllMemoryData, getStorageUsage } from '../../store.js'
 
 const STORAGE_KEY = 'toskill_settings'
 
@@ -123,6 +149,15 @@ if (saved) {
 
 const connState = ref('idle')
 const connMessage = ref('')
+const storageUsage = ref({ bytes: 0, label: '0 B' })
+
+const refreshStorageUsage = () => {
+  storageUsage.value = getStorageUsage()
+}
+
+onMounted(() => {
+  refreshStorageUsage()
+})
 
 const save = () => {
   API.setBaseUrl(settings.apiUrl)
@@ -155,6 +190,21 @@ const testConn = async () => {
     connState.value = 'error'
     connMessage.value = error.message || '无法连接到服务器'
   }
+}
+
+const confirmClearMemory = () => {
+  showModal(
+    '清除所有记忆数据',
+    '此操作将清除所有会话记录、扫描状态与界面偏好数据，<strong>不可撤销</strong>。<br><br>清除后页面将自动刷新，应用回到初始状态。<br><br>是否继续？',
+    () => {
+      clearAllMemoryData()
+      showToast('已清除所有记忆数据', 'success')
+      // 延迟刷新，让 toast 显示
+      setTimeout(() => {
+        location.reload()
+      }, 500)
+    }
+  )
 }
 </script>
 
@@ -431,6 +481,65 @@ const testConn = async () => {
 
 .btn-save:active {
   transform: scale(0.98);
+}
+
+/* 数据管理卡片样式 */
+.data-info-row {
+  flex-wrap: wrap;
+  gap: 24px;
+  margin-bottom: 12px;
+}
+
+.data-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.data-info-label {
+  font-size: 12px;
+  color: #888888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.data-info-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #000000;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-hint {
+  margin: 0 0 16px;
+  font-size: 12px;
+  color: #A1A1AA;
+  line-height: 1.6;
+  text-align: left;
+}
+
+.btn-clear-memory {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  color: #FF3B30;
+  background: transparent;
+  border: 1px solid #FF3B30;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-clear-memory:hover {
+  background: #FEF2F2;
+}
+
+.btn-clear-memory:active {
+  transform: scale(0.97);
 }
 
 @media (max-width: 768px) {

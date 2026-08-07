@@ -113,10 +113,11 @@ class ReportManager:
         scan_time: str,
         vulnerabilities: List[Dict[str, Any]],
         tool_results: Dict[str, Any],
-        ai_analysis: Optional[Dict[str, Any]] = None
+        ai_analysis: Optional[Dict[str, Any]] = None,
+        confidence: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """生成并保存HTML报告
-        
+
         Args:
             session_id: 会话ID
             target: 扫描目标URL
@@ -124,14 +125,15 @@ class ReportManager:
             vulnerabilities: 漏洞列表
             tool_results: 工具执行结果
             ai_analysis: AI分析结果（可选）
-            
+            confidence: AI等保评估置信度数据（可选，dict格式）
+
         Returns:
             包含报告信息的字典
         """
         from TOSKill.tools.report.html_report_generator import get_html_report_generator
-        
+
         self._ensure_dirs()
-        
+
         generator = get_html_report_generator()
         html_content = generator.generate_report(
             target=target,
@@ -139,6 +141,7 @@ class ReportManager:
             vulnerabilities=vulnerabilities,
             tool_results=tool_results,
             ai_analysis=ai_analysis,
+            confidence=confidence,
             session_id=session_id
         )
         
@@ -173,7 +176,41 @@ class ReportManager:
         self._save_mapping()
         
         return report_info
-    
+
+    async def generate_confidence_async(
+        self,
+        vulnerabilities: List[Dict[str, Any]],
+        tool_results: Dict[str, Any],
+        target: str,
+        scan_mode: str = "人机交互"
+    ) -> Optional[Dict[str, Any]]:
+        """生成AI等保评估置信度（异步）
+
+        调用ConfidenceAssessor进行RAG检索+LLM评估，返回dict格式数据。
+        失败时返回None，不影响主报告生成。
+
+        Args:
+            vulnerabilities: 漏洞列表
+            tool_results: 工具执行结果
+            target: 扫描目标URL
+            scan_mode: 扫描模式（人机交互/全自动/单工具）
+
+        Returns:
+            dict: 置信度数据，失败时返回None
+        """
+        try:
+            from TOSKill.tools.report.confidence_assessor import get_confidence_assessor
+            assessor = get_confidence_assessor()
+            return await assessor.assess_async(
+                vulnerabilities=vulnerabilities,
+                tool_results=tool_results,
+                target=target,
+                scan_mode=scan_mode
+            )
+        except Exception as e:
+            logger.error(f"置信度评估失败: {e}")
+            return None
+
     def save_report(
         self,
         session_id: str,

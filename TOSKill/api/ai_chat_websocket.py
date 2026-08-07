@@ -47,6 +47,10 @@ class AIChatManager:
         self._event_sequences: Dict[str, int] = {}
         self._run_events: Dict[str, List[Dict]] = {}
         self._disconnect_cleanup: Dict[str, asyncio.Task] = {}
+        # 多会话订阅：client_id -> {session_id1, session_id2, ...}
+        self._subscriptions: Dict[str, set] = {}
+        # WebSocket -> client_id 映射
+        self._ws_to_client: Dict[WebSocket, str] = {}
     
     def _get_llm(self):
         if not self.llm:
@@ -56,9 +60,13 @@ class AIChatManager:
     async def connect(self, websocket: WebSocket, session_id: str = None) -> str:
         await websocket.accept()
         session_id = session_id or str(uuid4())[:8]
+        client_id = str(uuid4())[:8]
+        self._ws_to_client[websocket] = client_id
         existing_state = memory_store.get_session(session_id)
         resumed = existing_state is not None
         self.connections[session_id] = websocket
+        # 初始化该连接的订阅集合，默认订阅自身会话
+        self._subscriptions[client_id] = {session_id}
         cleanup_task = self._disconnect_cleanup.pop(session_id, None)
         if cleanup_task and not cleanup_task.done():
             cleanup_task.cancel()
@@ -90,6 +98,11 @@ class AIChatManager:
         if websocket is not None and self.connections.get(session_id) is not websocket:
             return
         self.connections.pop(session_id, None)
+        # 清理订阅映射
+        if websocket is not None:
+            client_id = self._ws_to_client.pop(websocket, None)
+            if client_id:
+                self._subscriptions.pop(client_id, None)
         running_task = self.tasks.get(session_id)
         if running_task and not running_task.done():
             cleanup = asyncio.create_task(self._cancel_disconnected_task(session_id, 60))
@@ -179,6 +192,25 @@ class AIChatManager:
                 await ws.send_json(message)
             except Exception as e:
                 logger.error(f"发送消息失败: {e}")
+
+    async def _send_multi(self, session_id: str, message: Dict):
+        """向所有订阅了 session_id 的连接发送消息（用于后台任务事件广播）"""
+        message = self._decorate_run_event(session_id, message)
+        # 在消息 payload 中注入 session_id，供前端路由
+        payload = dict(message.get("payload") or {})
+        if "session_id" not in payload:
+            payload["session_id"] = session_id
+            message["payload"] = payload
+        for client_id, sessions in self._subscriptions.items():
+            if session_id in sessions:
+                # 找到 client_id 对应的 WebSocket
+                for ws_conn, cid in self._ws_to_client.items():
+                    if cid == client_id:
+                        try:
+                            await ws_conn.send_json(message)
+                        except Exception as e:
+                            logger.error(f"广播消息失败: {e}")
+                        break
     
     async def _send_error(self, session_id: str, error: str, error_code: str = None, **extra):
         if error_code:
@@ -222,6 +254,7 @@ class AIChatManager:
             "user_confirm": self._handle_user_confirm,
             "user_choice": self._handle_user_confirm,
             "start_scan": self._handle_start_scan,
+            "stop_scan": self._handle_stop_scan,
             "get_history": self._handle_get_history,
             "get_status": self._handle_get_status,
             "chat": self._handle_chat,
@@ -230,6 +263,8 @@ class AIChatManager:
             "script_description": self._handle_script_description,
             "input_response": self._handle_input_response,
             "subscribe": self._handle_subscribe,
+            "subscribe_multi": self._handle_subscribe_multi,
+            "unsubscribe": self._handle_unsubscribe,
             "high_risk_confirm": self._handle_high_risk_confirm,
             "tool_confirmed": self._handle_tool_confirmed,
             "tool_rejected": self._handle_tool_rejected,
@@ -346,7 +381,7 @@ class AIChatManager:
         
         async def _ws_callback(message: Dict):
             logger.debug(f"[{session_id}] WebSocket 回调消息: {message.get('type', 'unknown')}")
-            await self._send(session_id, message)
+            await self._send_multi(session_id, message)
         
         orchestrator.set_websocket_callback(session_id, _ws_callback)
         logger.info(f"[{session_id}] WebSocket 回调已设置")
@@ -665,6 +700,66 @@ class AIChatManager:
             })
             logger.info(f"[{session_id}] 输入响应: {field}={value}")
     
+    async def _handle_stop_scan(self, session_id: str, payload: Dict):
+        """停止指定会话的扫描任务"""
+        task = self.tasks.get(session_id)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+        self.tasks.pop(session_id, None)
+
+        # 清理 orchestrator 中的运行任务
+        orchestrator = get_agent_orchestrator()
+        running_task = getattr(orchestrator, '_running_tasks', {}).pop(session_id, None)
+        if running_task and not running_task.done():
+            running_task.cancel()
+
+        # 更新 memory_store 状态
+        state = memory_store.get_session(session_id)
+        if state:
+            state["is_complete"] = True
+            state["cancelled"] = True
+            memory_store.save_session(session_id, state)
+
+        await self._send_multi(session_id, {
+            "type": "scan_cancelled",
+            "payload": {"session_id": session_id, "reason": "用户手动停止"}
+        })
+        logger.info(f"[{session_id}] 扫描已停止")
+
+    async def _handle_subscribe_multi(self, session_id: str, payload: Dict):
+        """订阅多个会话（不取消旧订阅）"""
+        ws_conn = self.connections.get(session_id)
+        if not ws_conn:
+            return
+        client_id = self._ws_to_client.get(ws_conn)
+        if not client_id:
+            return
+        target_sessions = payload.get("session_ids", [])
+        for sid in target_sessions:
+            self._subscriptions.setdefault(client_id, set()).add(sid)
+            # 如果该会话有运行中的任务，发送快照
+            state = memory_store.get_session(sid)
+            if state and state.get("target"):
+                await self._send_run_snapshot(sid, state)
+        logger.info(f"[{session_id}] 多会话订阅: {target_sessions}")
+
+    async def _handle_unsubscribe(self, session_id: str, payload: Dict):
+        """取消订阅某个会话"""
+        ws_conn = self.connections.get(session_id)
+        if not ws_conn:
+            return
+        client_id = self._ws_to_client.get(ws_conn)
+        if not client_id:
+            return
+        target_sid = payload.get("session_id")
+        if target_sid and target_sid != session_id:
+            self._subscriptions.get(client_id, set()).discard(target_sid)
+            logger.info(f"[{session_id}] 取消订阅: {target_sid}")
+
     async def _handle_subscribe(self, session_id: str, payload: Dict):
         subscribe_id = payload.get("session_id", "")
         if not subscribe_id:

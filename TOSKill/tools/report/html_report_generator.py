@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 
 from backend.services.report_service import (
     AIAnalysisData,
+    ConfidenceData,
+    ConfidenceDimension,
     ReportData,
     ReportService,
     ReportSummary,
@@ -59,18 +61,20 @@ class HTMLReportGenerator:
         vulnerabilities: List[Dict[str, Any]],
         tool_results: Dict[str, Any],
         ai_analysis: Optional[Dict[str, Any]] = None,
+        confidence: Optional[Dict[str, Any]] = None,
         session_id: str = ""
     ) -> str:
         """生成HTML报告
-        
+
         Args:
             target: 扫描目标URL
             scan_time: 扫描时间
             vulnerabilities: 漏洞列表
             tool_results: 工具执行结果
             ai_analysis: AI分析结果（可选）
+            confidence: AI等保评估置信度数据（可选，dict格式）
             session_id: 会话ID
-            
+
         Returns:
             str: HTML报告内容
         """
@@ -110,6 +114,7 @@ class HTMLReportGenerator:
             normalized_vulnerabilities.append(normalized)
 
         converted_ai = self._convert_ai_analysis(ai_analysis) if ai_analysis else None
+        converted_confidence = self._convert_confidence(confidence) if confidence else None
         summary = ReportSummary(
             total_vulnerabilities=len(normalized_vulnerabilities),
             critical_count=severity_count["critical"],
@@ -138,6 +143,7 @@ class HTMLReportGenerator:
             ),
             vulnerabilities=normalized_vulnerabilities,
             ai_analysis=converted_ai,
+            confidence=converted_confidence,
             tool_results=tool_results or {},
         )
 
@@ -185,7 +191,60 @@ class HTMLReportGenerator:
             priorities=priorities,
             recommendations=hardening_items[:10],
         )
-    
+
+    @staticmethod
+    def _convert_confidence(confidence: Dict[str, Any]) -> ConfidenceData:
+        """将置信度dict转为ConfidenceData dataclass
+
+        【修正Bug#6】所有字段使用.get()容错读取，防止LLM返回部分字段缺失时崩溃
+        """
+        raw_dims = confidence.get("dimensions", []) or []
+        dimensions = []
+        for dim in raw_dims[:4]:
+            if isinstance(dim, dict):
+                try:
+                    value = float(dim.get("value", 0))
+                except (TypeError, ValueError):
+                    value = 0.0
+                dimensions.append(ConfidenceDimension(
+                    label=str(dim.get("label", "")),
+                    value=max(0.0, min(100.0, value))
+                ))
+
+        try:
+            overall = float(confidence.get("overall_score", 0))
+        except (TypeError, ValueError):
+            overall = 0.0
+
+        try:
+            compliance = float(confidence.get("compliance_estimate", 0))
+        except (TypeError, ValueError):
+            compliance = 0.0
+
+        level = str(confidence.get("level", "")).lower()
+        if level not in ("high", "mid", "low", "info"):
+            if overall >= 80:
+                level = "high"
+            elif overall >= 60:
+                level = "mid"
+            elif overall > 0:
+                level = "low"
+            else:
+                level = "info"
+
+        return ConfidenceData(
+            overall_score=max(0.0, min(100.0, overall)),
+            level=level,
+            standard_text=str(confidence.get("standard_text", "基于等保2.0（GB/T 22239-2019）三级标准")),
+            kb_version=str(confidence.get("kb_version", "")),
+            dimensions=dimensions,
+            compliance_estimate=max(0.0, min(100.0, compliance)),
+            compliance_margin=str(confidence.get("compliance_margin", "")),
+            kb_refs=str(confidence.get("kb_refs", "")),
+            scan_mode=str(confidence.get("scan_mode", "")),
+            note=str(confidence.get("note", "")),
+        )
+
     def _calculate_risk_score(self, severity_count: Dict[str, int]) -> int:
         """计算风险评分"""
         score = 0

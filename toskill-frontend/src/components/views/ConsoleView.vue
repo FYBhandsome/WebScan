@@ -1,17 +1,41 @@
 <template>
   <div class="page active" @click="onPageClick">
     <div class="agent-workspace-layout">
-      
+      <!-- 对话列 -->
+      <ConversationSidebar
+        v-show="convSidebarVisible"
+        :conversations="conversationState.conversations"
+        :current-id="conversationState.currentId"
+        :scan-active="scanActive"
+        @new-conversation="handleNewConversation"
+        @switch-conversation="handleSwitchConversation"
+        @delete-conversation="handleDeleteConversation"
+        @rename-conversation="handleRenameConversation"
+        @collapse="convSidebarVisible = false"
+      />
+
+      <!-- 收起时的展开按钮 -->
+      <button
+        v-if="!convSidebarVisible"
+        class="conv-expand-btn"
+        @click.stop="convSidebarVisible = true"
+        title="打开对话列表"
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+      </button>
+
       <div class="main-console">
-        <ChatArea 
-          :blocks="workspaceBlocks" 
+        <ChatArea
+          :blocks="workspaceBlocks"
           :is-typing="isTyping"
           :current-thinking="currentThinking"
           :is-thinking="isThinking"
           @action="handleBlockAction"
           @submit-input="handleInputResponse"
         />
-        <CommandInput 
+        <CommandInput
           v-show="!inputCollapsed"
           v-model="inputText"
           :disabled="isTyping && !waitingForChoice"
@@ -22,13 +46,13 @@
         />
       </div>
 
-      <HistoryRail 
+      <HistoryRail
         class="floating-rail"
         :style="{ bottom: inputCollapsed ? '60px' : '90px' }"
-        :blocks="workspaceBlocks" 
+        :blocks="workspaceBlocks"
         @navigate="handleHistoryNavigate"
       />
-      
+
     </div>
 
     <button
@@ -46,13 +70,42 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useAgentChat } from '../../composables/useAgentChat.js'
+import { conversationState } from '../../store.js'
 import ChatArea from '../../components/AgentWorkspace/ChatArea.vue'
 import CommandInput from '../../components/AgentWorkspace/CommandInput.vue'
 import HistoryRail from '../../components/AgentWorkspace/HistoryRail.vue'
+import ConversationSidebar from '../../components/AgentWorkspace/ConversationSidebar.vue'
 
-const inputCollapsed = ref(false)
+// UI 偏好：从 localStorage 恢复
+const UI_PREFS_KEY = 'toskill_ui_prefs'
+const loadUiPrefs = () => {
+  try {
+    const raw = localStorage.getItem(UI_PREFS_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch (e) { /* ignore */ }
+  return {}
+}
+const _initialPrefs = loadUiPrefs()
+
+const inputCollapsed = ref(_initialPrefs.inputCollapsed === true)
+const convSidebarVisible = ref(_initialPrefs.convSidebarVisible !== false)
+
+// UI 偏好变化时持久化
+let _uiPrefsTimer = null
+watch([convSidebarVisible, inputCollapsed], () => {
+  if (_uiPrefsTimer) clearTimeout(_uiPrefsTimer)
+  _uiPrefsTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(UI_PREFS_KEY, JSON.stringify({
+        convSidebarVisible: convSidebarVisible.value,
+        inputCollapsed: inputCollapsed.value,
+        savedAt: new Date().toISOString()
+      }))
+    } catch (e) { /* ignore */ }
+  }, 300)
+})
 
 const onPageClick = () => {
   if (!inputCollapsed.value) {
@@ -82,6 +135,10 @@ const {
   handleInputResponse,
   scanActive,
   handleStop,
+  handleNewConversation,
+  handleSwitchConversation,
+  handleDeleteConversation,
+  handleRenameConversation,
 } = useAgentChat()
 </script>
 
@@ -99,8 +156,6 @@ const {
   flex-direction: row;
   flex: 1;
   overflow: hidden;
-  max-width: 1200px; 
-  margin: 0 auto;
   width: 100%;
 }
 
@@ -120,6 +175,25 @@ const {
   bottom: 90px;
   z-index: 50;
 }
+
+.conv-expand-btn {
+  position: absolute;
+  left: 0;
+  top: 12px;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #E4E4E7;
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: #52525B;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.conv-expand-btn:hover { border-color: #10B981; color: #10B981; }
 
 .expand-fixed-btn {
   position: fixed;

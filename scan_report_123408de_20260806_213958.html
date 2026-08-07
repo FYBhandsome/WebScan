@@ -1,0 +1,2663 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>http://testasp.vulnweb.com 安全扫描任务</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --gap-sm: 10px; --gap-md: 12px; --gap-lg: 24px; --gap-xl: 24px; --radius: 4px; --border: #e5e7eb; --primary: #165dff; --critical: #d93025; --high: #e67e22; --medium: #d4a017; --low: #165dff; --info: #888; --confidence-high: #165dff; --confidence-mid: #e67e22; --confidence-low: #d93025; }
+        body { background: #f7f8fa; padding: 32px; color: #222; line-height: 1.8; font-family: "Source Han Sans CN", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
+        .report-shell { width: min(1440px, 100%); margin: 0 auto; }
+        .card, .report-header, .appendix-card { background: #fff; border: 1px solid var(--border); border-radius: var(--radius); padding: var(--gap-lg); }
+        .report-header, .risk-overview, .confidence-module, .two-col-container, .fix-plan-container, .workflow-section, .ai-section { margin-bottom: var(--gap-xl); }
+        .header-top, .module-title { display: flex; align-items: center; gap: var(--gap-sm); font-weight: 700; }
+        .header-top { font-size: 22px; margin-bottom: var(--gap-sm); }
+        .header-subtitle { font: 13px "Source Han Serif CN", SimSun, serif; color: #666; margin-bottom: var(--gap-lg); }
+        .icon-svg { width: 20px; height: 20px; fill: var(--primary); flex: 0 0 20px; }
+        .meta-wrap { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--gap-md); }
+        .meta-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .meta-label { font-weight: 500; color: #444; }
+        .text-body, .text-tip { font-family: "Source Han Serif CN", SimSun, serif; color: #333; overflow-wrap: anywhere; }
+        .text-body { font-size: 14px; text-align: justify; }
+        .text-tip { font-size: 13px; color: #666; }
+        .module-title { font-size: 18px; padding-bottom: var(--gap-sm); border-bottom: 1px solid var(--border); margin-bottom: var(--gap-lg); }
+        .risk-head-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--gap-lg); margin-bottom: var(--gap-md); }
+        .risk-score-box { display: flex; align-items: baseline; gap: var(--gap-sm); }
+        .score-num { font-size: 24px; font-weight: 700; }
+        .score-desc { font-size: 14px; font-weight: 600; }
+        .risk-bar-group { display: flex; gap: var(--gap-md); flex: 1; min-width: 520px; }
+        .risk-bar-item { flex: 1; text-align: center; min-width: 72px; }
+        .bar-label { min-height: 24px; font-size: 12px; color: #666; }
+        .bar-outer { height: 6px; background: #eee; border-radius: 3px; overflow: hidden; }
+        .bar-inner { height: 100%; } .bar-critical { background: var(--critical); } .bar-high { background: var(--high); } .bar-medium { background: var(--medium); } .bar-low { background: var(--low); } .bar-info { background: var(--info); }
+        .bar-count { margin-top: 4px; font-size: 13px; font-weight: 600; }
+        .risk-desc-block p + p { margin-top: var(--gap-sm); }
+        .two-col-container { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--gap-lg); align-items: stretch; }
+        .right-col { display: flex; flex-direction: column; gap: var(--gap-lg); }
+        .right-col > .card { flex: 1; }
+        .vuln-list-wrap { display: flex; flex-direction: column; gap: var(--gap-md); }
+        .vuln-item { border: 1px solid var(--border); border-radius: var(--radius); padding: var(--gap-md); }
+        .vuln-item summary { cursor: pointer; list-style: none; }
+        .vuln-item summary::-webkit-details-marker { display: none; }
+        .vuln-title-row { display: flex; align-items: center; gap: var(--gap-sm); font-size: 15px; font-weight: 600; }
+        .risk-tag { flex: 0 0 auto; min-width: 46px; padding: 2px 8px; border-radius: 2px; color: #fff; text-align: center; font-size: 12px; }
+        .tag-critical { background: var(--critical); } .tag-high { background: var(--high); } .tag-medium { background: var(--medium); } .tag-low { background: var(--low); } .tag-info { background: var(--info); }
+        .vuln-tip-text { margin-top: 6px; font: 13px "Source Han Serif CN", SimSun, serif; color: #555; overflow-wrap: anywhere; }
+        .vuln-detail { margin-top: var(--gap-md); padding-top: var(--gap-md); border-top: 1px dashed var(--border); }
+        .vuln-detail p + p { margin-top: 6px; }
+        .list-uniform { list-style: none; }
+        .list-uniform li { display: flex; gap: var(--gap-sm); margin-bottom: var(--gap-sm); font: 14px "Source Han Serif CN", SimSun, serif; overflow-wrap: anywhere; }
+        .list-uniform li::before { content: "-"; color: #666; flex: 0 0 auto; }
+        .fix-three-col { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap-lg); }
+        .fix-block { padding: var(--gap-lg); border-radius: var(--radius); }
+        .fix-emergency { background: #fef2f2; } .fix-deadline { background: #fffbeb; } .fix-longterm { background: #f9fafb; }
+        .fix-block-title { margin-bottom: var(--gap-md); font-size: 15px; font-weight: 700; }
+        .ai-grid, .workflow-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--gap-md); }
+        .analysis-block, .workflow-stat { padding: var(--gap-md); background: #f9fafb; border: 1px solid var(--border); border-radius: var(--radius); }
+        .analysis-block h3 { margin-bottom: 8px; font-size: 15px; }
+        .workflow-stat { text-align: center; } .workflow-stat .value { font-size: 22px; font-weight: 700; color: var(--primary); } .workflow-stat .label { font-size: 12px; color: #666; }
+        .execution-timeline, .task-plans { margin-top: var(--gap-lg); }
+        .timeline-item, .plan-item { display: flex; gap: var(--gap-md); padding: var(--gap-md); margin-top: var(--gap-sm); background: #f9fafb; border-left: 3px solid var(--primary); }
+        .timeline-step, .plan-priority { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; background: var(--primary); color: #fff; font-size: 12px; font-weight: 700; }
+        .timeline-content, .plan-info { min-width: 0; flex: 1; } .timeline-title, .plan-name { font-weight: 600; } .timeline-meta, .timeline-duration { font-size: 12px; color: #666; }
+        .plan-status { align-self: center; padding: 2px 8px; border: 1px solid var(--border); font-size: 11px; }
+        .progress-bar { width: 100%; height: 6px; margin-top: var(--gap-md); background: #eee; overflow: hidden; } .progress-fill { height: 100%; background: var(--primary); }
+        .appendix-summary { display: flex; align-items: center; gap: var(--gap-sm); cursor: pointer; font-size: 14px; color: var(--primary); }
+        .appendix-content { margin-top: var(--gap-md); padding-top: var(--gap-md); border-top: 1px dashed var(--border); font: 13px "Source Han Serif CN", SimSun, serif; color: #555; }
+        .appendix-entry + .appendix-entry { margin-top: var(--gap-md); padding-top: var(--gap-md); border-top: 1px solid var(--border); }
+        pre { max-height: 360px; overflow: auto; margin-top: 8px; padding: 12px; background: #f7f8fa; border: 1px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; font: 12px Consolas, monospace; }
+        .empty-state { padding: 24px; color: #666; text-align: center; }
+        .footer { padding: 20px; color: #666; text-align: center; font-size: 12px; }
+        .confidence-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--gap-sm); margin-bottom: var(--gap-md); padding-bottom: var(--gap-sm); border-bottom: 1px solid var(--border); }
+        .confidence-header .standard-badge { font-size: 13px; background: #e8f0fe; color: var(--primary); padding: 2px 12px; border-radius: 12px; border: 1px solid rgba(22, 93, 255, 0.15); white-space: nowrap; font-weight: 500; }
+        .confidence-standard-text { font-size: 14px; color: #555; font-weight: 500; }
+        .confidence-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--gap-lg); margin-bottom: var(--gap-md); }
+        .confidence-score-wrap { display: flex; align-items: baseline; gap: var(--gap-sm); }
+        .confidence-number { font-size: 28px; font-weight: 700; color: var(--confidence-high); }
+        .confidence-number-label { font-size: 14px; color: #444; font-weight: 500; }
+        .confidence-level-badge { padding: 4px 14px; border-radius: 20px; font-size: 14px; font-weight: 600; letter-spacing: 0.3px; background: #e8f0fe; color: var(--confidence-high); border: 1px solid rgba(22, 93, 255, 0.2); white-space: nowrap; }
+        .confidence-level-badge.level-high { background: #e8f0fe; color: var(--confidence-high); border-color: rgba(22, 93, 255, 0.25); }
+        .confidence-level-badge.level-mid { background: #fef3e8; color: var(--confidence-mid); border-color: rgba(230, 126, 34, 0.25); }
+        .confidence-level-badge.level-low { background: #fde8e8; color: var(--confidence-low); border-color: rgba(217, 48, 37, 0.25); }
+        .confidence-level-badge.level-info { background: #f0f2f5; color: var(--info); border-color: var(--border); }
+        .confidence-details { display: flex; flex-direction: column; gap: var(--gap-md); margin-bottom: var(--gap-md); }
+        .confidence-item { display: flex; align-items: center; gap: var(--gap-sm); }
+        .confidence-item .item-label { font-size: 14px; color: #444; font-family: "Source Han Serif CN", SimSun, serif; min-width: 140px; flex-shrink: 0; }
+        .confidence-item .item-bar-track { flex: 1; height: 6px; background: #eee; border-radius: 3px; overflow: hidden; }
+        .confidence-item .item-bar-fill { height: 100%; border-radius: 3px; background: var(--confidence-high); transition: width 0.6s ease; }
+        .confidence-item .item-value { font-size: 14px; font-weight: 600; color: #222; min-width: 42px; text-align: right; font-family: "Source Han Sans CN", "Microsoft YaHei UI", sans-serif; }
+        .compliance-extra { display: flex; align-items: center; gap: var(--gap-lg); padding: var(--gap-sm) 0; margin-top: var(--gap-sm); border-top: 1px dashed var(--border); flex-wrap: wrap; }
+        .compliance-extra .extra-item { display: flex; align-items: baseline; gap: 6px; font-size: 14px; color: #444; font-family: "Source Han Serif CN", SimSun, serif; }
+        .compliance-extra .extra-item .extra-value { font-weight: 700; color: #222; }
+        .compliance-extra .extra-item .extra-tag { background: #f0f2f5; padding: 0 8px; border-radius: 4px; font-size: 12px; color: #666; }
+        .confidence-note { padding-top: var(--gap-md); border-top: 1px dashed var(--border); font-size: 13px; color: #666; font-family: "Source Han Serif CN", SimSun, serif; line-height: 1.7; }
+        .confidence-note strong { color: #222; }
+        .confidence-note .kb-ref { display: inline-block; background: #f0f4ff; padding: 0 6px; border-radius: 3px; font-size: 12px; color: var(--primary); border: 1px solid rgba(22, 93, 255, 0.1); }
+        .confidence-placeholder { padding: 24px; color: #888; text-align: center; font-size: 14px; font-family: "Source Han Serif CN", SimSun, serif; }
+        @media (max-width: 900px) { body { padding: 16px; } .two-col-container, .fix-three-col { grid-template-columns: 1fr; } .risk-bar-group { min-width: 100%; overflow-x: auto; } }
+        @media (max-width: 768px) { .confidence-summary { flex-direction: column; align-items: flex-start; } .confidence-item { flex-wrap: wrap; } .confidence-item .item-label { min-width: 100px; font-size: 13px; } .compliance-extra { flex-direction: column; align-items: flex-start; gap: var(--gap-sm); } .score-num { font-size: 20px; } .confidence-number { font-size: 24px; } }
+        @media (max-width: 560px) { body { padding: 10px; } .card, .report-header, .appendix-card { padding: 16px; } .meta-wrap { grid-template-columns: 1fr; } .risk-bar-group { display: grid; grid-template-columns: repeat(2, 1fr); } .confidence-item .item-label { min-width: 80px; } .confidence-level-badge { font-size: 12px; padding: 2px 10px; } .confidence-header .standard-badge { font-size: 11px; padding: 0 8px; } }
+        @media print { @page { size: A4; margin: 12mm; } body { padding: 0; background: #fff; } .report-shell { width: 100%; } .card, .report-header, .appendix-card { break-inside: avoid; } .confidence-module { break-inside: avoid; } details { display: block; } details > .appendix-content { display: block; } }
+        </style>
+</head>
+<body>
+    <main class="report-shell">
+        <header class="report-header">
+            <h1 class="header-top"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>安全分析研判报告</h1>
+            <div class="header-subtitle">标准化渗透扫描安全评估文书 | 安全合规专项检测</div>
+            <div class="meta-wrap">
+                <div class="meta-item"><span class="meta-label">报告编号：</span><span class="text-body">SEC-20260806-123408de</span></div>
+                <div class="meta-item"><span class="meta-label">任务名称：</span><span class="text-body">http://testasp.vulnweb.com 安全扫描任务</span></div>
+                <div class="meta-item"><span class="meta-label">扫描目标：</span><span class="text-body">http://testasp.vulnweb.com</span></div>
+                <div class="meta-item"><span class="meta-label">扫描执行时间：</span><span class="text-body">2026-08-06 21:39:57</span></div>
+                <div class="meta-item"><span class="meta-label">报告生成时间：</span><span class="text-body">2026-08-06 21:39:58</span></div>
+                <div class="meta-item"><span class="meta-label">漏洞总数量：</span><span class="text-body">3 项</span></div>
+                <div class="meta-item"><span class="meta-label">编制责任人：</span><span class="text-body">安全审计专员</span></div>
+            </div>
+        </header>
+
+        <section class="card risk-overview">
+            <h2 class="module-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>综合风险概览</h2>
+            <div class="risk-head-row">
+                <div class="risk-score-box"><span class="score-num" style="color:#e74c3c">75</span><span class="score-desc" style="color:#e74c3c">综合风险等级：高危 (HIGH)</span></div>
+                <div class="risk-bar-group"><div class="risk-bar-item"><div class="bar-label">严重漏洞</div><div class="bar-outer"><div class="bar-inner bar-critical" style="width:100.0%"></div></div><div class="bar-count">3</div></div><div class="risk-bar-item"><div class="bar-label">高危漏洞</div><div class="bar-outer"><div class="bar-inner bar-high" style="width:0.0%"></div></div><div class="bar-count">0</div></div><div class="risk-bar-item"><div class="bar-label">中危漏洞</div><div class="bar-outer"><div class="bar-inner bar-medium" style="width:0.0%"></div></div><div class="bar-count">0</div></div><div class="risk-bar-item"><div class="bar-label">低危漏洞</div><div class="bar-outer"><div class="bar-inner bar-low" style="width:0.0%"></div></div><div class="bar-count">0</div></div><div class="risk-bar-item"><div class="bar-label">信息类配置缺陷</div><div class="bar-outer"><div class="bar-inner bar-info" style="width:0.0%"></div></div><div class="bar-count">0</div></div></div>
+            </div>
+            <div class="risk-desc-block text-body"><p>本次资产扫描共检出 3 项安全风险，其中3项严重漏洞。当前最高优先级问题为“SQL注入漏洞(Union注入)”，建议优先完成验证与加固。</p></div>
+        </section>
+
+        <section class="card confidence-module"><h2 class="module-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.2-7.2c0 1.3-1.1 2.3-2.4 2.3H11c-.6 0-1-.4-1-1v-6c0-.6.4-1 1-1h1.8c1.3 0 2.4 1 2.4 2.3z"/></svg>AI等保评估置信度</h2><div class="confidence-header"><span class="confidence-standard-text">基于等保2.0三级标准</span><span class="standard-badge">知识库版本 v2.13</span></div><div class="confidence-summary"><div class="confidence-score-wrap"><span class="confidence-number">76%</span><span class="confidence-number-label">综合等保评估置信度</span></div><span class="confidence-level-badge level-high">高置信度</span></div><div class="confidence-details"><div class="confidence-item"><span class="item-label">漏洞检测准确性</span><div class="item-bar-track"><div class="item-bar-fill" style="width:85.0%;"></div></div><span class="item-value">85%</span></div><div class="confidence-item"><span class="item-label">等保控制项映射准确度</span><div class="item-bar-track"><div class="item-bar-fill" style="width:82.0%;"></div></div><span class="item-value">82%</span></div><div class="confidence-item"><span class="item-label">风险等级判定一致性</span><div class="item-bar-track"><div class="item-bar-fill" style="width:80.0%;"></div></div><span class="item-value">80%</span></div><div class="confidence-item"><span class="item-label">整改方案合规性</span><div class="item-bar-track"><div class="item-bar-fill" style="width:80.0%;"></div></div><span class="item-value">80%</span></div></div><div class="compliance-extra"><span class="extra-item"><span>📊 等保三级符合度预估：</span><span class="extra-value">72%</span><span class="extra-tag">±5%</span></span><span class="extra-item"><span>📌 知识库检索条目：</span><span class="extra-value" style="font-weight:400; font-size:13px; color:#666;">17_confidence_assessment_rules.md,18_mlps_assessment_cases.md,16_mlps_vuln_mapping.md</span></span><span class="extra-item"><span>⚙️ 扫描模式：</span><span class="extra-value" style="font-weight:400; font-size:13px; color:#666;">人机交互</span></span></div><div class="confidence-note">本次评估发现3个高危SQL注入漏洞，虽工具覆盖度（2/2）和交叉验证（100%）得分较高，但仅2个工具（满分40分）导致准确性维度受限。SQL注入映射到8.1.3.2访问控制项（满分40分）匹配准确。风险等级判定与标准一致。综合得分76分，处于高置信度区间，但整改方案需进一步细化以覆盖所有等保条款要求。</div></section>
+
+        <div class="two-col-container">
+            <section class="card left-col">
+                <h2 class="module-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>漏洞明细（按风险优先级排序）</h2>
+                <div class="vuln-list-wrap">
+            <details class="vuln-item">
+                <summary>
+                    <div class="vuln-title-row"><span class="risk-tag tag-critical">严重</span>SQL注入漏洞(Union注入)</div>
+                    <div class="vuln-tip-text">风险简述：检测到基于Union注入的SQL注入漏洞，列数: 30</div>
+                </summary>
+                <div class="vuln-detail text-body">
+                    <p><strong>URL：</strong>http://testasp.vulnweb.com</p>
+                    <p><strong>修复建议：</strong>请参考安全最佳实践进行修复</p>
+                </div>
+            </details>
+            
+            <details class="vuln-item">
+                <summary>
+                    <div class="vuln-title-row"><span class="risk-tag tag-critical">严重</span>SQL注入漏洞(Union注入)</div>
+                    <div class="vuln-tip-text">风险简述：检测到基于Union注入的SQL注入漏洞，列数: 30</div>
+                </summary>
+                <div class="vuln-detail text-body">
+                    <p><strong>URL：</strong>http://testasp.vulnweb.com</p>
+                    <p><strong>修复建议：</strong>请参考安全最佳实践进行修复</p>
+                </div>
+            </details>
+            
+            <details class="vuln-item">
+                <summary>
+                    <div class="vuln-title-row"><span class="risk-tag tag-critical">严重</span>SQL注入漏洞(Union注入)</div>
+                    <div class="vuln-tip-text">风险简述：检测到基于Union注入的SQL注入漏洞，列数: 30</div>
+                </summary>
+                <div class="vuln-detail text-body">
+                    <p><strong>URL：</strong>http://testasp.vulnweb.com</p>
+                    <p><strong>修复建议：</strong>请参考安全最佳实践进行修复</p>
+                </div>
+            </details>
+            </div>
+            </section>
+            <div class="right-col">
+                <section class="card"><h2 class="module-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>攻击链路研判</h2><ul class="list-uniform"><li>攻击者可能组合利用多个漏洞进行攻击</li><li>信息收集 -&gt; 漏洞利用 -&gt; 权限提升</li><li>横向移动风险：存在横向移动风险</li></ul></section>
+                <section class="card"><h2 class="module-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>合规影响说明</h2><ul class="list-uniform"><li>共发现 3 项严重或高危问题，应纳入优先整改范围。</li><li>扫描结果应结合适用的等保、数据安全及行业规范进行人工复核。</li><li>配置类问题应纳入持续监测和基线核查机制。</li></ul></section>
+            </div>
+        </div>
+
+        <section class="card fix-plan-container">
+            <h2 class="module-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>分层加固整改方案</h2>
+            <div class="fix-three-col">
+                <div class="fix-block fix-emergency"><h3 class="fix-block-title">紧急修复（7日内完成）</h3><ul class="list-uniform"><li>SQL注入漏洞(Union注入)：请参考安全最佳实践进行修复</li><li>SQL注入漏洞(Union注入)：请参考安全最佳实践进行修复</li><li>SQL注入漏洞(Union注入)：请参考安全最佳实践进行修复</li></ul></div>
+                <div class="fix-block fix-deadline"><h3 class="fix-block-title">限期整改（30日内完成）</h3><ul class="list-uniform"><li>复核中危漏洞与业务影响，按计划完成整改。</li></ul></div>
+                <div class="fix-block fix-longterm"><h3 class="fix-block-title">常态化长效优化</h3><ul class="list-uniform"><li>修复高危漏洞</li><li>加强访问控制</li><li>部署WAF</li><li>实施安全监控</li><li>建立安全开发流程</li><li>定期安全审计</li></ul></div>
+            </div>
+        </section>
+
+        
+        <section class="card ai-section"><h2 class="module-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>AI 智能分析</h2><div class="ai-grid"><div class="analysis-block"><h3>风险总结</h3><p class="text-body">安全分析报告** 1. 风险等级** 高** 依据：发现 3 条高危 SQL 注入漏洞，直接威胁系统数据完整性与业务逻辑安全。* 2. 关键发现** 1. **SQL 注入漏洞**：目标域名 `http://testasp.vulnweb.com` 存在 3 处严重 SQL 注入漏洞。攻击者可利用注入点执行任意 SQL 命令，导致敏感数据泄露、数据库篡改或服务器被控。 2. **工具验证结果**：通过 Sqli 扫描工具确认目标存在 SQL 注入特征，且文件上传扫描工具未检出明显异常，但需结合业务逻辑进一步确认。 3. **交互记录异常**：系统日志显示用户频繁选择选项（1、2），疑似自动化脚本或批量测试行为，增加了被利用的风险面。 3. 修复建议** 1. **立即修补漏洞**：对目标系统进行代码审计，定位并修复所有 SQL 注入点。严禁使用字符串拼接方式处理用户输入，必须采用参数化查询（Prepared Statements）。 2. **强化输入验证**：对所有用户输入进行严格的类型检查与长度限制，禁止非预期字符进入数据库字段。 3. **部署 WAF 防护**：在 Web 应用前部署 Web 应用防火墙（WAF），拦截常见的 SQL 注入攻击特征。 4. **审计与监控**：审查用户交互记录，排查自动化扫描工具的使用情况；部署日志分析系统，实时监测异常访问模式。 结论**：</p></div><div class="analysis-block"><h3>漏洞成因</h3><ul class="list-uniform"><li>SQL注入漏洞(Union注入)：检测到基于Union注入的SQL注入漏洞，列数: 30</li><li>SQL注入漏洞(Union注入)：检测到基于Union注入的SQL注入漏洞，列数: 30</li><li>SQL注入漏洞(Union注入)：检测到基于Union注入的SQL注入漏洞，列数: 30</li></ul></div><div class="analysis-block"><h3>利用风险</h3><ul class="list-uniform"><li>攻击者可能组合利用多个漏洞进行攻击</li><li>信息收集 -&gt; 漏洞利用 -&gt; 权限提升</li><li>横向移动风险：存在横向移动风险</li></ul></div><div class="analysis-block"><h3>修复优先级</h3><ul class="list-uniform"><li>SQL注入漏洞(Union注入)：优先级 1，请参考安全最佳实践进行修复</li><li>SQL注入漏洞(Union注入)：优先级 1，请参考安全最佳实践进行修复</li><li>SQL注入漏洞(Union注入)：优先级 1，请参考安全最佳实践进行修复</li></ul></div><div class="analysis-block"><h3>综合建议</h3><ul class="list-uniform"><li>修复高危漏洞</li><li>加强访问控制</li><li>部署WAF</li><li>实施安全监控</li><li>建立安全开发流程</li><li>定期安全审计</li></ul></div></div></section>
+
+        <section class="appendix-card">
+            <details>
+                <summary class="appendix-summary"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>查看原始扫描完整数据（Payload、证据、服务配置详情）</summary>
+                <div class="appendix-content"><div class="appendix-entry"><strong>1. SQL注入漏洞(Union注入)</strong><p>URL: http://testasp.vulnweb.com</p><p>Payload: &#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--</p><p>证据: 成功探测到 30 列，Union注入可行</p></div><div class="appendix-entry"><strong>2. SQL注入漏洞(Union注入)</strong><p>URL: http://testasp.vulnweb.com</p><p>Payload: &#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--</p><p>证据: 成功探测到 30 列，Union注入可行</p></div><div class="appendix-entry"><strong>3. SQL注入漏洞(Union注入)</strong><p>URL: http://testasp.vulnweb.com</p><p>Payload: &#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--</p><p>证据: 成功探测到 30 列，Union注入可行</p></div><div class="appendix-entry"><strong>工具执行结果</strong><pre>{
+  &quot;sqli_scan&quot;: {
+    &quot;success&quot;: true,
+    &quot;data&quot;: {
+      &quot;target&quot;: &quot;http://testasp.vulnweb.com&quot;,
+      &quot;vulnerabilities&quot;: [
+        {
+          &quot;vuln_type&quot;: &quot;sql_injection&quot;,
+          &quot;url&quot;: &quot;http://testasp.vulnweb.com&quot;,
+          &quot;severity&quot;: &quot;critical&quot;,
+          &quot;title&quot;: &quot;SQL注入漏洞(Union注入)&quot;,
+          &quot;description&quot;: &quot;检测到基于Union注入的SQL注入漏洞，列数: 30&quot;,
+          &quot;parameter&quot;: &quot;X-Forwarded-For&quot;,
+          &quot;method&quot;: &quot;GET&quot;,
+          &quot;payload&quot;: &quot;&#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--&quot;,
+          &quot;evidence&quot;: &quot;成功探测到 30 列，Union注入可行&quot;,
+          &quot;confidence&quot;: 0.95,
+          &quot;cwe_id&quot;: &quot;CWE-89&quot;,
+          &quot;cvss_score&quot;: null,
+          &quot;solution&quot;: null,
+          &quot;request_data&quot;: {
+            &quot;column_count&quot;: 30,
+            &quot;payload&quot;: &quot;&#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--&quot;
+          },
+          &quot;response_data&quot;: {
+            &quot;column_count&quot;: 30
+          },
+          &quot;discovered_at&quot;: &quot;2026-08-06T21:21:19.649206&quot;
+        },
+        {
+          &quot;vuln_type&quot;: &quot;sql_injection&quot;,
+          &quot;url&quot;: &quot;http://testasp.vulnweb.com&quot;,
+          &quot;severity&quot;: &quot;critical&quot;,
+          &quot;title&quot;: &quot;SQL注入漏洞(Union注入)&quot;,
+          &quot;description&quot;: &quot;检测到基于Union注入的SQL注入漏洞，列数: 30&quot;,
+          &quot;parameter&quot;: &quot;User-Agent&quot;,
+          &quot;method&quot;: &quot;GET&quot;,
+          &quot;payload&quot;: &quot;&#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--&quot;,
+          &quot;evidence&quot;: &quot;成功探测到 30 列，Union注入可行&quot;,
+          &quot;confidence&quot;: 0.95,
+          &quot;cwe_id&quot;: &quot;CWE-89&quot;,
+          &quot;cvss_score&quot;: null,
+          &quot;solution&quot;: null,
+          &quot;request_data&quot;: {
+            &quot;column_count&quot;: 30,
+            &quot;payload&quot;: &quot;&#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--&quot;
+          },
+          &quot;response_data&quot;: {
+            &quot;column_count&quot;: 30
+          },
+          &quot;discovered_at&quot;: &quot;2026-08-06T21:21:30.544717&quot;
+        },
+        {
+          &quot;vuln_type&quot;: &quot;sql_injection&quot;,
+          &quot;url&quot;: &quot;http://testasp.vulnweb.com&quot;,
+          &quot;severity&quot;: &quot;critical&quot;,
+          &quot;title&quot;: &quot;SQL注入漏洞(Union注入)&quot;,
+          &quot;description&quot;: &quot;检测到基于Union注入的SQL注入漏洞，列数: 30&quot;,
+          &quot;parameter&quot;: &quot;Referer&quot;,
+          &quot;method&quot;: &quot;GET&quot;,
+          &quot;payload&quot;: &quot;&#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--&quot;,
+          &quot;evidence&quot;: &quot;成功探测到 30 列，Union注入可行&quot;,
+          &quot;confidence&quot;: 0.95,
+          &quot;cwe_id&quot;: &quot;CWE-89&quot;,
+          &quot;cvss_score&quot;: null,
+          &quot;solution&quot;: null,
+          &quot;request_data&quot;: {
+            &quot;column_count&quot;: 30,
+            &quot;payload&quot;: &quot;&#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--&quot;
+          },
+          &quot;response_data&quot;: {
+            &quot;column_count&quot;: 30
+          },
+          &quot;discovered_at&quot;: &quot;2026-08-06T21:21:43.285608&quot;
+        }
+      ],
+      &quot;vulnerability_count&quot;: 3,
+      &quot;scan_duration&quot;: 158.64070010185242,
+      &quot;requests_made&quot;: 382,
+      &quot;tested_endpoints&quot;: [
+        {
+          &quot;url&quot;: &quot;http://testasp.vulnweb.com&quot;,
+          &quot;param&quot;: &quot;X-Forwarded-For&quot;,
+          &quot;method&quot;: &quot;GET&quot;,
+          &quot;baseline_status&quot;: 200,
+          &quot;baseline_length&quot;: 3537
+        },
+        {
+          &quot;url&quot;: &quot;http://testasp.vulnweb.com&quot;,
+          &quot;param&quot;: &quot;User-Agent&quot;,
+          &quot;method&quot;: &quot;GET&quot;,
+          &quot;baseline_status&quot;: 200,
+          &quot;baseline_length&quot;: 3537
+        },
+        {
+          &quot;url&quot;: &quot;http://testasp.vulnweb.com&quot;,
+          &quot;param&quot;: &quot;Referer&quot;,
+          &quot;method&quot;: &quot;GET&quot;,
+          &quot;baseline_status&quot;: 200,
+          &quot;baseline_length&quot;: 3537
+        }
+      ],
+      &quot;request_response_log&quot;: [
+        {
+          &quot;timestamp&quot;: &quot;2026-08-06T21:21:19.649148&quot;,
+          &quot;method&quot;: &quot;GET&quot;,
+          &quot;url&quot;: &quot;http://testasp.vulnweb.com&quot;,
+          &quot;request_headers&quot;: {
+            &quot;User-Agent&quot;: &quot;Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36&quot;,
+            &quot;Accept-Encoding&quot;: &quot;gzip, deflate, zstd&quot;,
+            &quot;Accept&quot;: &quot;*/*&quot;,
+            &quot;Connection&quot;: &quot;keep-alive&quot;
+          },
+          &quot;request_body&quot;: &quot;&#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--&quot;,
+          &quot;response_status&quot;: 200,
+          &quot;response_headers&quot;: {
+            &quot;Cache-Control&quot;: &quot;private&quot;,
+            &quot;Content-Type&quot;: &quot;text/html&quot;,
+            &quot;Server&quot;: &quot;Microsoft-IIS/8.5&quot;,
+            &quot;X-Powered-By&quot;: &quot;ASP.NET&quot;,
+            &quot;Date&quot;: &quot;Thu, 06 Aug 2026 13:21:09 GMT&quot;,
+            &quot;Content-Length&quot;: &quot;3537&quot;
+          },
+          &quot;response_body&quot;: &quot;\r\n&lt;!DOCTYPE HTML PUBLIC \&quot;-//W3C//DTD HTML 4.01 Transitional//EN\&quot; \&quot;http://www.w3.org/TR/html4/loose.dtd\&quot;&gt;\r\n&lt;html&gt;&lt;!-- InstanceBegin template=\&quot;/Templates/MainTemplate.dwt.asp\&quot; codeOutsideHTMLIsLocked=\&quot;false\&quot; --&gt;\r\n&lt;head&gt;\r\n&lt;!-- InstanceBeginEditable name=\&quot;doctitle\&quot; --&gt;\r\n&lt;title&gt;acuforum forums&lt;/title&gt;\r\n&lt;!-- InstanceEndEditable --&gt;\r\n&lt;meta http-equiv=\&quot;Content-Type\&quot; content=\&quot;text/html; charset=iso-8859-1\&quot;&gt;\r\n&lt;!-- InstanceBeginEditable name=\&quot;head\&quot; --&gt;\r\n&lt;!-- InstanceEndEditable --&gt;\r\n&lt;link href=\&quot;styles.css\&quot; rel=\&quot;stylesheet\&quot; type=\&quot;text/css\&quot;&gt;\r\n&lt;/head&gt;\r\n&lt;body&gt; \r\n&lt;table width=\&quot;100%\&quot;  border=\&quot;0\&quot; cellpadding=\&quot;10\&quot; cellspacing=\&quot;0\&quot;&gt; \r\n  &lt;tr bgcolor=\&quot;#008F00\&quot;&gt; \r\n    &lt;td width=\&quot;306px\&quot;&gt;&lt;a href=\&quot;https://www.acunetix.com/\&quot;&gt;&lt;img src=\&quot;Images/logo.gif\&quot; width=\&quot;306\&quot; height=\&quot;38\&quot; border=\&quot;0\&quot; alt=\&quot;Acunetix website security\&quot;&gt;&lt;/a&gt;&lt;/td&gt; \r\n    &lt;td align=\&quot;right\&quot; valign=\&quot;middle\&quot; bgcolor=\&quot;#008F00\&quot; class=\&quot;disclaimer\&quot;&gt;TEST and Demonstration site for &lt;a href=\&quot;https://www.acunetix.com/vulnerability-scanner/\&quot;&gt;Acunetix Web Vulnerability Scanner&lt;/a&gt;&lt;/td&gt; \r\n  &lt;/tr&gt; \r\n  &lt;tr&gt; \r\n    &lt;td colspan=\&quot;2\&quot;&gt;&lt;div class=\&quot;menubar\&quot;&gt;&lt;a href=\&quot;Templatize.asp?item=html/about.html\&quot; class=\&quot;menu\&quot;&gt;about&lt;/a&gt; - &lt;a href=\&quot;Default.asp\&quot; class=\&quot;menu\&quot;&gt;forums&lt;/a&gt; - &lt;a href=\&quot;Search.asp\&quot; class=\&quot;menu\&quot;&gt;search&lt;/a&gt; \r\n     - &lt;a href=\&quot;./Login.asp?RetURL=%2FDefault%2Easp%3F\&quot; class=\&quot;menu\&quot;&gt;login&lt;/a&gt; - &lt;a href=\&quot;./Register.asp?RetURL=%2FDefault%2Easp%3F\&quot; class=\&quot;menu\&quot;&gt;register&lt;/a&gt; \r\n\t- &lt;a href=\&quot;https://www.acunetix.com/vulnerability-scanner/sql-injection/\&quot; class=\&quot;menu\&quot;&gt;SQL scanner&lt;/a&gt; - &lt;a href=\&quot;https://www.acunetix.com/websitesecurity/sql-injection/\&quot; class=\&quot;menu\&quot;&gt;SQL vuln help&lt;/a&gt;\r\n    &lt;/div&gt;&lt;/td&gt; \r\n  &lt;/tr&gt; \r\n  &lt;tr&gt; \r\n    &lt;td colspan=\&quot;2\&quot;&gt;&lt;!-- InstanceBeginEditable name=\&quot;MainContentLeft\&quot; --&gt;\r\n\t&lt;table width=\&quot;100%\&quot; border=\&quot;0\&quot; cellspacing=\&quot;0\&quot; cellpadding=\&quot;5\&quot;&gt;\r\n      &lt;tr&gt;\r\n        &lt;td class=\&quot;tableheader\&quot;&gt;Forum&lt;/td&gt;\r\n        &lt;td class=\&quot;tableheader\&quot;&gt;Threads&lt;/td&gt;\r\n        &lt;td class=\&quot;tableheader\&quot;&gt;Posts&lt;/td&gt;\r\n        &lt;td class=\&quot;tableheader\&quot;&gt;Last Post&lt;/td&gt;\r\n      &lt;/tr&gt;  &quot;,
+          &quot;duration&quot;: 0,
+          &quot;error&quot;: null
+        },
+        {
+          &quot;timestamp&quot;: &quot;2026-08-06T21:21:30.544672&quot;,
+          &quot;method&quot;: &quot;GET&quot;,
+          &quot;url&quot;: &quot;http://testasp.vulnweb.com&quot;,
+          &quot;request_headers&quot;: {
+            &quot;User-Agent&quot;: &quot;Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36&quot;,
+            &quot;Accept-Encoding&quot;: &quot;gzip, deflate, zstd&quot;,
+            &quot;Accept&quot;: &quot;*/*&quot;,
+            &quot;Connection&quot;: &quot;keep-alive&quot;
+          },
+          &quot;request_body&quot;: &quot;&#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--&quot;,
+          &quot;response_status&quot;: 200,
+          &quot;response_headers&quot;: {
+            &quot;Cache-Control&quot;: &quot;private&quot;,
+            &quot;Content-Type&quot;: &quot;text/html&quot;,
+            &quot;Server&quot;: &quot;Microsoft-IIS/8.5&quot;,
+            &quot;X-Powered-By&quot;: &quot;ASP.NET&quot;,
+            &quot;Date&quot;: &quot;Thu, 06 Aug 2026 13:21:20 GMT&quot;,
+            &quot;Content-Length&quot;: &quot;3537&quot;
+          },
+          &quot;response_body&quot;: &quot;\r\n&lt;!DOCTYPE HTML PUBLIC \&quot;-//W3C//DTD HTML 4.01 Transitional//EN\&quot; \&quot;http://www.w3.org/TR/html4/loose.dtd\&quot;&gt;\r\n&lt;html&gt;&lt;!-- InstanceBegin template=\&quot;/Templates/MainTemplate.dwt.asp\&quot; codeOutsideHTMLIsLocked=\&quot;false\&quot; --&gt;\r\n&lt;head&gt;\r\n&lt;!-- InstanceBeginEditable name=\&quot;doctitle\&quot; --&gt;\r\n&lt;title&gt;acuforum forums&lt;/title&gt;\r\n&lt;!-- InstanceEndEditable --&gt;\r\n&lt;meta http-equiv=\&quot;Content-Type\&quot; content=\&quot;text/html; charset=iso-8859-1\&quot;&gt;\r\n&lt;!-- InstanceBeginEditable name=\&quot;head\&quot; --&gt;\r\n&lt;!-- InstanceEndEditable --&gt;\r\n&lt;link href=\&quot;styles.css\&quot; rel=\&quot;stylesheet\&quot; type=\&quot;text/css\&quot;&gt;\r\n&lt;/head&gt;\r\n&lt;body&gt; \r\n&lt;table width=\&quot;100%\&quot;  border=\&quot;0\&quot; cellpadding=\&quot;10\&quot; cellspacing=\&quot;0\&quot;&gt; \r\n  &lt;tr bgcolor=\&quot;#008F00\&quot;&gt; \r\n    &lt;td width=\&quot;306px\&quot;&gt;&lt;a href=\&quot;https://www.acunetix.com/\&quot;&gt;&lt;img src=\&quot;Images/logo.gif\&quot; width=\&quot;306\&quot; height=\&quot;38\&quot; border=\&quot;0\&quot; alt=\&quot;Acunetix website security\&quot;&gt;&lt;/a&gt;&lt;/td&gt; \r\n    &lt;td align=\&quot;right\&quot; valign=\&quot;middle\&quot; bgcolor=\&quot;#008F00\&quot; class=\&quot;disclaimer\&quot;&gt;TEST and Demonstration site for &lt;a href=\&quot;https://www.acunetix.com/vulnerability-scanner/\&quot;&gt;Acunetix Web Vulnerability Scanner&lt;/a&gt;&lt;/td&gt; \r\n  &lt;/tr&gt; \r\n  &lt;tr&gt; \r\n    &lt;td colspan=\&quot;2\&quot;&gt;&lt;div class=\&quot;menubar\&quot;&gt;&lt;a href=\&quot;Templatize.asp?item=html/about.html\&quot; class=\&quot;menu\&quot;&gt;about&lt;/a&gt; - &lt;a href=\&quot;Default.asp\&quot; class=\&quot;menu\&quot;&gt;forums&lt;/a&gt; - &lt;a href=\&quot;Search.asp\&quot; class=\&quot;menu\&quot;&gt;search&lt;/a&gt; \r\n     - &lt;a href=\&quot;./Login.asp?RetURL=%2FDefault%2Easp%3F\&quot; class=\&quot;menu\&quot;&gt;login&lt;/a&gt; - &lt;a href=\&quot;./Register.asp?RetURL=%2FDefault%2Easp%3F\&quot; class=\&quot;menu\&quot;&gt;register&lt;/a&gt; \r\n\t- &lt;a href=\&quot;https://www.acunetix.com/vulnerability-scanner/sql-injection/\&quot; class=\&quot;menu\&quot;&gt;SQL scanner&lt;/a&gt; - &lt;a href=\&quot;https://www.acunetix.com/websitesecurity/sql-injection/\&quot; class=\&quot;menu\&quot;&gt;SQL vuln help&lt;/a&gt;\r\n    &lt;/div&gt;&lt;/td&gt; \r\n  &lt;/tr&gt; \r\n  &lt;tr&gt; \r\n    &lt;td colspan=\&quot;2\&quot;&gt;&lt;!-- InstanceBeginEditable name=\&quot;MainContentLeft\&quot; --&gt;\r\n\t&lt;table width=\&quot;100%\&quot; border=\&quot;0\&quot; cellspacing=\&quot;0\&quot; cellpadding=\&quot;5\&quot;&gt;\r\n      &lt;tr&gt;\r\n        &lt;td class=\&quot;tableheader\&quot;&gt;Forum&lt;/td&gt;\r\n        &lt;td class=\&quot;tableheader\&quot;&gt;Threads&lt;/td&gt;\r\n        &lt;td class=\&quot;tableheader\&quot;&gt;Posts&lt;/td&gt;\r\n        &lt;td class=\&quot;tableheader\&quot;&gt;Last Post&lt;/td&gt;\r\n      &lt;/tr&gt;  &quot;,
+          &quot;duration&quot;: 0,
+          &quot;error&quot;: null
+        },
+        {
+          &quot;timestamp&quot;: &quot;2026-08-06T21:21:43.285562&quot;,
+          &quot;method&quot;: &quot;GET&quot;,
+          &quot;url&quot;: &quot;http://testasp.vulnweb.com&quot;,
+          &quot;request_headers&quot;: {
+            &quot;User-Agent&quot;: &quot;Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36&quot;,
+            &quot;Accept-Encoding&quot;: &quot;gzip, deflate, zstd&quot;,
+            &quot;Accept&quot;: &quot;*/*&quot;,
+            &quot;Connection&quot;: &quot;keep-alive&quot;
+          },
+          &quot;request_body&quot;: &quot;&#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--&quot;,
+          &quot;response_status&quot;: 200,
+          &quot;response_headers&quot;: {
+            &quot;Cache-Control&quot;: &quot;private&quot;,
+            &quot;Content-Type&quot;: &quot;text/html&quot;,
+            &quot;Server&quot;: &quot;Microsoft-IIS/8.5&quot;,
+            &quot;X-Powered-By&quot;: &quot;ASP.NET&quot;,
+            &quot;Date&quot;: &quot;Thu, 06 Aug 2026 13:21:33 GMT&quot;,
+            &quot;Content-Length&quot;: &quot;3537&quot;
+          },
+          &quot;response_body&quot;: &quot;\r\n&lt;!DOCTYPE HTML PUBLIC \&quot;-//W3C//DTD HTML 4.01 Transitional//EN\&quot; \&quot;http://www.w3.org/TR/html4/loose.dtd\&quot;&gt;\r\n&lt;html&gt;&lt;!-- InstanceBegin template=\&quot;/Templates/MainTemplate.dwt.asp\&quot; codeOutsideHTMLIsLocked=\&quot;false\&quot; --&gt;\r\n&lt;head&gt;\r\n&lt;!-- InstanceBeginEditable name=\&quot;doctitle\&quot; --&gt;\r\n&lt;title&gt;acuforum forums&lt;/title&gt;\r\n&lt;!-- InstanceEndEditable --&gt;\r\n&lt;meta http-equiv=\&quot;Content-Type\&quot; content=\&quot;text/html; charset=iso-8859-1\&quot;&gt;\r\n&lt;!-- InstanceBeginEditable name=\&quot;head\&quot; --&gt;\r\n&lt;!-- InstanceEndEditable --&gt;\r\n&lt;link href=\&quot;styles.css\&quot; rel=\&quot;stylesheet\&quot; type=\&quot;text/css\&quot;&gt;\r\n&lt;/head&gt;\r\n&lt;body&gt; \r\n&lt;table width=\&quot;100%\&quot;  border=\&quot;0\&quot; cellpadding=\&quot;10\&quot; cellspacing=\&quot;0\&quot;&gt; \r\n  &lt;tr bgcolor=\&quot;#008F00\&quot;&gt; \r\n    &lt;td width=\&quot;306px\&quot;&gt;&lt;a href=\&quot;https://www.acunetix.com/\&quot;&gt;&lt;img src=\&quot;Images/logo.gif\&quot; width=\&quot;306\&quot; height=\&quot;38\&quot; border=\&quot;0\&quot; alt=\&quot;Acunetix website security\&quot;&gt;&lt;/a&gt;&lt;/td&gt; \r\n    &lt;td align=\&quot;right\&quot; valign=\&quot;middle\&quot; bgcolor=\&quot;#008F00\&quot; class=\&quot;disclaimer\&quot;&gt;TEST and Demonstration site for &lt;a href=\&quot;https://www.acunetix.com/vulnerability-scanner/\&quot;&gt;Acunetix Web Vulnerability Scanner&lt;/a&gt;&lt;/td&gt; \r\n  &lt;/tr&gt; \r\n  &lt;tr&gt; \r\n    &lt;td colspan=\&quot;2\&quot;&gt;&lt;div class=\&quot;menubar\&quot;&gt;&lt;a href=\&quot;Templatize.asp?item=html/about.html\&quot; class=\&quot;menu\&quot;&gt;about&lt;/a&gt; - &lt;a href=\&quot;Default.asp\&quot; class=\&quot;menu\&quot;&gt;forums&lt;/a&gt; - &lt;a href=\&quot;Search.asp\&quot; class=\&quot;menu\&quot;&gt;search&lt;/a&gt; \r\n     - &lt;a href=\&quot;./Login.asp?RetURL=%2FDefault%2Easp%3F\&quot; class=\&quot;menu\&quot;&gt;login&lt;/a&gt; - &lt;a href=\&quot;./Register.asp?RetURL=%2FDefault%2Easp%3F\&quot; class=\&quot;menu\&quot;&gt;register&lt;/a&gt; \r\n\t- &lt;a href=\&quot;https://www.acunetix.com/vulnerability-scanner/sql-injection/\&quot; class=\&quot;menu\&quot;&gt;SQL scanner&lt;/a&gt; - &lt;a href=\&quot;https://www.acunetix.com/websitesecurity/sql-injection/\&quot; class=\&quot;menu\&quot;&gt;SQL vuln help&lt;/a&gt;\r\n    &lt;/div&gt;&lt;/td&gt; \r\n  &lt;/tr&gt; \r\n  &lt;tr&gt; \r\n    &lt;td colspan=\&quot;2\&quot;&gt;&lt;!-- InstanceBeginEditable name=\&quot;MainContentLeft\&quot; --&gt;\r\n\t&lt;table width=\&quot;100%\&quot; border=\&quot;0\&quot; cellspacing=\&quot;0\&quot; cellpadding=\&quot;5\&quot;&gt;\r\n      &lt;tr&gt;\r\n        &lt;td class=\&quot;tableheader\&quot;&gt;Forum&lt;/td&gt;\r\n        &lt;td class=\&quot;tableheader\&quot;&gt;Threads&lt;/td&gt;\r\n        &lt;td class=\&quot;tableheader\&quot;&gt;Posts&lt;/td&gt;\r\n        &lt;td class=\&quot;tableheader\&quot;&gt;Last Post&lt;/td&gt;\r\n      &lt;/tr&gt;  &quot;,
+          &quot;duration&quot;: 0,
+          &quot;error&quot;: null
+        }
+      ],
+      &quot;detailed_evidence&quot;: {
+        &quot;union_columns_X-Forwarded-For&quot;: {
+          &quot;column_count&quot;: 30,
+          &quot;payload&quot;: &quot;&#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--&quot;
+        },
+        &quot;union_columns_User-Agent&quot;: {
+          &quot;column_count&quot;: 30,
+          &quot;payload&quot;: &quot;&#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--&quot;
+        },
+        &quot;union_columns_Referer&quot;: {
+          &quot;column_count&quot;: 30,
+          &quot;payload&quot;: &quot;&#x27; UNION SELECT NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL--&quot;
+        }
+      },
+      &quot;metadata&quot;: {}
+    },
+    &quot;error&quot;: null,
+    &quot;auth_info&quot;: null,
+    &quot;timestamp&quot;: &quot;2026-08-06T21:21:43.287445&quot;
+  },
+  &quot;fileupload_scan&quot;: {
+    &quot;success&quot;: true,
+    &quot;data&quot;: {
+      &quot;target&quot;: &quot;http://testasp.vulnweb.com&quot;,
+      &quot;vulnerabilities&quot;: [],
+      &quot;vulnerability_count&quot;: 0,
+      &quot;scan_duration&quot;: 172.68191647529602,
+      &quot;metadata&quot;: {
+        &quot;upload_points_found&quot;: 11,
+        &quot;tests_performed&quot;: 375,
+        &quot;uploaded_files&quot;: 0,
+        &quot;request_responses&quot;: [
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com&quot;,
+            &quot;method&quot;: &quot;GET&quot;,
+            &quot;response_status&quot;: 200,
+            &quot;response_time&quot;: 0.535098
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26459550857543945
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2635984420776367
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26221466064453125
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2632269859313965
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26707887649536133
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6233968734741211
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26258230209350586
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26401758193969727
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6236610412597656
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2634716033935547
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26362013816833496
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2640354633331299
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26350855827331543
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2630610466003418
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6311526298522949
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26427149772644043
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26428866386413574
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.28546571731567383
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6419920921325684
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2500057220458984
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 3.219285488128662
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2636585235595703
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2626926898956299
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2638533115386963
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2629878520965576
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 4.842637062072754
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.27155423164367676
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26854443550109863
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 2.4662084579467773
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2645866870880127
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2032585144042969
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2658665180206299
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2653179168701172
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6122658252716064
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26428747177124023
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26581478118896484
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26698899269104004
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2650461196899414
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.265643835067749
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2644693851470947
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26446986198425293
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2653830051422119
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.27072882652282715
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2655198574066162
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2387237548828125
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26306843757629395
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26080751419067383
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6298089027404785
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.226257562637329
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 3.138658046722412
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25790858268737793
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26957011222839355
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26555538177490234
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2579829692840576
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2381255626678467
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2627105712890625
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.28854990005493164
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2652316093444824
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26082468032836914
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2538988590240479
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 2.4431471824645996
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 6.740992546081543
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26131725311279297
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2804701328277588
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2820446491241455
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2650902271270752
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2849442958831787
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/uploads&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2680480480194092
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6182589530944824
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2094976902008057
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2632448673248291
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6341989040374756
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2607433795928955
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2644343376159668
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2646956443786621
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6304149627685547
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.218337059020996
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2545597553253174
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6178312301635742
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2572662830352783
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2652735710144043
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2649240493774414
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.61954665184021
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2168140411376953
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25536131858825684
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6396353244781494
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.225996732711792
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2644529342651367
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6336026191711426
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.218003749847412
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2604367733001709
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26158571243286133
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2643470764160156
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6206068992614746
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2639431953430176
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26244378089904785
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 2.440446376800537
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2607419490814209
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2640500068664551
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26407361030578613
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2635982036590576
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2621147632598877
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2231197357177734
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2627830505371094
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26031947135925293
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26397156715393066
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2632601261138916
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2531294822692871
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2655923366546631
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26477837562561035
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25473594665527344
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2636997699737549
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26406025886535645
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26244235038757324
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2913646697998047
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26612043380737305
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2646641731262207
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2569890022277832
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2640225887298584
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2645576000213623
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.622338056564331
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2136623859405518
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26006102561950684
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26406097412109375
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2656416893005371
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2535398006439209
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2639472484588623
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2873506546020508
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2620205879211426
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.29293012619018555
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6451013088226318
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2829952239990234
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2664942741394043
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25435853004455566
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.264664888381958
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26399898529052734
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2632110118865967
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26357269287109375
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2643101215362549
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2610964775085449
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2638285160064697
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6295289993286133
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2567415237426758
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6231212615966797
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26653337478637695
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26648640632629395
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2650177478790283
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26114797592163086
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2634713649749756
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.264418363571167
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2608609199523926
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26410984992980957
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2649235725402832
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2606086730957031
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.620988130569458
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.266815185546875
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2867727279663086
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2638411521911621
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2641177177429199
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2660236358642578
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2712111473083496
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2657296657562256
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2643256187438965
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26338744163513184
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6333785057067871
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.37518763542175293
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2637944221496582
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26495885848999023
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2641134262084961
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/attachment/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6604363918304443
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26431965827941895
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2642395496368408
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2597811222076416
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26553916931152344
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6363451480865479
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26674342155456543
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6323051452636719
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 7.211371183395386
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25351977348327637
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2666351795196533
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26355743408203125
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2527947425842285
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26013708114624023
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26422595977783203
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25568556785583496
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25490307807922363
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2640390396118164
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25712013244628906
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2551455497741699
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6000931262969971
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2549748420715332
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26349306106567383
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6085155010223389
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26392579078674316
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2606191635131836
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25514745712280273
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26348423957824707
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25671958923339844
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6126642227172852
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25240302085876465
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26532983779907227
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2135882377624512
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25725555419921875
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/file/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2770426273345947
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2617006301879883
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25458359718322754
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2641451358795166
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2630620002746582
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25349926948547363
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6519405841827393
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2527039051055908
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26355957984924316
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25957250595092773
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25278568267822266
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2632296085357666
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2629237174987793
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6351165771484375
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.250246524810791
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2602555751800537
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6053009033203125
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2217528820037842
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26379942893981934
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2518610954284668
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26316308975219727
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2626192569732666
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6143045425415039
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2635762691497803
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25684475898742676
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26288652420043945
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26662731170654297
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25229382514953613
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.261486291885376
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26237964630126953
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2515747547149658
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25933289527893066
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6152875423431396
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2131776809692383
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/v1/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2565805912017822
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25180578231811523
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26261043548583984
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2628898620605469
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2519047260284424
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.263289213180542
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2613863945007324
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25270581245422363
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6148827075958252
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.217604637145996
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2624650001525879
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6198928356170654
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2641127109527588
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2257239818572998
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2643089294433594
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.29207873344421387
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25335264205932617
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26432228088378906
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2601902484893799
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2534666061401367
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6064620018005371
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2538447380065918
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2637319564819336
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2595999240875244
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2532515525817871
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2703406810760498
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26104235649108887
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25266075134277344
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2635364532470703
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.29031825065612793
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2533872127532959
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2397119998931885
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25917768478393555
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25849390029907227
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/upload/file&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26477527618408203
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.23901796340942383
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6205666065216064
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2240304946899414
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26244163513183594
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2591257095336914
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25255799293518066
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26468324661254883
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25958800315856934
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2434778213500977
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26371192932128906
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25293898582458496
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25591540336608887
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2639591693878174
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2528798580169678
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2550661563873291
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26329779624938965
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.257540225982666
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26354265213012695
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2629683017730713
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26030921936035156
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2527732849121094
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2625889778137207
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26071715354919434
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25458765029907227
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2636895179748535
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26289963722229004
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25234127044677734
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2634401321411133
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26288938522338867
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25331830978393555
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2607283592224121
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26071619987487793
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.23904895782470703
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/files/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25446557998657227
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.614912748336792
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26227474212646484
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2635071277618408
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25402235984802246
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2666747570037842
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.264082670211792
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.253162145614624
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2536346912384033
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26419711112976074
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2603886127471924
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2541849613189697
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2627227306365967
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26113462448120117
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2517879009246826
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6067090034484863
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25238871574401855
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2637348175048828
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26234912872314453
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2516913414001465
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.27902674674987793
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2632136344909668
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2577242851257324
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26401710510253906
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2631351947784424
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25331807136535645
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2615339756011963
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26282596588134766
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25106239318847656
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2581777572631836
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6153364181518555
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26231813430786133
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25995731353759766
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.256044864654541
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25757694244384766
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25287890434265137
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.24339747428894043
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.620431661605835
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25220561027526855
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6101927757263184
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.202695608139038
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2810845375061035
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.253507137298584
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2558140754699707
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.2197988033294678
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.28200650215148926
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2615926265716553
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2624020576477051
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2541995048522949
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2645866870880127
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2627906799316406
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2521331310272217
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26162052154541016
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26166725158691406
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2518174648284912
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25658702850341797
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2638678550720215
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25298070907592773
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.254575252532959
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.6015260219573975
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2592000961303711
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2651937007904053
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.25472235679626465
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2555978298187256
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.5949525833129883
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 1.225426197052002
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2613370418548584
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.2536928653717041
+          },
+          {
+            &quot;url&quot;: &quot;http://testasp.vulnweb.com/api/media/upload&quot;,
+            &quot;method&quot;: &quot;POST&quot;,
+            &quot;response_status&quot;: 404,
+            &quot;response_time&quot;: 0.26407384872436523
+          }
+        ]
+      }
+    },
+    &quot;error&quot;: null,
+    &quot;auth_info&quot;: null,
+    &quot;timestamp&quot;: &quot;2026-08-06T21:31:07.900480&quot;
+  }
+}</pre></div></div>
+            </details>
+        </section>
+        <div class="footer">
+            <p>报告由 WebScan 自动生成 | 报告生成时间: 2026-08-06 21:39:58</p>
+        </div>
+    </main>
+</body>
+</html>

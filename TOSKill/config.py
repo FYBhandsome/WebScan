@@ -33,6 +33,11 @@ class TOSKillSettings(BaseSettings):
     MODEL_ID: str = os.getenv("MODEL_ID", "xop35qwen2b")
     LLM_TEMPERATURE: float = 0.1
     REPORT_AI_TIMEOUT: float = 30.0
+
+    # 置信度评估配置
+    CONFIDENCE_ASSESSMENT_ENABLED: bool = True
+    CONFIDENCE_AI_TIMEOUT: float = 20.0
+    MLPS_STANDARD_LEVEL: str = "三级"
     
     RAG_ENABLED: bool = True
     RAG_INIT_ON_STARTUP: bool = True
