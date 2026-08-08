@@ -718,6 +718,7 @@ class ReportService:
         vuln_items_html = self._render_vulnerabilities_html(ordered_vulns, language)
         workflow_html = self._render_workflow_html(report_data.workflow, language) if report_data.workflow else ""
         ai_analysis_html = self._render_ai_analysis_html(report_data.ai_analysis, language) if report_data.ai_analysis else ""
+        risk_summary_html = self._render_risk_summary_html(report_data.ai_analysis, language) if report_data.ai_analysis else ""
         confidence_html = self._render_confidence_html(report_data.confidence, language, labels)
 
         count_parts = [f"{count}{'项' if is_zh else ''}{label}" for _, label, count in severity_rows if count]
@@ -810,7 +811,7 @@ class ReportService:
         body { background: #f7f8fa; padding: 32px; color: #222; line-height: 1.8; font-family: "Source Han Sans CN", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
         .report-shell { width: min(1440px, 100%); margin: 0 auto; }
         .card, .report-header, .appendix-card { background: #fff; border: 1px solid var(--border); border-radius: var(--radius); padding: var(--gap-lg); }
-        .report-header, .risk-overview, .confidence-module, .two-col-container, .fix-plan-container, .workflow-section, .ai-section { margin-bottom: var(--gap-xl); }
+        .report-header, .risk-overview, .confidence-module, .two-col-container, .fix-plan-container, .workflow-section, .ai-section, .risk-summary-module { margin-bottom: var(--gap-xl); }
         .header-top, .module-title { display: flex; align-items: center; gap: var(--gap-sm); font-weight: 700; }
         .header-top { font-size: 22px; margin-bottom: var(--gap-sm); }
         .header-subtitle { font: 13px "Source Han Serif CN", SimSun, serif; color: #666; margin-bottom: var(--gap-lg); }
@@ -856,6 +857,7 @@ class ReportService:
         .ai-grid, .workflow-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--gap-md); }
         .analysis-block, .workflow-stat { padding: var(--gap-md); background: #f9fafb; border: 1px solid var(--border); border-radius: var(--radius); }
         .analysis-block h3 { margin-bottom: 8px; font-size: 15px; }
+        .risk-summary-content { padding: var(--gap-lg); background: #f9fafb; border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: var(--radius); overflow-wrap: anywhere; }
         .workflow-stat { text-align: center; } .workflow-stat .value { font-size: 22px; font-weight: 700; color: var(--primary); } .workflow-stat .label { font-size: 12px; color: #666; }
         .execution-timeline, .task-plans { margin-top: var(--gap-lg); }
         .timeline-item, .plan-item { display: flex; gap: var(--gap-md); padding: var(--gap-md); margin-top: var(--gap-sm); background: #f9fafb; border-left: 3px solid var(--primary); }
@@ -974,6 +976,7 @@ class ReportService:
 
         {workflow_html}
         {ai_analysis_html}
+        {risk_summary_html}
 
         <section class="appendix-card">
             <details>
@@ -1043,7 +1046,6 @@ class ReportService:
         is_zh = language == Language.ZH_CN
         labels = {
             "ai_analysis": "AI 智能分析" if language == Language.ZH_CN else "AI Analysis",
-            "summary": "风险总结" if language == Language.ZH_CN else "Summary",
             "causes": "漏洞成因" if language == Language.ZH_CN else "Causes",
             "risks": "利用风险" if language == Language.ZH_CN else "Risks",
             "priorities": "修复优先级" if language == Language.ZH_CN else "Priorities",
@@ -1051,9 +1053,6 @@ class ReportService:
         }
 
         blocks = []
-        if ai_analysis.summary:
-            blocks.append(f'<div class="analysis-block"><h3>{labels["summary"]}</h3><div class="text-body md-content">{self._md_to_html(ai_analysis.summary)}</div></div>')
-
         if ai_analysis.causes:
             items = "".join(f"<li>{self._md_to_html(cause)}</li>" for cause in ai_analysis.causes)
             blocks.append(f'<div class="analysis-block"><h3>{labels["causes"]}</h3><ul class="list-uniform">{items}</ul></div>')
@@ -1080,6 +1079,21 @@ class ReportService:
 
         icon = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>'
         return f'<section class="card ai-section"><h2 class="module-title">{icon}{labels["ai_analysis"]}</h2><div class="ai-grid">{"".join(blocks)}</div></section>'
+
+    def _render_risk_summary_html(self, ai_analysis: Optional[AIAnalysisData], language: Language) -> str:
+        """渲染独立的风险总结模块。"""
+        if not ai_analysis or not ai_analysis.summary:
+            return ""
+
+        title = "风险总结" if language == Language.ZH_CN else "Risk Summary"
+        icon = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1.9-2-2-2zm-5 14h-4v-2h4v2zm2-4H8v-2h8v2zm0-4H8V7h8v2z"/></svg>'
+        summary_html = self._md_to_html(ai_analysis.summary)
+        return (
+            f'<section class="card risk-summary-module">'
+            f'<h2 class="module-title">{icon}{title}</h2>'
+            f'<div class="risk-summary-content text-body md-content">{summary_html}</div>'
+            f'</section>'
+        )
 
     def _render_confidence_html(self, confidence: Optional["ConfidenceData"], language: Language, labels: Dict[str, str]) -> str:
         """渲染 AI 等保评估置信度 HTML

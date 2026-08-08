@@ -144,6 +144,18 @@ ERROR_DEFINITIONS = {
 }
 
 
+ERROR_DEFINITIONS.setdefault(
+    "INVALID_PROTOCOL_PAYLOAD",
+    ErrorInfo(
+        code="INVALID_PROTOCOL_PAYLOAD",
+        message="pause/resume 协议参数无效",
+        source=ErrorSource.BACKEND,
+        category=ErrorCategory.VALIDATION,
+        suggestion="请检查 protocol_version、request_id 及 pause_id/interaction_id 字段",
+    ),
+)
+
+
 def create_error_response(
     error_code: str,
     custom_message: str = None,

@@ -27,6 +27,23 @@
       </button>
 
       <div class="main-console">
+        <div
+          v-if="canResumeScan || scanPause.status === 'resuming'"
+          class="scan-pause-toolbar"
+          @click.stop
+        >
+          <span class="scan-pause-status">
+            {{ scanPause.status === 'resuming' ? '正在根据聊天内容重新规划...' : '扫描已暂停，可继续聊天' }}
+          </span>
+          <button
+            type="button"
+            class="resume-scan-btn"
+            :disabled="scanPause.status === 'resuming'"
+            @click.stop="resumeScan"
+          >
+            {{ scanPause.status === 'resuming' ? '正在恢复...' : '继续扫描' }}
+          </button>
+        </div>
         <ChatArea
           :blocks="workspaceBlocks"
           :is-typing="isTyping"
@@ -36,10 +53,12 @@
           @submit-input="handleInputResponse"
         />
         <CommandInput
-          v-show="!inputCollapsed"
+          v-show="!inputCollapsed || isScanPausedForChat"
           v-model="inputText"
           :disabled="isTyping && !waitingForChoice"
           :is-active="scanActive"
+          :chat-mode="isScanPausedForChat"
+          :placeholder="chatInputPlaceholder"
           @send="sendMessage"
           @stop="handleStop"
           @quick-action="handleQuickAction"
@@ -48,7 +67,7 @@
 
       <HistoryRail
         class="floating-rail"
-        :style="{ bottom: inputCollapsed ? '60px' : '90px' }"
+        :style="{ bottom: inputCollapsed && !isScanPausedForChat ? '60px' : '90px' }"
         :blocks="workspaceBlocks"
         @navigate="handleHistoryNavigate"
       />
@@ -56,7 +75,7 @@
     </div>
 
     <button
-      v-if="inputCollapsed"
+      v-if="inputCollapsed && !isScanPausedForChat"
       class="expand-fixed-btn"
       @click.stop="onExpandInput"
       title="展开输入框"
@@ -108,7 +127,7 @@ watch([convSidebarVisible, inputCollapsed], () => {
 })
 
 const onPageClick = () => {
-  if (!inputCollapsed.value) {
+  if (!inputCollapsed.value && scanPause.status !== 'pausing' && !isScanPausedForChat.value) {
     inputCollapsed.value = true
   }
 }
@@ -134,6 +153,11 @@ const {
   handleBlockAction,
   handleInputResponse,
   scanActive,
+  scanPause,
+  isScanPausedForChat,
+  canResumeScan,
+  chatInputPlaceholder,
+  resumeScan,
   handleStop,
   handleNewConversation,
   handleSwitchConversation,
@@ -167,6 +191,44 @@ const {
   width: 100%;
   min-width: 0; 
 }
+
+.scan-pause-toolbar {
+  position: absolute;
+  top: 12px;
+  right: 28px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 56px);
+  padding: 6px 8px 6px 12px;
+  border: 1px solid #bbf7d0;
+  border-radius: 9px;
+  background: rgba(240, 253, 244, .96);
+  box-shadow: 0 4px 14px rgba(16, 185, 129, .12);
+}
+
+.scan-pause-status {
+  overflow: hidden;
+  color: #047857;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-scan-btn {
+  flex: 0 0 auto;
+  padding: 7px 13px;
+  border: 1px solid #10b981;
+  border-radius: 6px;
+  background: #10b981;
+  color: #fff;
+  font: 13px var(--font-family);
+  cursor: pointer;
+}
+
+.resume-scan-btn:hover:not(:disabled) { background: #059669; border-color: #059669; }
+.resume-scan-btn:disabled { opacity: .65; cursor: wait; }
 
 .floating-rail {
   position: absolute;

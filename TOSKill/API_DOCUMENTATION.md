@@ -1070,3 +1070,44 @@ ai_decision → user_interact → router → execute_task → vulnerability_chec
 ***
 
 *文档版本: 1.0.0 | 最后更新: 2026-05-01*
+## pause_for_chat / resume_scan WebSocket 协议
+
+协议版本：`1.0`。
+
+客户端请求格式：
+
+```json
+{
+  "type": "pause_for_chat",
+  "payload": {
+    "protocol_version": "1.0",
+    "request_id": "req-001",
+    "interaction_id": "session:interaction:baseinfo_scan:0"
+  }
+}
+```
+
+```json
+{
+  "type": "resume_scan",
+  "payload": {
+    "protocol_version": "1.0",
+    "request_id": "req-002",
+    "pause_id": "session:pause:abcdef123456"
+  }
+}
+```
+
+`interaction_id` 和 `pause_id` 在兼容旧客户端时可以省略，服务端会从当前会话状态补齐；新客户端应始终传递它们。
+
+暂停成功后服务端发送 `scan_paused_for_chat`，恢复过程依次发送 `scan_resume_requested`、`decision_replanned` 和 `workflow_resumed`。上述消息均包含：
+
+```json
+{
+  "protocol_version": "1.0",
+  "request_id": "req-002",
+  "session_id": "session-id"
+}
+```
+
+协议错误统一返回 `type=error`，并在 `payload.details` 中包含 `request_id`、`protocol_version` 和字段校验信息。

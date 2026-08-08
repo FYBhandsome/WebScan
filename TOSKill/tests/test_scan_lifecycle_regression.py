@@ -1,0 +1,303 @@
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from TOSKill.AI.graph import MemoryStore, memory_store
+from TOSKill.AI.state import create_initial_state, update_state
+from TOSKill.api.ai_chat_websocket import AIChatManager
+from TOSKill.api.scan_api import ToolExecuteRequest, api_execute_tool
+from TOSKill.config import settings
+
+
+class _RunningTask:
+    def done(self):
+        return False
+
+
+def _close_and_return_task(coro):
+    """Prevent background work during handler-level regression tests."""
+    coro.close()
+    return _RunningTask()
+
+
+def _websocket():
+    websocket = AsyncMock()
+    websocket.client = SimpleNamespace(host="127.0.0.1")
+    return websocket
+
+
+def _save_session(session_id, **updates):
+    state = create_initial_state("example.com", task_id=session_id)
+    if updates:
+        state = update_state(state, **updates)
+    memory_store.save_session(session_id, state)
+    return state
+
+
+@pytest.mark.asyncio
+async def test_disconnect_reconnect_keeps_session_and_cancels_delayed_cleanup():
+    session_id = "lifecycle-reconnect"
+    manager = AIChatManager()
+    websocket_one = _websocket()
+    websocket_two = _websocket()
+    running_task = asyncio.create_task(asyncio.sleep(60))
+    manager.tasks[session_id] = running_task
+
+    try:
+        await manager.connect(websocket_one, session_id=session_id)
+        manager.disconnect(session_id, websocket_one)
+        cleanup_task = manager._disconnect_cleanup[session_id]
+
+        resumed_session = await manager.connect(websocket_two, session_id=session_id)
+        await asyncio.sleep(0)
+
+        assert resumed_session == session_id
+        assert manager.connections[session_id] is websocket_two
+        assert cleanup_task.cancelled() or cleanup_task.done()
+        connected_payload = websocket_two.send_json.call_args_list[0].args[0]["payload"]
+        assert connected_payload["resumed"] is True
+    finally:
+        manager.disconnect(session_id, websocket_two)
+        running_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running_task
+        memory_store.delete_session(session_id)
+
+
+def test_service_restart_restores_session_pending_interaction_and_pause(tmp_path, monkeypatch):
+    db_path = tmp_path / "restart.db"
+    monkeypatch.setattr(settings, "DB_PATH", str(db_path))
+    session_id = "lifecycle-restart"
+    state = create_initial_state("example.com", task_id=session_id)
+    state = update_state(
+        state,
+        run_type="interactive",
+        scan_status="paused_for_chat",
+        pause_info={
+            "pause_id": f"{session_id}:pause:1",
+            "session_id": session_id,
+            "interaction_id": "interaction-1",
+            "status": "paused",
+        },
+    )
+
+    first_store = MemoryStore()
+    second_store = None
+    try:
+        first_store.save_session(session_id, state)
+        first_store.append_chat(session_id, "user", "优先检查登录接口")
+        first_store.set_pending_interaction(
+            session_id,
+            {"type": "interaction_required", "interaction_id": "interaction-1"},
+        )
+        assert first_store.save_scan_pause(session_id, state["pause_info"])
+    finally:
+        first_store.stop_cleanup_task()
+
+    try:
+        second_store = MemoryStore()
+        restored = second_store.get_session(session_id)
+        assert restored is not None
+        assert restored["scan_status"] == "paused_for_chat"
+        assert restored["pause_info"]["pause_id"] == f"{session_id}:pause:1"
+        assert second_store.get_pending_interaction(session_id)["interaction_id"] == "interaction-1"
+        assert second_store.get_chat_history(session_id)[-1]["content"] == "优先检查登录接口"
+        assert second_store.get_scan_pause(f"{session_id}:pause:1")["status"] == "paused"
+    finally:
+        if second_store is not None:
+            second_store.stop_cleanup_task()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_interactive_start_is_rejected_without_second_task():
+    session_id = "lifecycle-duplicate-start"
+    manager = AIChatManager()
+    manager._send = AsyncMock()
+    created_tasks = []
+
+    def fake_create_task(coro):
+        task = _close_and_return_task(coro)
+        created_tasks.append(task)
+        return task
+
+    try:
+        with patch("TOSKill.api.ai_chat_websocket.asyncio.create_task", side_effect=fake_create_task):
+            await manager._handle_start_scan(
+                session_id,
+                {"target": "example.com", "scan_mode": "full"},
+            )
+            await manager._handle_start_scan(
+                session_id,
+                {"target": "example.com", "scan_mode": "full"},
+            )
+
+        assert len(created_tasks) == 1
+        error_messages = [
+            call.args[1]
+            for call in manager._send.call_args_list
+            if len(call.args) > 1 and call.args[1].get("type") == "error"
+        ]
+        assert error_messages
+        assert error_messages[-1]["payload"]["code"] == "SCAN_ALREADY_RUNNING"
+    finally:
+        memory_store.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_pause_requests_reuse_one_pause_id():
+    session_id = "lifecycle-duplicate-pause"
+    manager = AIChatManager()
+    manager._send_multi = AsyncMock()
+    state = create_initial_state("example.com", task_id=session_id)
+    state = update_state(state, run_type="interactive", workflow_node="user_interact")
+    memory_store.save_session(session_id, state)
+    memory_store.set_pending_interaction(
+        session_id,
+        {
+            "type": "interaction_required",
+            "interaction_id": "interaction-1",
+            "payload": {"next_task": "baseinfo_scan"},
+        },
+    )
+
+    try:
+        payload = {"request_id": "pause-request", "interaction_id": "interaction-1"}
+        await asyncio.gather(
+            manager._handle_pause_for_chat(session_id, payload),
+            manager._handle_pause_for_chat(session_id, payload),
+        )
+
+        stored = memory_store.get_session(session_id)
+        assert stored["scan_status"] == "paused_for_chat"
+        pause_ids = {
+            call.args[1]["payload"]["pause_id"]
+            for call in manager._send_multi.call_args_list
+            if call.args[1].get("type") == "scan_paused_for_chat"
+        }
+        assert pause_ids == {stored["pause_info"]["pause_id"]}
+    finally:
+        memory_store.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_resume_requests_execute_workflow_once():
+    session_id = "lifecycle-duplicate-resume"
+    manager = AIChatManager()
+    manager._send_multi = AsyncMock()
+    pause_id = f"{session_id}:pause:1"
+    _save_session(
+        session_id,
+        run_type="interactive",
+        scan_status="paused_for_chat",
+        pause_info={"pause_id": pause_id, "session_id": session_id, "status": "paused"},
+    )
+    orchestrator = MagicMock()
+    orchestrator._ensure_initialized = AsyncMock()
+
+    async def resume_once(*_args, **_kwargs):
+        await asyncio.sleep(0.01)
+        return {}
+
+    orchestrator.resume_workflow = AsyncMock(side_effect=resume_once)
+
+    try:
+        with patch("TOSKill.api.ai_chat_websocket.get_agent_orchestrator", return_value=orchestrator):
+            await asyncio.gather(
+                manager._handle_resume_scan(session_id, {"pause_id": pause_id, "request_id": "resume-1"}),
+                manager._handle_resume_scan(session_id, {"pause_id": pause_id, "request_id": "resume-2"}),
+            )
+
+        orchestrator.resume_workflow.assert_awaited_once()
+        assert memory_store.get_session(session_id)["scan_status"] == "running"
+    finally:
+        memory_store.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scan_mode", "expected_mode"),
+    [("info", "info_collection"), ("vuln", "vuln_scan"), ("full", "full_scan")],
+)
+async def test_console_interactive_mode_regression(scan_mode, expected_mode):
+    session_id = f"lifecycle-console-{scan_mode}"
+    manager = AIChatManager()
+    try:
+        with patch(
+            "TOSKill.api.ai_chat_websocket.asyncio.create_task",
+            side_effect=_close_and_return_task,
+        ):
+            await manager._handle_start_scan(
+                session_id,
+                {"target": "example.com", "scan_mode": scan_mode},
+            )
+        state = memory_store.get_session(session_id)
+        assert state["mode"] == expected_mode
+        assert state["run_type"] == "interactive"
+        assert manager.run_types[session_id] == "interactive"
+    finally:
+        memory_store.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scan_mode", "expected_mode"),
+    [("info", "info_collection"), ("vuln", "vuln_scan"), ("full", "full_scan")],
+)
+async def test_scan_view_automatic_mode_regression(scan_mode, expected_mode):
+    session_id = f"lifecycle-auto-{scan_mode}"
+    manager = AIChatManager()
+    try:
+        with patch(
+            "TOSKill.api.ai_chat_websocket.asyncio.create_task",
+            side_effect=_close_and_return_task,
+        ):
+            await manager._handle_start_auto_scan(
+                session_id,
+                {"target": "example.com", "scan_mode": scan_mode},
+            )
+        state = memory_store.get_session(session_id)
+        assert state["mode"] == expected_mode
+        assert state["run_type"] == "automatic"
+        assert state["scan_status"] == "queued"
+    finally:
+        memory_store.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_tools_view_single_tool_mode_regression():
+    session_id = "lifecycle-single-tool"
+    manager = AIChatManager()
+    manager._send = AsyncMock()
+    tool = MagicMock()
+    tool.invoke.return_value = {"success": True, "data": {"ok": True}}
+
+    with patch("TOSKill.api.ai_chat_websocket.get_tool_by_name", return_value=tool):
+        await manager._handle_execute_tool(
+            session_id,
+            {"tool_name": "baseinfo_scan", "target": "example.com"},
+        )
+
+    event_types = [call.args[1]["type"] for call in manager._send.call_args_list]
+    assert event_types == ["tool_execution_started", "tool_execution_completed"]
+    tool.invoke.assert_called_once_with("example.com")
+
+
+@pytest.mark.asyncio
+async def test_tools_view_single_tool_rest_api_regression():
+    tool = MagicMock()
+    tool.invoke.return_value = {"success": True, "data": {"ok": True}}
+    request = ToolExecuteRequest(
+        tool_name="baseinfo_scan",
+        target="https://example.com/",
+        analyze=False,
+    )
+
+    with patch("TOSKill.api.scan_api.get_tool_by_name", return_value=tool):
+        response = await api_execute_tool(request)
+
+    assert response.code == 200
+    assert response.data["tool_name"] == "baseinfo_scan"
+    assert response.data["success"] is True
+    tool.invoke.assert_called_once_with("example.com")

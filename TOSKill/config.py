@@ -32,6 +32,12 @@ class TOSKillSettings(BaseSettings):
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://maas-api.cn-huabei-1.xf-yun.com/v2")
     MODEL_ID: str = os.getenv("MODEL_ID", "xop35qwen2b")
     LLM_TEMPERATURE: float = 0.1
+    # 暂停扫描期间的聊天请求使用 OpenAI 兼容客户端。显式保留 max_tokens
+    # 字段，避免部分 MaaS 服务不支持 max_completion_tokens。
+    CHAT_MAX_TOKENS: int = 512
+    CHAT_CONTEXT_MAX_CHARS: int = 3500
+    CHAT_HISTORY_MAX_MESSAGES: int = 8
+    CHAT_HISTORY_MESSAGE_MAX_CHARS: int = 1200
     REPORT_AI_TIMEOUT: float = 30.0
 
     # 置信度评估配置
@@ -44,7 +50,9 @@ class TOSKillSettings(BaseSettings):
     RAG_EMBED_MODEL: str = "BAAI/bge-small-zh-v1.5"
     RAG_MODEL_CACHE_DIR: str = str(Path.home() / ".cache" / "huggingface")
     RAG_ALLOW_DOWNLOAD: bool = True
-    RAG_MODEL_LOAD_TIMEOUT: int = 60
+    # 首次加载 sentence-transformers 可能需要较长时间，尤其是 Windows 冷启动。
+    # 本地缓存模型会直接从 snapshot 加载，不受下载超时影响。
+    RAG_MODEL_LOAD_TIMEOUT: int = 180
     RAG_KEYWORD_FALLBACK: bool = True
     SCAN_TIMEOUT: int = 300
     MAX_CONCURRENT_SCANS: int = 5
@@ -54,6 +62,8 @@ class TOSKillSettings(BaseSettings):
     CUSTOM_SCRIPTS_DIR: str = "scripts/custom"
     UPLOAD_DIR: str = "uploads"
     DB_PATH: str = "data/toskill.db"
+    CHECKPOINT_DB_PATH: str = "data/langgraph_checkpoints.db"
+    SCAN_PAUSE_TTL: int = 86400
     
     @property
     def REPORTS_PATH(self) -> Path:

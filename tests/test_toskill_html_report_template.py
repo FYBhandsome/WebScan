@@ -58,6 +58,8 @@ def test_toskill_html_report_uses_new_template_and_preserves_ai_sections():
     assert "立即切换为参数化查询" in html
     assert "Payload: 1&#x27; OR &#x27;1&#x27;=&#x27;1" in html
     assert "工具执行结果" in html
+    assert 'risk-summary-module' in html
+    assert 'class="risk-summary-content text-body md-content"' in html
     assert "session-123" in html
 
 

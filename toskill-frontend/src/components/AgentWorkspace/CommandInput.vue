@@ -2,7 +2,7 @@
   <div class="command-center" ref="containerRef" @click.stop>
     
     <transition name="pop-fade">
-      <div v-if="showActions" class="action-popover">
+      <div v-if="showActions && !chatMode" class="action-popover">
         <div class="popover-list">
           
           <button class="action-item" @click="handleAction('info')">
@@ -31,9 +31,10 @@
       </div>
     </transition>
 
-    <div class="input-wrapper" :class="{ 'is-focused': isFocused }">
+    <div class="input-wrapper" :class="{ 'is-focused': isFocused, 'is-chat-mode': chatMode }">
       
-      <button 
+      <button
+        v-if="!chatMode"
         class="action-toggle-btn" 
         :class="{ 'is-active': showActions }"
         @click="toggleActions"
@@ -46,6 +47,7 @@
       </button>
 
       <input 
+        ref="inputRef"
         type="text" 
         :value="modelValue"
         @input="$emit('update:modelValue', $event.target.value)"
@@ -77,12 +79,17 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 
 const props = defineProps({
   modelValue: String,
   disabled: Boolean,
-  isActive: Boolean
+  isActive: Boolean,
+  chatMode: Boolean,
+  placeholder: {
+    type: String,
+    default: '输入扫描目标或用自然语言与 Agent 对话...'
+  }
 })
 
 const emit = defineEmits(['update:modelValue', 'send', 'quick-action', 'stop'])
@@ -90,6 +97,16 @@ const emit = defineEmits(['update:modelValue', 'send', 'quick-action', 'stop'])
 const showActions = ref(false)
 const isFocused = ref(false)
 const containerRef = ref(null)
+const inputRef = ref(null)
+
+const syncPlaceholder = (value) => {
+  if (inputRef.value) inputRef.value.placeholder = value || ''
+}
+
+watch(() => props.placeholder, syncPlaceholder)
+watch(() => props.chatMode, (value) => {
+  if (value) showActions.value = false
+})
 
 // 切换菜单状态
 const toggleActions = () => {
@@ -119,6 +136,7 @@ const handleClickOutside = (event) => {
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  syncPlaceholder(props.placeholder)
 })
 
 onUnmounted(() => {
@@ -232,6 +250,11 @@ onUnmounted(() => {
 .input-wrapper.is-focused { 
   border-color: #10B981; 
   box-shadow: 0 8px 24px rgba(16, 185, 129, 0.12); 
+}
+
+.input-wrapper.is-chat-mode {
+  border-color: #6ee7b7;
+  background: #f0fdf4;
 }
 
 /* 左侧唤醒菜单按钮 */

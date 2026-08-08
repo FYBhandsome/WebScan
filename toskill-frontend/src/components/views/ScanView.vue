@@ -12,7 +12,7 @@
               type="text"
               id="scanTarget"
               v-model="form.target"
-              placeholder="例如: https://example.com"
+              placeholder="例如: example.com、192.168.1.10 或 https://example.com"
               @keydown.enter="startScan"
             >
           </div>
@@ -96,25 +96,17 @@
         </div>
 
         <div class="scan-progress" id="scanProgress" v-show="isScanning || progress > 0">
-          <div class="progress-overview">
-            <div class="stage-indicators">
-              <div class="stage-item" :class="{ active: progress >= 0, done: progress >= 30 }">
-                <span class="stage-dot"></span>
-                <span class="stage-label">初始化</span>
-              </div>
-              <div class="stage-connector" :class="{ done: progress >= 70 }"></div>
-              <div class="stage-item" :class="{ active: progress >= 30, done: progress >= 70 }">
-                <span class="stage-dot"></span>
-                <span class="stage-label">工具执行</span>
-              </div>
-              <div class="stage-connector" :class="{ done: progress >= 100 }"></div>
-              <div class="stage-item" :class="{ active: progress >= 70, done: progress >= 100 }">
-                <span class="stage-dot"></span>
-                <span class="stage-label">报告生成</span>
-              </div>
-            </div>
+          <div class="progress-header">
+            <span class="progress-title">{{ statusText }}</span>
+            <span class="progress-status">{{ Math.round(progress) }}%</span>
           </div>
-       
+          <div class="progress-bar">
+            <div class="progress-fill" :style="{ width: `${progress}%` }"></div>
+          </div>
+          <div class="current-tool-progress" v-if="currentTool || currentToolProgress">
+            <strong>{{ currentTool || '工具' }}</strong>
+            <span>{{ currentToolProgress || '执行中...' }}</span>
+          </div>
           <div class="task-list" id="taskList">
             <div class="task-item" v-for="(task, index) in tasks" :key="index">
               <span class="task-dot" :class="task.status"></span>
@@ -178,7 +170,26 @@
               </div>
             </div>
 
-            <div class="result-section" v-if="resultsData.report">
+            <div class="result-section" v-if="htmlReportLoading">
+              <h4>HTML 安全报告</h4>
+              <div class="report-loading">报告生成完成，正在加载 HTML 内容...</div>
+            </div>
+
+            <div class="result-section" v-else-if="htmlReportError">
+              <h4>HTML 安全报告</h4>
+              <div class="report-error">{{ htmlReportError }}</div>
+            </div>
+
+            <div class="result-section" v-else-if="htmlReportContent">
+              <h4>HTML 安全报告</h4>
+              <iframe
+                :srcdoc="htmlReportContent"
+                class="html-report-frame"
+                sandbox="allow-same-origin"
+              ></iframe>
+            </div>
+
+            <div class="result-section" v-if="resultsData.report && !htmlReportContent">
               <h4>扫描报告</h4>
               <div class="code-block">{{ resultsData.report }}</div>
             </div>
@@ -242,6 +253,13 @@ const completedTasksCount = ref(0)
 const totalTasksCount = ref(0)
 const resultsData = ref({})
 const scanHistory = ref([])
+const currentTool = ref('')
+const currentToolProgress = ref('')
+const htmlReportContent = ref('')
+const htmlReportLoading = ref(false)
+const htmlReportError = ref('')
+const activeRunId = ref('')
+const cancelRequested = ref(false)
 let persistTimer = null
 
 const taskModal = reactive({
@@ -336,7 +354,7 @@ const formatResult = (result) => {
 
 const isResultEmpty = () => {
   const d = resultsData.value
-  return !(d.completed_tasks?.length || d.vulnerabilities?.length || d.report || d.errors?.length)
+  return !(d.completed_tasks?.length || d.vulnerabilities?.length || d.report || d.html_report_url || d.errors?.length)
 }
 
 const openTaskResultModal = (taskName) => {
@@ -377,6 +395,7 @@ const formatElapsed = (ms) => {
 
 const initProgress = () => {
   isScanning.value = true
+  cancelRequested.value = false
   showResults.value = false
   progress.value = 0
   statusText.value = '正在初始化扫描...'
@@ -384,26 +403,159 @@ const initProgress = () => {
   completedTasksCount.value = 0
   totalTasksCount.value = 0
   resultsData.value = {}
+  currentTool.value = ''
+  currentToolProgress.value = ''
+  htmlReportContent.value = ''
+  htmlReportLoading.value = false
+  htmlReportError.value = ''
+  activeRunId.value = ''
 }
 
 const addTask = (taskName, status = 'pending') => {
-  if (!tasks.value.find(t => t.name === taskName)) {
-    tasks.value.push({ name: taskName, status, startTime: Date.now(), elapsed: null })
-    totalTasksCount.value++
+  if (!taskName) return null
+  const existing = tasks.value.find(t => t.name === taskName)
+  if (existing) {
+    if (status && status !== 'pending' && (existing.status === 'pending' || existing.status === 'error')) {
+      existing.status = status
+      if (status === 'running') existing.startTime = Date.now()
+    }
+    return existing
   }
+  const task = { name: taskName, status, startTime: Date.now(), elapsed: null, message: '', counted: false }
+  tasks.value.push(task)
+  totalTasksCount.value++
+  return task
 }
 
 const updateTaskStatus = (taskName, status) => {
-  const task = tasks.value.find(t => t.name === taskName)
+  const task = tasks.value.find(t => t.name === taskName) || addTask(taskName, status)
   if (task && task.status !== status) {
     task.status = status
     if (status === 'completed' || status === 'error') {
       task.elapsed = formatElapsed(Date.now() - task.startTime)
-      completedTasksCount.value++
+      if (!task.counted) {
+        task.counted = true
+        completedTasksCount.value++
+      }
     }
-    const pct = Math.round((completedTasksCount.value / (totalTasksCount.value || 1)) * 100)
-    progress.value = pct
+    const pct = Math.round((completedTasksCount.value / (totalTasksCount.value || 1)) * 80)
+    progress.value = Math.max(progress.value, pct)
     statusText.value = `已完成 ${completedTasksCount.value}/${totalTasksCount.value} 任务`
+  }
+}
+
+const payloadOf = (data) => data?.payload || {}
+
+const isAutomaticEvent = (data) => {
+  const payload = payloadOf(data)
+  const runType = payload.run_type || payload.state?.run_type || payload.details?.run_type
+  if (runType) return runType === 'automatic'
+  return Boolean(activeRunId.value && payload.run_id === activeRunId.value)
+}
+
+const extractReportFilename = (reportUrl) => {
+  if (!reportUrl) return ''
+  try {
+    const pathname = new URL(reportUrl, window.location.origin).pathname
+    return decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '')
+  } catch (error) {
+    return decodeURIComponent(String(reportUrl).split('/').pop() || '')
+  }
+}
+
+const loadHtmlReport = async (reportUrl) => {
+  const filename = extractReportFilename(reportUrl)
+  if (!filename) return
+
+  htmlReportLoading.value = true
+  htmlReportError.value = ''
+  try {
+    const result = await API.getReportContent(filename)
+    htmlReportContent.value = result.data?.content || result.data || ''
+    if (!htmlReportContent.value) htmlReportError.value = '报告内容为空'
+  } catch (error) {
+    htmlReportError.value = `HTML 报告加载失败: ${error.message}`
+  } finally {
+    htmlReportLoading.value = false
+  }
+}
+
+const mergeResultPayload = (data) => {
+  const payload = data?.payload || data?.data || data || {}
+  resultsData.value = { ...resultsData.value, ...payload }
+  if (payload.html_report_url) loadHtmlReport(payload.html_report_url)
+  return payload
+}
+
+const handleScanResult = (data) => {
+  const payload = mergeResultPayload(data)
+  isScanning.value = false
+  cancelRequested.value = false
+  progress.value = 100
+  statusText.value = '扫描完成'
+  showResults.value = true
+  const historyTarget = payload.target || form.target.trim()
+  if (historyTarget) {
+    form.target = historyTarget
+    globalState.currentTarget = historyTarget
+    addScanHistory(historyTarget)
+    scanHistory.value = getScanHistory()
+  }
+}
+
+const handleScanCancelled = (data) => {
+  const payload = mergeResultPayload(data)
+  isScanning.value = false
+  cancelRequested.value = false
+  progress.value = Number(payload.progress ?? progress.value) || 0
+  statusText.value = '扫描已取消'
+  showResults.value = Boolean(
+    payload.completed_tasks?.length ||
+    Object.keys(payload.tool_results || {}).length ||
+    payload.vulnerabilities?.length ||
+    payload.errors?.length
+  )
+  showToast('扫描已取消', 'warning')
+}
+
+const applyRunState = (state) => {
+  if (!state || state.run_type !== 'automatic') return
+  if (state.run_id) activeRunId.value = state.run_id
+  if (state.target) {
+    form.target = state.target
+    globalState.currentTarget = state.target
+  }
+  const modeMap = { info_collection: 'info', vuln_scan: 'vuln', full_scan: 'full' }
+  if (state.mode && modeMap[state.mode]) form.mode = modeMap[state.mode]
+
+  tasks.value = []
+  ;(state.planned_tasks || []).forEach(task => addTask(task, 'pending'))
+  ;(state.completed_tasks || []).forEach(task => updateTaskStatus(task, 'completed'))
+  ;(state.failed_tasks || []).forEach(task => updateTaskStatus(task, 'error'))
+  currentTool.value = state.current_tool || state.current_task || ''
+  progress.value = Number(state.progress) || progress.value
+  resultsData.value = {
+    ...resultsData.value,
+    target: state.target || resultsData.value.target,
+    completed_tasks: state.completed_tasks || [],
+    failed_tasks: state.failed_tasks || [],
+    tool_results: state.tool_results || {},
+    vulnerabilities: state.vulnerabilities || [],
+    errors: state.errors || [],
+    report: state.report || resultsData.value.report || '',
+    report_url: state.report_url || resultsData.value.report_url || '',
+    report_id: state.report_id || resultsData.value.report_id || '',
+    html_report_url: state.html_report_url || resultsData.value.html_report_url || ''
+  }
+  if (state.html_report_url) loadHtmlReport(state.html_report_url)
+
+  if (state.cancelled || state.scan_status === 'cancelled') {
+    handleScanCancelled({ payload: resultsData.value })
+  } else if (state.is_complete) {
+    handleScanResult({ payload: resultsData.value })
+  } else if (state.target) {
+    isScanning.value = true
+    statusText.value = `正在扫描 ${currentTool.value || '准备执行工具'}...`
   }
 }
 
@@ -415,88 +567,114 @@ const startScan = async () => {
   }
 
   initProgress()
+  globalState.currentTarget = target
 
   try {
-    let result
-    const sessionId = ws.getSessionId() || storageService.getActiveSessionId() || null
-    switch (form.mode) {
-      case 'info': result = await API.startInfoScan(target, sessionId); break
-      case 'vuln': result = await API.startVulnScan(target, sessionId); break
-      case 'full': result = await API.startFullScan(target, sessionId); break
+    if (!ws.isConnected()) await ws.connect()
+    if (!ws.startAutoScan(target, form.mode)) {
+      throw new Error('WebSocket 未连接')
     }
-
-    if (!result || !result.data) {
-      showToast('扫描返回数据异常', 'error')
-      isScanning.value = false
-      return
-    }
-
-    const hasCompletedTasks = result.data.completed_tasks && result.data.completed_tasks.length > 0
-    const hasVulnerabilities = result.data.vulnerabilities && result.data.vulnerabilities.length > 0
-    const hasResults = result.data.results && result.data.results.length > 0
-    const hasSuccesses = result.data.results && result.data.results.some(r => r.success)
-
-    if (hasCompletedTasks || hasVulnerabilities || (hasResults && hasSuccesses)) {
-      if (!result.data.tool_results && result.data.results) {
-        result.data.tool_results = {}
-        result.data.results.forEach(r => {
-          if (r.success) {
-            result.data.tool_results[r.tool] = r.result
-          }
-        })
-      }
-      handleScanResult(result.data)
-      showToast('扫描完成', 'success')
-      globalState.currentTarget = target
-    } else if (hasResults && !hasSuccesses) {
-      handleScanResult(result.data)
-      isScanning.value = false
-      showToast('扫描失败，所有工具执行异常', 'error')
-      globalState.currentTarget = target
-    } else {
-      statusText.value = '指令已发送，等待执行...'
-      globalState.currentTarget = target
-    }
+    statusText.value = '扫描请求已发送，等待工具启动...'
   } catch (error) {
     showToast('扫描启动失败: ' + error.message, 'error')
     isScanning.value = false
   }
 }
 
-const handleScanResult = (data) => {
-  isScanning.value = false
-  progress.value = 100
-  statusText.value = '扫描完成'
-  resultsData.value = data.payload || data.data || data
-  showResults.value = true
-  if (form.target.trim()) {
-    addScanHistory(form.target.trim())
-    scanHistory.value = getScanHistory()
-  }
-}
-
 const cancelScan = () => {
-  ws.send('cancel_scan', {})
-  isScanning.value = false
-  progress.value = 0
-  statusText.value = '已取消'
-  showToast('扫描已取消', 'warning')
+  if (!isScanning.value || cancelRequested.value) return
+  if (!ws.sendStopScan()) {
+    showToast('取消请求发送失败，请检查 WebSocket 连接', 'error')
+    return
+  }
+  cancelRequested.value = true
+  statusText.value = '正在取消扫描...'
 }
 
 const handleWSMessage = (data) => {
+  if (!data || !isAutomaticEvent(data)) return
+  const payload = payloadOf(data)
+
   switch (data.type) {
     case 'scan_started':
-      addTask(data.payload.task_id || '初始化任务', 'running')
-      progress.value = 10
+      if (payload.run_id) activeRunId.value = payload.run_id
+      progress.value = Math.max(progress.value, 2)
       statusText.value = '扫描已启动'
       break
 
-    case 'tool_execution_started':
-      addTask(data.payload.tool_name || data.payload.tool, 'running')
+    case 'scan_flow_started':
+      if (payload.run_id) activeRunId.value = payload.run_id
+      tasks.value = []
+      ;(payload.planned_tasks || []).forEach(task => addTask(task, 'pending'))
+      progress.value = Math.max(progress.value, 5)
+      statusText.value = `已准备 ${payload.total_tasks || tasks.value.length} 个工具`
       break
 
+    case 'task_started': {
+      const tool = payload.tool || payload.tool_name
+      currentTool.value = tool || ''
+      currentToolProgress.value = ''
+      addTask(tool, 'running')
+      statusText.value = `正在执行: ${tool}`
+      break
+    }
+
+    case 'tool_execution_started':
+      addTask(payload.tool_name || payload.tool, 'running')
+      break
+
+    case 'tool_progress': {
+      const tool = payload.tool || payload.tool_name
+      const task = addTask(tool, 'running')
+      if (task) task.message = payload.message || ''
+      currentTool.value = tool || currentTool.value
+      currentToolProgress.value = payload.message || ''
+      statusText.value = tool ? `${tool}: ${payload.message || '执行中'}` : (payload.message || '工具执行中')
+      break
+    }
+
+    case 'task_completed':
     case 'tool_execution_completed':
-      updateTaskStatus(data.payload.tool_name || data.payload.tool, 'completed')
+      updateTaskStatus(payload.tool_name || payload.tool, 'completed')
+      if (payload.raw_result !== undefined) {
+        resultsData.value.tool_results = { ...(resultsData.value.tool_results || {}), [payload.tool]: payload.raw_result }
+      }
+      break
+
+    case 'task_skipped':
+      updateTaskStatus(payload.tool, 'error')
+      showToast('任务跳过: ' + (payload.reason || ''), 'warning')
+      break
+
+    case 'task_error':
+      updateTaskStatus(payload.tool, 'error')
+      resultsData.value.errors = [...(resultsData.value.errors || []), payload.error || '工具执行失败']
+      showToast('任务失败: ' + (payload.error || ''), 'error')
+      break
+
+    case 'workflow_progress':
+      if (payload.progress_percent !== undefined) {
+        progress.value = Math.max(progress.value, Number(payload.progress_percent) || 0)
+        statusText.value = `${payload.stage || '扫描中'} - ${payload.completed || 0}/${payload.total || 0}`
+      }
+      break
+
+    case 'report_generation_started':
+      progress.value = Math.max(progress.value, 85)
+      statusText.value = '正在生成 HTML 安全报告...'
+      break
+
+    case 'report_generated':
+      mergeResultPayload(data)
+      progress.value = Math.max(progress.value, 95)
+      statusText.value = 'HTML 报告已生成，正在加载...'
+      break
+
+    case 'report_error':
+      htmlReportLoading.value = false
+      htmlReportError.value = payload.error || 'HTML 报告生成失败'
+      statusText.value = '报告生成失败'
+      showToast(htmlReportError.value, 'error')
       break
 
     case 'scan_completed':
@@ -505,72 +683,23 @@ const handleWSMessage = (data) => {
       break
 
     case 'scan_cancelled':
-      progress.value = 0
-      statusText.value = '扫描已取消'
+      handleScanCancelled(data)
+      break
+
+    case 'run_snapshot':
+      applyRunState(payload)
+      break
+
+    case 'status':
+      applyRunState(payload.state)
+      break
+
+    case 'error': {
+      const message = payload.message || payload.error || '未知错误'
       isScanning.value = false
-      showToast('扫描已取消', 'warning')
-      break
-
-    case 'error':
-      showToast('扫描错误: ' + (data.payload.error || data.payload.message), 'error')
-      break
-
-    case 'task_skipped':
-      updateTaskStatus(data.payload.tool, 'error')
-      showToast('任务跳过: ' + data.payload.reason, 'warning')
-      break
-
-    case 'task_error':
-      updateTaskStatus(data.payload.tool, 'error')
-      showToast('任务失败: ' + data.payload.error, 'error')
-      break
-
-    case 'workflow_progress':
-      const pData = data.payload
-      if (pData.progress_percent !== undefined) {
-        progress.value = pData.progress_percent
-        statusText.value = `${pData.stage || '扫描中'} - ${pData.completed}/${pData.total}`
-      }
-      break
-
-    case 'ai_decision':
-      const dData = data.payload
-      progress.value = Math.round(((dData.completed_tasks?.length || 0) / (dData.total_tasks || 1)) * 100)
-      statusText.value = `AI决策: 下一步 ${dData.next_task}`
-      break
-
-    case 'status': {
-      const state = data.payload?.state
-      if (!state) break
-      if (state.target) {
-        form.target = state.target
-        globalState.currentTarget = state.target
-      }
-      const modeMap = { info_collection: 'info', vuln_scan: 'vuln', full_scan: 'full' }
-      if (state.target && state.mode && modeMap[state.mode]) form.mode = modeMap[state.mode]
-      if (state.is_complete) {
-        isScanning.value = false
-        progress.value = 100
-        statusText.value = '扫描完成'
-        resultsData.value = {
-          ...resultsData.value,
-          completed_tasks: state.completed_tasks || [],
-          tool_results: state.tool_results || {},
-          vulnerabilities: state.vulnerabilities || [],
-          errors: state.errors || [],
-          report: state.report || ''
-        }
-        showResults.value = Boolean(
-          state.completed_tasks?.length ||
-          Object.keys(state.tool_results || {}).length ||
-          state.vulnerabilities?.length ||
-          state.errors?.length ||
-          state.report
-        )
-      } else if (state.target && !showResults.value) {
-        isScanning.value = true
-        statusText.value = '正在恢复扫描状态...'
-      }
+      cancelRequested.value = false
+      statusText.value = '扫描失败'
+      showToast('扫描错误: ' + message, 'error')
       break
     }
   }
@@ -585,7 +714,13 @@ watch(
 onMounted(() => {
   scanHistory.value = getScanHistory()
   ws.on('*', handleWSMessage)
-  if (ws.isConnected()) ws.sendGetStatus()
+  const ready = ws.isConnected() ? Promise.resolve() : ws.connect()
+  ready
+    .then(() => ws.sendGetStatus())
+    .catch(() => {})
+  if (resultsData.value.html_report_url) {
+    loadHtmlReport(resultsData.value.html_report_url)
+  }
 })
 
 onUnmounted(() => {
@@ -812,15 +947,6 @@ select:focus {
   padding: 0;
 }
 
-.progress-overview {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  margin-bottom: 16px;
-  min-height: 80px;
-}
-
 .progress-ring {
   flex-shrink: 0;
 }
@@ -840,74 +966,12 @@ select:focus {
   color: var(--text-primary);
 }
 
-.stage-indicators {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  flex: 1;
-  min-width: 0;
-  justify-content: center;
-}
-
-.stage-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  opacity: 0.35;
-  transition: opacity 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
-}
-
-.stage-item.active {
-  opacity: 0.8;
-}
-
-.stage-item.done {
-  opacity: 1;
-}
-
-.stage-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--border-light);
-  transition: background 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
-}
-
-.stage-item.active .stage-dot {
-  background: var(--text-primary);
-}
-
-.stage-item.done .stage-dot {
-  background: var(--success-color);
-}
-
-.stage-label {
-  font-size: 13px;
-  font-weight: 500; 
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.stage-connector {
-  width: 300px;
-  flex-shrink: 0;
-  height: 1.5px;
-  background: var(--border-light);
-  margin: 0 4px;
-  align-self: center;
-  transition: background 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
-}
-
-.stage-connector.done {
-  background: var(--text-primary);
-}
-
 .progress-header {
+  width: 60%;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  margin: 0 auto 8px;
 }
 
 .progress-title {
@@ -922,11 +986,12 @@ select:focus {
 }
 
 .progress-bar {
+  width: 60%;
   height: 4px;
   background: var(--border-light);
   border-radius: 2px;
   overflow: hidden;
-  margin-bottom: 16px;
+  margin: 0 auto 16px;
 }
 
 .progress-fill {
@@ -934,6 +999,48 @@ select:focus {
   background: var(--text-primary);
   border-radius: 2px;
   transition: width 0.35s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.current-tool-progress {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 22px;
+  margin: -4px 0 12px;
+  padding: 8px 10px;
+  background: var(--bg-secondary, #f5f5f5);
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.current-tool-progress strong {
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.current-tool-progress span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-loading,
+.report-error {
+  padding: 16px;
+  color: var(--text-secondary);
+}
+
+.report-error {
+  color: var(--error-color, #ff3b30);
+}
+
+.html-report-frame {
+  display: block;
+  width: 100%;
+  min-height: 720px;
+  border: 1px solid var(--border-light, #e5e7eb);
+  background: #fff;
 }
 
 .task-list {
@@ -1403,9 +1510,12 @@ select:focus {
     grid-template-columns: 1fr;
   }
 
-  .progress-overview {
-    flex-direction: column;
-    align-items: flex-start;
+  .progress-header {
+    width: 100%;
+  }
+
+  .progress-bar {
+    width: 100%;
   }
 
   .results-summary {

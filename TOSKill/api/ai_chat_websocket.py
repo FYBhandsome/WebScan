@@ -6,26 +6,106 @@ AI对话WebSocket处理器
 import logging
 import asyncio
 import json
-from typing import Dict, Any, List
-from datetime import datetime
+from typing import Dict, Any, List, Optional
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from openai import AsyncOpenAI
 
 from TOSKill.AI.state import create_initial_state, append_chat, update_state
 from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm as _get_llm
+from TOSKill.AI.auto_scan import AutoScanRunner
 from TOSKill.AI.core import CHAT_SYSTEM_PROMPT
+from TOSKill.AI.decision_context import build_decision_context
 from TOSKill.AI.tools import get_tool_by_name, get_all_tool_names
 from TOSKill.AI.log_collector import log_collector
 from TOSKill.utils.error_handler import create_error_response, format_tool_error, ErrorSource, ErrorCategory
 from TOSKill.utils.log_writer import log_info, log_warn, log_error, log_success, log_debug
+from TOSKill.utils.target import normalize_scan_target
+from TOSKill.config import settings
+from TOSKill.api.scan_protocol import (
+    PAUSE_FOR_CHAT_MESSAGE,
+    RESUME_SCAN_MESSAGE,
+    SCAN_PROTOCOL_REQUESTS,
+    SCAN_PROTOCOL_VERSION,
+    ScanProtocolValidationError,
+    normalize_scan_protocol_payload,
+    protocol_response,
+)
 
 router = APIRouter(prefix="/ai-chat", tags=["AI对话WebSocket"])
 logger = logging.getLogger(__name__)
 
 
 SCAN_MODE_MAP = {"info": "info_collection", "vuln": "vuln_scan", "full": "full_scan"}
+
+
+def _truncate_chat_text(value: Any, limit: int) -> str:
+    """Limit prompt fields without failing on non-string scan results."""
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}\n[内容已截断]"
+
+
+def _build_chat_messages(state: Dict[str, Any], history: List[Dict[str, Any]], content: str) -> List[Dict[str, str]]:
+    """Build a bounded, MaaS-compatible chat-completions message list.
+
+    The MaaS endpoint used by this project accepts the OpenAI chat schema but
+    returned 400 for the previous LangChain request shape.  Keep a single
+    system message and cap all dynamic context so a paused scan cannot make a
+    simple chat message exceed the provider's request limits.
+    """
+    decision_context = state.get("decision_context") or {}
+    compact_decision_context = {
+        key: decision_context.get(key)
+        for key in (
+            "version",
+            "user_constraints",
+            "requested_tasks",
+            "excluded_tasks",
+            "priority_tasks",
+            "risk_tolerance",
+            "latest_request",
+        )
+        if decision_context.get(key) not in (None, "", [], {})
+    }
+    scan_context = {
+        "target": state.get("target", ""),
+        "mode": state.get("mode", ""),
+        "completed_tasks": (state.get("completed_tasks") or [])[-20:],
+        "next_task": state.get("next_task", ""),
+        "vulnerabilities": (state.get("vulnerabilities") or [])[-5:],
+        "errors": (state.get("errors") or [])[-5:],
+        "report": _truncate_chat_text(state.get("report", ""), 800),
+        "scan_status": state.get("scan_status", ""),
+        "decision_context": compact_decision_context,
+    }
+
+    system_content = CHAT_SYSTEM_PROMPT.strip()
+    if any(scan_context.values()):
+        context_json = json.dumps(scan_context, ensure_ascii=False, default=str)
+        system_content = (
+            f"{system_content}\n\n"
+            "当前会话的扫描上下文如下，请结合它回答后续问题：\n"
+            f"{_truncate_chat_text(context_json, settings.CHAT_CONTEXT_MAX_CHARS)}"
+        )
+
+    messages: List[Dict[str, str]] = [{"role": "system", "content": system_content}]
+    for item in history[-settings.CHAT_HISTORY_MAX_MESSAGES:]:
+        role = item.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        message_content = _truncate_chat_text(
+            item.get("content", ""), settings.CHAT_HISTORY_MESSAGE_MAX_CHARS
+        )
+        if message_content:
+            messages.append({"role": role, "content": message_content})
+
+    if not any(item["role"] == "user" for item in messages[1:]):
+        messages.append({"role": "user", "content": _truncate_chat_text(content, settings.CHAT_HISTORY_MESSAGE_MAX_CHARS)})
+    return messages
 
 RUN_EVENT_TYPES = {
     "scan_started", "scan_flow_started", "scan_completed", "scan_cancelled", "scan_terminated",
@@ -34,6 +114,7 @@ RUN_EVENT_TYPES = {
     "direct_tool_started", "direct_tool_completed", "direct_tool_error",
     "report_generation_started", "report_generated", "report_error", "run_snapshot",
     "interaction_required", "high_risk_vulnerability_detected", "tool_confirm_required",
+    "scan_paused_for_chat", "scan_resume_requested", "decision_replanned", "workflow_resumed",
 }
 
 
@@ -43,12 +124,16 @@ class AIChatManager:
     def __init__(self):
         self.connections: Dict[str, WebSocket] = {}
         self.tasks: Dict[str, asyncio.Task] = {}
+        self.run_types: Dict[str, str] = {}
+        self._cancelled_automatic_sessions = set()
         self.llm = None
+        self.chat_client: Optional[AsyncOpenAI] = None
         self._event_sequences: Dict[str, int] = {}
         self._run_events: Dict[str, List[Dict]] = {}
         self._disconnect_cleanup: Dict[str, asyncio.Task] = {}
         # 多会话订阅：client_id -> {session_id1, session_id2, ...}
         self._subscriptions: Dict[str, set] = {}
+        self._workflow_locks: Dict[str, asyncio.Lock] = {}
         # WebSocket -> client_id 映射
         self._ws_to_client: Dict[WebSocket, str] = {}
     
@@ -56,6 +141,17 @@ class AIChatManager:
         if not self.llm:
             self.llm = _get_llm()
         return self.llm
+
+    def _get_chat_client(self) -> AsyncOpenAI:
+        """Use the same OpenAI-compatible request form as model_check.py."""
+        if self.chat_client is None:
+            self.chat_client = AsyncOpenAI(
+                api_key=settings.OPENAI_API_KEY,
+                base_url=settings.OPENAI_BASE_URL,
+                timeout=120.0,
+                max_retries=2,
+            )
+        return self.chat_client
     
     async def connect(self, websocket: WebSocket, session_id: str = None) -> str:
         await websocket.accept()
@@ -155,6 +251,7 @@ class AIChatManager:
         }
         payload.update({
             "run_id": run_id,
+            "run_type": payload.get("run_type") or state.get("run_type", "interactive"),
             "step_id": payload.get("step_id") or step_id,
             "sequence": self._event_sequences[run_id],
             "event": message_type,
@@ -181,6 +278,18 @@ class AIChatManager:
                 "tool_results": state.get("tool_results", {}),
                 "is_complete": state.get("is_complete", False),
                 "total_tasks": len(state.get("planned_tasks", [])),
+                "progress": state.get("progress", 0),
+                "current_tool": state.get("current_tool", ""),
+                "current_task": state.get("current_task", ""),
+                "scan_status": state.get("scan_status", ""),
+                "cancelled": state.get("cancelled", False),
+                "run_type": state.get("run_type", "interactive"),
+                "vulnerabilities": state.get("vulnerabilities", []),
+                "errors": state.get("errors", []),
+                "report": state.get("report", ""),
+                "report_url": state.get("report_url", ""),
+                "report_id": state.get("report_id", ""),
+                "html_report_url": state.get("html_report_url", ""),
                 "logs": log_collector.get_logs(session_id)[-100:],
             },
         })
@@ -195,6 +304,11 @@ class AIChatManager:
 
     async def _send_multi(self, session_id: str, message: Dict):
         """向所有订阅了 session_id 的连接发送消息（用于后台任务事件广播）"""
+        if (
+            session_id in self._cancelled_automatic_sessions
+            and message.get("type") != "scan_cancelled"
+        ):
+            return
         message = self._decorate_run_event(session_id, message)
         # 在消息 payload 中注入 session_id，供前端路由
         payload = dict(message.get("payload") or {})
@@ -227,6 +341,8 @@ class AIChatManager:
                     "details": extra
                 }
             }
+        if extra.get("run_type"):
+            error_response.setdefault("payload", {})["run_type"] = extra["run_type"]
         await self._send(session_id, error_response)
 
     def _matches_pending_interaction(self, session_id: str, payload: Dict, expected_type: str) -> bool:
@@ -244,6 +360,21 @@ class AIChatManager:
     async def handle_message(self, session_id: str, message: Dict):
         msg_type = message.get("type")
         payload = message.get("payload", {})
+
+        if msg_type in SCAN_PROTOCOL_REQUESTS:
+            try:
+                payload = normalize_scan_protocol_payload(msg_type, payload)
+            except ScanProtocolValidationError as exc:
+                request_id = payload.get("request_id") if isinstance(payload, dict) else None
+                await self._send_error(
+                    session_id,
+                    str(exc),
+                    error_code="INVALID_PROTOCOL_PAYLOAD",
+                    request_id=request_id or uuid4().hex,
+                    protocol_version=SCAN_PROTOCOL_VERSION,
+                    **exc.details,
+                )
+                return
         
         logger.info(f"[{session_id}] 收到WebSocket消息: type={msg_type}, payload={payload}")
         log_debug(f"收到消息: {msg_type}", category="api", node="ai_chat", session_id=session_id,
@@ -253,7 +384,10 @@ class AIChatManager:
             "user_input": self._handle_user_input,
             "user_confirm": self._handle_user_confirm,
             "user_choice": self._handle_user_confirm,
+            "pause_for_chat": self._handle_pause_for_chat,
+            "resume_scan": self._handle_resume_scan,
             "start_scan": self._handle_start_scan,
+            "start_auto_scan": self._handle_start_auto_scan,
             "stop_scan": self._handle_stop_scan,
             "get_history": self._handle_get_history,
             "get_status": self._handle_get_status,
@@ -288,6 +422,15 @@ class AIChatManager:
     
     async def _handle_user_confirm(self, session_id: str, payload: Dict):
         choice = payload.get("choice", "confirm")
+
+        # 兼容旧版前端：交互卡片的“聊天”仍发送 choice=3，但后端统一进入
+        # 可恢复的 pause_for_chat 状态，而不是继续走普通 chat 节点。
+        if str(choice) in ("3", "chat", "chat_pause", "pause_for_chat"):
+            pause_payload = dict(payload)
+            pause_payload.setdefault("request_id", uuid4().hex)
+            pause_payload.setdefault("protocol_version", SCAN_PROTOCOL_VERSION)
+            await self._handle_pause_for_chat(session_id, pause_payload)
+            return
         
         orchestrator = get_agent_orchestrator()
         await orchestrator._ensure_initialized()
@@ -328,7 +471,342 @@ class AIChatManager:
                 logger.error(f"[{session_id}] 恢复工作流失败: {e}")
                 await self._send_error(session_id, f"恢复工作流失败: {str(e)}")
     
+    async def _handle_pause_for_chat(self, session_id: str, payload: Dict):
+        """Serialize pause requests so duplicate clicks/retries share one pause snapshot."""
+        lock = self._workflow_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            await self._handle_pause_for_chat_impl(session_id, payload)
+
+    async def _handle_pause_for_chat_impl(self, session_id: str, payload: Dict):
+        """在人机交互节点保存可恢复的聊天暂停状态。"""
+        request_id = payload.get("request_id") or uuid4().hex
+        state = memory_store.get_session(session_id)
+        if not state:
+            await self._send_error(
+                session_id,
+                "扫描会话不存在",
+                error_code="SCAN_SESSION_NOT_FOUND",
+                request_id=request_id,
+                protocol_version=SCAN_PROTOCOL_VERSION,
+            )
+            return
+
+        if state.get("run_type", "interactive") != "interactive":
+            await self._send_error(
+                session_id,
+                "只有控制台人机交互扫描支持暂停聊天",
+                error_code="PAUSE_NOT_SUPPORTED",
+                run_type=state.get("run_type", "interactive"),
+                request_id=request_id,
+                protocol_version=SCAN_PROTOCOL_VERSION,
+            )
+            return
+
+        pending = memory_store.get_pending_interaction(session_id)
+        if not pending or pending.get("type") != "interaction_required":
+            await self._send_error(
+                session_id,
+                "当前不在可暂停的用户交互节点",
+                error_code="PAUSE_NOT_ALLOWED",
+                request_id=request_id,
+                protocol_version=SCAN_PROTOCOL_VERSION,
+            )
+            return
+
+        interaction_id = payload.get("interaction_id")
+        pending_id = pending.get("interaction_id")
+        if interaction_id and pending_id and interaction_id != pending_id:
+            await self._send_error(
+                session_id,
+                "交互请求已过期",
+                error_code="STALE_INTERACTION",
+                request_id=request_id,
+                protocol_version=SCAN_PROTOCOL_VERSION,
+            )
+            return
+
+        if state.get("current_tool"):
+            await self._send_error(
+                session_id,
+                "当前工具正在执行，请等待任务回到用户交互节点后再暂停",
+                error_code="PAUSE_UNSAFE_BOUNDARY",
+                request_id=request_id,
+                protocol_version=SCAN_PROTOCOL_VERSION,
+            )
+            return
+
+        existing_pause = state.get("pause_info") or {}
+        if state.get("scan_status") == "paused_for_chat" and existing_pause.get("pause_id"):
+            await self._send_multi(session_id, {
+                "type": "scan_paused_for_chat",
+                "payload": protocol_response(
+                    session_id,
+                    request_id,
+                    pause_id=existing_pause.get("pause_id"),
+                    interaction_id=existing_pause.get("interaction_id", ""),
+                    next_task=existing_pause.get("next_task", ""),
+                    paused_at=existing_pause.get("paused_at"),
+                    expires_at=existing_pause.get("expires_at"),
+                    state_version=existing_pause.get("state_version", 0),
+                    status="paused",
+                    chat_enabled=True,
+                    can_resume=True,
+                ),
+            })
+            return
+
+        now = datetime.now()
+        pause_id = f"{session_id}:pause:{uuid4().hex[:12]}"
+        pause_info = {
+            "pause_id": pause_id,
+            "session_id": session_id,
+            "interaction_id": pending_id or interaction_id or "",
+            "source_node": state.get("workflow_node") or "user_interact",
+            "next_task": state.get("next_task") or pending.get("payload", {}).get("next_task", ""),
+            "status": "paused",
+            "request_id": request_id,
+            "protocol_version": SCAN_PROTOCOL_VERSION,
+            "paused_at": now.isoformat(),
+            "expires_at": (now + timedelta(seconds=int(getattr(settings, "SCAN_PAUSE_TTL", 86400)))).isoformat(),
+            "state_version": memory_store.get_session_version(session_id),
+        }
+
+        state = update_state(
+            state,
+            scan_status="paused_for_chat",
+            workflow_node="user_interact",
+            pause_info=pause_info,
+            chat_mode=True,
+            is_complete=False,
+            cancelled=False,
+            last_activity_time=now.isoformat(),
+        )
+        version = memory_store.save_session(session_id, state)
+        pause_info["state_version"] = version
+        state = update_state(state, pause_info=pause_info)
+        memory_store.save_session(session_id, state)
+        if not memory_store.save_scan_pause(session_id, pause_info):
+            await self._send_error(
+                session_id,
+                "扫描暂停状态持久化失败",
+                error_code="PAUSE_PERSIST_FAILED",
+                request_id=request_id,
+                protocol_version=SCAN_PROTOCOL_VERSION,
+            )
+            return
+
+        await self._send_multi(session_id, {
+            "type": "scan_paused_for_chat",
+            "payload": protocol_response(
+                session_id,
+                request_id,
+                pause_id=pause_id,
+                interaction_id=pause_info["interaction_id"],
+                next_task=pause_info["next_task"],
+                paused_at=pause_info["paused_at"],
+                expires_at=pause_info["expires_at"],
+                state_version=pause_info["state_version"],
+                status="paused",
+                chat_enabled=True,
+                can_resume=True,
+            ),
+        })
+
+    async def _handle_resume_scan(self, session_id: str, payload: Dict):
+        """恢复聊天暂停的交互式工作流，并在恢复前重新执行 AI 决策。"""
+        request_id = payload.get("request_id") or uuid4().hex
+        state = memory_store.get_session(session_id)
+        if not state:
+            await self._send_error(
+                session_id,
+                "扫描会话不存在",
+                error_code="SCAN_SESSION_NOT_FOUND",
+                request_id=request_id,
+                protocol_version=SCAN_PROTOCOL_VERSION,
+            )
+            return
+        if state.get("run_type", "interactive") != "interactive":
+            await self._send_error(
+                session_id,
+                "当前扫描模式不支持恢复",
+                error_code="RESUME_NOT_SUPPORTED",
+                request_id=request_id,
+                protocol_version=SCAN_PROTOCOL_VERSION,
+            )
+            return
+
+        pause_info = state.get("pause_info") or {}
+        pause_id = payload.get("pause_id") or pause_info.get("pause_id")
+        if state.get("scan_status") != "paused_for_chat" or not pause_id:
+            await self._send_error(
+                session_id,
+                "当前没有可恢复的聊天暂停",
+                error_code="RESUME_NOT_ALLOWED",
+                request_id=request_id,
+                protocol_version=SCAN_PROTOCOL_VERSION,
+            )
+            return
+        if pause_info.get("pause_id") != pause_id:
+            await self._send_error(
+                session_id,
+                "暂停请求已过期",
+                error_code="STALE_PAUSE",
+                request_id=request_id,
+                protocol_version=SCAN_PROTOCOL_VERSION,
+            )
+            return
+
+        lock = self._workflow_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            current = memory_store.get_session(session_id) or state
+            if current.get("scan_status") != "paused_for_chat":
+                await self._send_error(
+                    session_id,
+                    "扫描已被其他请求恢复",
+                    error_code="RESUME_ALREADY_HANDLED",
+                    request_id=request_id,
+                    protocol_version=SCAN_PROTOCOL_VERSION,
+                )
+                return
+
+            now = datetime.now()
+            resuming_pause = {**pause_info, "status": "resuming", "resume_requested_at": now.isoformat()}
+            current = update_state(
+                current,
+                scan_status="replanning",
+                workflow_node="resume_after_chat",
+                pause_info=resuming_pause,
+                chat_mode=False,
+                last_activity_time=now.isoformat(),
+            )
+            memory_store.save_session(session_id, current)
+            memory_store.update_scan_pause(pause_id, status="resuming", resume_requested_at=now.isoformat())
+
+            await self._send_multi(session_id, {
+                "type": "scan_resume_requested",
+                "payload": protocol_response(
+                    session_id,
+                    request_id,
+                    pause_id=pause_id,
+                    status="replanning",
+                ),
+            })
+
+            orchestrator = get_agent_orchestrator()
+            await orchestrator._ensure_initialized()
+            try:
+                async def _resume_ws_callback(message: Dict):
+                    await self._send_multi(session_id, message)
+
+                orchestrator.set_websocket_callback(session_id, _resume_ws_callback)
+                result = await orchestrator.resume_workflow(
+                    session_id,
+                    {"choice": "resume_after_chat", "action": "resume_after_chat", "pause_id": pause_id},
+                )
+                stored = memory_store.get_session(session_id) or {}
+                pending = memory_store.get_pending_interaction(session_id)
+                final_status = "waiting_user" if pending else (
+                    "completed" if stored.get("is_complete") else "running"
+                )
+                completed_pause = {
+                    **pause_info,
+                    "status": "resumed",
+                    "resumed_at": datetime.now().isoformat(),
+                }
+                stored = update_state(
+                    stored,
+                    scan_status=final_status,
+                    workflow_node="user_interact" if pending else stored.get("workflow_node", ""),
+                    pause_info={},
+                    chat_mode=False,
+                    last_activity_time=datetime.now().isoformat(),
+                )
+                memory_store.save_session(session_id, stored)
+                memory_store.update_scan_pause(
+                    pause_id,
+                    status="resumed",
+                    resumed_at=completed_pause["resumed_at"],
+                )
+
+                await self._send_multi(session_id, {
+                    "type": "decision_replanned",
+                    "payload": protocol_response(
+                        session_id,
+                        request_id,
+                        pause_id=pause_id,
+                        decision_context_version=stored.get("decision_context_version", 0),
+                        next_task=stored.get("next_task", ""),
+                        scan_status=final_status,
+                    ),
+                })
+                await self._send_multi(session_id, {
+                    "type": "workflow_resumed",
+                    "payload": protocol_response(
+                        session_id,
+                        request_id,
+                        pause_id=pause_id,
+                        replanned=True,
+                        next_task=stored.get("next_task", ""),
+                        completed_tasks=stored.get("completed_tasks", []),
+                        scan_status=final_status,
+                        is_complete=stored.get("is_complete", False),
+                        result_available=result is not None,
+                    ),
+                })
+            except Exception as exc:
+                logger.exception(f"[{session_id}] 恢复聊天暂停失败: {exc}")
+                failed_state = memory_store.get_session(session_id) or current
+                failed_state = update_state(
+                    failed_state,
+                    scan_status="paused_for_chat",
+                    workflow_node="user_interact",
+                    pause_info={**pause_info, "status": "paused"},
+                    chat_mode=True,
+                    last_activity_time=datetime.now().isoformat(),
+                )
+                memory_store.save_session(session_id, failed_state)
+                memory_store.update_scan_pause(pause_id, status="paused")
+                await self._send_error(
+                    session_id,
+                    f"恢复扫描失败: {exc}",
+                    error_code="RESUME_FAILED",
+                    request_id=request_id,
+                    protocol_version=SCAN_PROTOCOL_VERSION,
+                )
+
     async def _handle_start_scan(self, session_id: str, payload: Dict):
+        """Start an interactive scan with per-session duplicate protection."""
+        lock = self._workflow_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            existing_task = self.tasks.get(session_id)
+            if existing_task and not existing_task.done():
+                await self._send_error(
+                    session_id,
+                    "当前会话已有扫描正在执行",
+                    error_code="SCAN_ALREADY_RUNNING",
+                    run_type="interactive",
+                )
+                return
+
+            existing_state = memory_store.get_session(session_id) or {}
+            if (
+                existing_state.get("run_type", "interactive") == "interactive"
+                and existing_state.get("target")
+                and existing_state.get("scan_status") in {"scanning", "replanning", "paused_for_chat"}
+                and not existing_state.get("is_complete")
+                and not existing_state.get("cancelled")
+            ):
+                await self._send_error(
+                    session_id,
+                    "当前会话已有扫描正在执行",
+                    error_code="SCAN_ALREADY_RUNNING",
+                    run_type="interactive",
+                )
+                return
+
+            await self._handle_start_scan_impl(session_id, payload)
+
+    async def _handle_start_scan_impl(self, session_id: str, payload: Dict):
         target = payload.get("target", "")
         scan_mode = payload.get("scan_mode", "info")
         
@@ -342,14 +820,13 @@ class AIChatManager:
             await self._send_error(session_id, "目标地址不能为空", error_code="INVALID_TARGET")
             return
         
-        import re
-        target = target.strip()
-        target_pattern = r'^[a-zA-Z0-9\.-]+(:\d+)?$|^https?://[a-zA-Z0-9\.-]+(:\d+)?(/.*)?$'
-        if not re.match(target_pattern, target):
+        try:
+            target = normalize_scan_target(target)
+        except ValueError as exc:
             logger.error(f"[{session_id}] 目标地址格式无效: {target}")
             await self._send_error(
                 session_id, 
-                f"目标地址格式无效: {target}", 
+                str(exc),
                 error_code="INVALID_TARGET",
                 valid_formats=["example.com", "192.168.1.1", "http://example.com", "example.com:8080"]
             )
@@ -361,12 +838,154 @@ class AIChatManager:
         state = create_initial_state(target=target, task_id=session_id, mode=mode)
         state["websocket_session_id"] = session_id
         state["run_id"] = f"{session_id}:{uuid4().hex[:8]}"
+        state["run_type"] = "interactive"
         memory_store.save_session(session_id, state)
         
         logger.info(f"[{session_id}] 创建扫描任务，目标: {target}, 模式: {mode}")
         log_collector.add_log(session_id, "handle_start_scan", "info", f"扫描开始: 目标={target}, 模式={mode}")
         self.tasks[session_id] = asyncio.create_task(self._run_scan(session_id, target, mode, state))
+        self.run_types[session_id] = "interactive"
         logger.info(f"[{session_id}] 扫描任务已创建并启动")
+
+    async def _handle_start_auto_scan(self, session_id: str, payload: Dict):
+        """启动扫描页使用的全自动扫描，不进入控制台交互图。"""
+        existing_task = self.tasks.get(session_id)
+        if existing_task and not existing_task.done():
+            await self._send_error(
+                session_id,
+                "当前会话已有扫描正在执行",
+                error_code="SCAN_ALREADY_RUNNING",
+                run_type="automatic",
+            )
+            return
+
+        try:
+            target = normalize_scan_target(payload.get("target", ""))
+        except ValueError as exc:
+            await self._send_error(
+                session_id,
+                str(exc),
+                error_code="INVALID_TARGET",
+                valid_formats=["example.com", "192.168.1.1", "http://example.com", "example.com:8080"],
+                run_type="automatic",
+            )
+            return
+
+        scan_mode = payload.get("scan_mode", "info")
+        if scan_mode not in SCAN_MODE_MAP:
+            await self._send_error(
+                session_id,
+                f"不支持的扫描模式: {scan_mode}",
+                error_code="INVALID_SCAN_MODE",
+                run_type="automatic",
+            )
+            return
+
+        mode = SCAN_MODE_MAP[scan_mode]
+        state = create_initial_state(target=target, task_id=session_id, mode=mode)
+        state["websocket_session_id"] = session_id
+        state["run_id"] = f"{session_id}:{uuid4().hex[:8]}"
+        state["run_type"] = "automatic"
+        state["scan_mode"] = "全自动"
+        state["scan_status"] = "queued"
+        state["progress"] = 0
+        memory_store.save_session(session_id, state)
+        self.run_types[session_id] = "automatic"
+        self._cancelled_automatic_sessions.discard(session_id)
+
+        async def emit(message: Dict[str, Any]):
+            await self._send_multi(session_id, message)
+
+        memory_store.set_websocket_callback(session_id, emit)
+        runner = AutoScanRunner(
+            session_id=session_id,
+            target=target,
+            mode=mode,
+            emit=emit,
+        )
+        self.tasks[session_id] = asyncio.create_task(
+            self._run_auto_scan(session_id, target, runner, state)
+        )
+
+        await self._send(session_id, {
+            "type": "scan_started",
+            "payload": {
+                "task_id": session_id,
+                "session_id": session_id,
+                "target": target,
+                "scan_mode": scan_mode,
+                "mode": mode,
+                "run_type": "automatic",
+                "status": "running",
+            },
+        })
+
+    async def _run_auto_scan(
+        self,
+        session_id: str,
+        target: str,
+        runner: AutoScanRunner,
+        state: Dict[str, Any],
+    ):
+        logger.info(f"[{session_id}] 全自动扫描开始: target={target}, mode={runner.mode}")
+        try:
+            result = await runner.run(state)
+            memory_store.save_session(session_id, result)
+            await self._send(session_id, {
+                "type": "scan_completed",
+                "payload": self._build_scan_result_payload(result, target, "automatic"),
+            })
+        except asyncio.CancelledError:
+            logger.info(f"[{session_id}] 全自动扫描任务已取消")
+            raise
+        except Exception as exc:
+            logger.exception(f"[{session_id}] 全自动扫描异常: {exc}")
+            current = memory_store.get_session(session_id) or state
+            errors = list(current.get("errors", []))
+            errors.append(str(exc))
+            current = update_state(
+                current,
+                errors=errors,
+                is_complete=True,
+                scan_status="failed",
+                run_type="automatic",
+            )
+            memory_store.save_session(session_id, current)
+            await self._send_error(
+                session_id,
+                f"全自动扫描失败: {exc}",
+                error_code="AUTO_SCAN_FAILED",
+                run_type="automatic",
+            )
+        finally:
+            if memory_store.get_websocket_callback(session_id) is not None:
+                memory_store.clear_websocket_callback(session_id)
+
+    @staticmethod
+    def _build_scan_result_payload(state: Dict[str, Any], target: str, run_type: str) -> Dict[str, Any]:
+        return {
+            "session_id": state.get("task_id", ""),
+            "target": target,
+            "mode": state.get("mode", ""),
+            "scan_mode": state.get("scan_mode", "全自动"),
+            "run_type": run_type,
+            "completed_tasks": state.get("completed_tasks", []),
+            "failed_tasks": state.get("failed_tasks", []),
+            "tool_results": state.get("tool_results", {}),
+            "vulnerabilities": state.get("vulnerabilities", []),
+            "vulnerabilities_count": len(state.get("vulnerabilities", [])),
+            "errors": state.get("errors", []),
+            "scan_status": state.get("scan_status", ""),
+            "current_tool": state.get("current_tool", ""),
+            "current_task": state.get("current_task", ""),
+            "cancelled": state.get("cancelled", False),
+            "scan_summary": state.get("scan_summary", {}),
+            "report": state.get("report", ""),
+            "report_url": state.get("report_url", ""),
+            "report_id": state.get("report_id", ""),
+            "html_report_url": state.get("html_report_url", ""),
+            "progress": state.get("progress", 100),
+        }
     
     async def _run_scan(self, session_id: str, target: str, mode: str, state: Dict):
         logger.info(f"[{session_id}] ========== _run_scan 开始执行 ==========")
@@ -403,10 +1022,14 @@ class AIChatManager:
             
             if result and result.get("__interrupt__"):
                 logger.info(f"[{session_id}] 工作流中断，等待用户交互")
-                memory_store.save_session(session_id, result)
+                persisted_result, _ = orchestrator._merge_workflow_result(session_id, result)
+                if persisted_result:
+                    memory_store.save_session(session_id, persisted_result)
                 return
             
-            memory_store.save_session(session_id, result)
+            persisted_result, _ = orchestrator._merge_workflow_result(session_id, result)
+            if persisted_result:
+                memory_store.save_session(session_id, persisted_result)
             
             if result and result.get("is_complete"):
                 await self._send(session_id, {
@@ -447,7 +1070,21 @@ class AIChatManager:
                         "vulnerabilities": state.get("vulnerabilities", []),
                         "errors": state.get("errors", []),
                         "report": state.get("report", ""),
-                        "is_complete": state.get("is_complete", False)
+                        "is_complete": state.get("is_complete", False),
+                        "progress": state.get("progress", 0),
+                        "current_tool": state.get("current_tool", ""),
+                        "current_task": state.get("current_task", ""),
+                        "scan_status": state.get("scan_status", ""),
+                        "cancelled": state.get("cancelled", False),
+                        "run_type": state.get("run_type", "interactive"),
+                        "state_version": state.get("state_version", 0),
+                        "workflow_node": state.get("workflow_node", ""),
+                        "pause_info": state.get("pause_info", {}),
+                        "chat_mode": state.get("chat_mode", False),
+                        "decision_context_version": state.get("decision_context_version", 0),
+                        "report_url": state.get("report_url", ""),
+                        "report_id": state.get("report_id", ""),
+                        "html_report_url": state.get("html_report_url", ""),
                     }
                 }
             })
@@ -459,40 +1096,74 @@ class AIChatManager:
         if not content:
             return
         
-        memory_store.append_chat(session_id, "user", content)
-        
         try:
-            messages = [SystemMessage(content=CHAT_SYSTEM_PROMPT)]
             state = memory_store.get_session(session_id) or {}
-            scan_context = {
-                "target": state.get("target", ""),
-                "mode": state.get("mode", ""),
-                "completed_tasks": state.get("completed_tasks", []),
-                "vulnerabilities": state.get("vulnerabilities", []),
-                "errors": state.get("errors", []),
-                "report": state.get("report", ""),
-            }
-            if any(scan_context.values()):
-                context_json = json.dumps(scan_context, ensure_ascii=False, default=str)
-                messages.append(SystemMessage(
-                    content=f"当前会话的扫描上下文如下，请结合它回答后续问题：\n{context_json[:6000]}"
-                ))
-            for msg in memory_store.get_chat_history(session_id)[-10:]:
-                if msg["role"] == "user":
-                    messages.append(HumanMessage(content=msg["content"]))
-                elif msg["role"] == "assistant":
-                    messages.append(AIMessage(content=msg["content"]))
-            
-            if not any(isinstance(m, HumanMessage) for m in messages[1:]):
-                messages.append(HumanMessage(content=content))
-            
-            response = await self._get_llm().ainvoke(messages)
-            ai_content = response.content
+            is_paused_scan_chat = state.get("scan_status") == "paused_for_chat"
+            memory_store.append_chat(session_id, "user", content)
+
+            if is_paused_scan_chat:
+                context_version = int(state.get("decision_context_version", 0) or 0) + 1
+                decision_context = build_decision_context(
+                    state.get("decision_context"),
+                    content,
+                    version=context_version,
+                    pause_id=payload.get("pause_id") or (state.get("pause_info") or {}).get("pause_id", ""),
+                )
+                state = update_state(
+                    append_chat(state, "user", content),
+                    decision_context=decision_context,
+                    decision_context_version=context_version,
+                    last_activity_time=datetime.now().isoformat(),
+                )
+                memory_store.save_session(session_id, state)
+
+            messages = _build_chat_messages(
+                state, memory_store.get_chat_history(session_id), content
+            )
+            logger.info(
+                "[%s] 调用 MaaS 聊天接口: messages=%s, context_chars=%s, max_tokens=%s",
+                session_id,
+                len(messages),
+                len(messages[0]["content"]),
+                settings.CHAT_MAX_TOKENS,
+            )
+            response = await self._get_chat_client().chat.completions.create(
+                model=settings.MODEL_ID,
+                messages=messages,
+                temperature=settings.LLM_TEMPERATURE,
+                max_tokens=settings.CHAT_MAX_TOKENS,
+            )
+            if not response.choices:
+                raise RuntimeError("AI模型未返回候选回复")
+            ai_content = response.choices[0].message.content or ""
+            if not isinstance(ai_content, str):
+                ai_content = str(ai_content)
+            if not ai_content.strip():
+                raise RuntimeError("AI模型返回空回复")
             memory_store.append_chat(session_id, "assistant", ai_content)
+
+            if is_paused_scan_chat:
+                latest = memory_store.get_session(session_id) or state
+                memory_store.save_session(session_id, append_chat(latest, "assistant", ai_content))
+                await self._send(session_id, {
+                    "type": "decision_context_updated",
+                    "payload": {
+                        "session_id": session_id,
+                        "pause_id": (latest.get("pause_info") or {}).get("pause_id", ""),
+                        "decision_context_version": latest.get("decision_context_version", 0),
+                    },
+                })
             
             await self._send(session_id, {"type": "ai_message", "payload": {"content": ai_content}})
         except Exception as e:
-            await self._send_error(session_id, f"AI对话失败: {str(e)}")
+            logger.exception("[%s] AI对话请求失败", session_id)
+            await self._send_error(
+                session_id,
+                f"AI对话失败: {str(e)}",
+                error_code="AI_MODEL_ERROR",
+                provider_error=str(e),
+                message_count=len(locals().get("messages", [])),
+            )
     
     async def _handle_execute_tool(self, session_id: str, payload: Dict):
         tool_name = payload.get("tool_name", "")
@@ -702,6 +1373,45 @@ class AIChatManager:
     
     async def _handle_stop_scan(self, session_id: str, payload: Dict):
         """停止指定会话的扫描任务"""
+        if self.run_types.get(session_id) == "automatic":
+            self._cancelled_automatic_sessions.add(session_id)
+            task = self.tasks.get(session_id)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=5.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+            self.tasks.pop(session_id, None)
+
+            state = memory_store.get_session(session_id)
+            if state:
+                state = update_state(
+                    state,
+                    is_complete=True,
+                    cancelled=True,
+                    scan_status="cancelled",
+                    run_type="automatic",
+                )
+                memory_store.save_session(session_id, state)
+            memory_store.clear_websocket_callback(session_id)
+
+            await self._send_multi(session_id, {
+                "type": "scan_cancelled",
+                "payload": {
+                    "session_id": session_id,
+                    "run_type": "automatic",
+                    "reason": "用户手动停止",
+                    "completed_tasks": state.get("completed_tasks", []) if state else [],
+                    "tool_results": state.get("tool_results", {}) if state else {},
+                    "vulnerabilities": state.get("vulnerabilities", []) if state else [],
+                    "errors": state.get("errors", []) if state else [],
+                    "progress": state.get("progress", 0) if state else 0,
+                },
+            })
+            logger.info(f"[{session_id}] 全自动扫描已停止")
+            return
+
         task = self.tasks.get(session_id)
         if task and not task.done():
             task.cancel()

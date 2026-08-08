@@ -23,6 +23,16 @@ import sqlite3
 from langgraph.graph import StateGraph, END
 from langgraph.types import interrupt, Command
 from langgraph.checkpoint.memory import MemorySaver
+try:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+except ImportError:  # pragma: no cover - optional until runtime dependencies are installed
+    SqliteSaver = None
+try:
+    import aiosqlite
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+except ImportError:  # pragma: no cover - optional until runtime dependencies are installed
+    aiosqlite = None
+    AsyncSqliteSaver = None
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from .state import ScanState, create_initial_state, append_chat, update_state
@@ -645,6 +655,22 @@ class MemoryStore:
                 )
             """)
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS scan_pauses (
+                    pause_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    interaction_id TEXT NOT NULL,
+                    state_version INTEGER NOT NULL,
+                    source_node TEXT NOT NULL,
+                    next_task TEXT,
+                    status TEXT NOT NULL,
+                    pause_json TEXT NOT NULL,
+                    paused_at TEXT NOT NULL,
+                    resumed_at TEXT,
+                    expires_at TEXT,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS script_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     tool_name TEXT NOT NULL,
@@ -666,6 +692,9 @@ class MemoryStore:
             """)
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_decision_session ON decision_history(session_id, timestamp)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_scan_pause_session ON scan_pauses(session_id, status)
             """)
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_script_history ON script_history(tool_name, created_at)
@@ -756,8 +785,8 @@ class MemoryStore:
                 )
                 self._session_metadata[session_id] = metadata
             
-            old_state = self._sessions.get(session_id)
-            old_metadata = self._session_metadata.get(session_id)
+            state = dict(state)
+            state["state_version"] = metadata.version
             
             try:
                 state_json = json.dumps(state, ensure_ascii=False, default=str)
@@ -797,6 +826,70 @@ class MemoryStore:
         """获取会话版本号"""
         metadata = self._session_metadata.get(session_id)
         return metadata.version if metadata else 0
+
+    def save_scan_pause(self, session_id: str, pause_info: Dict[str, Any]) -> bool:
+        """持久化一次扫描暂停快照。"""
+        pause_id = pause_info.get("pause_id")
+        if not pause_id:
+            return False
+
+        conn = self._get_db_conn()
+        if not conn:
+            return False
+
+        try:
+            with conn:
+                conn.execute(
+                    """INSERT INTO scan_pauses
+                       (pause_id, session_id, interaction_id, state_version, source_node,
+                        next_task, status, pause_json, paused_at, resumed_at, expires_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(pause_id) DO UPDATE SET
+                           status = excluded.status,
+                           pause_json = excluded.pause_json,
+                           resumed_at = excluded.resumed_at,
+                           expires_at = excluded.expires_at""",
+                    (
+                        pause_id,
+                        session_id,
+                        pause_info.get("interaction_id", ""),
+                        int(pause_info.get("state_version", 0) or 0),
+                        pause_info.get("source_node", "user_interact"),
+                        pause_info.get("next_task", ""),
+                        pause_info.get("status", "paused"),
+                        json.dumps(pause_info, ensure_ascii=False, default=str),
+                        pause_info.get("paused_at", datetime.now().isoformat()),
+                        pause_info.get("resumed_at"),
+                        pause_info.get("expires_at"),
+                    ),
+                )
+            return True
+        except Exception as e:
+            logger.error(f"保存扫描暂停记录失败: {e}")
+            return False
+
+    def get_scan_pause(self, pause_id: str) -> Optional[Dict[str, Any]]:
+        """读取扫描暂停记录。"""
+        conn = self._get_db_conn()
+        if not conn or not pause_id:
+            return None
+        try:
+            row = conn.execute(
+                "SELECT pause_json FROM scan_pauses WHERE pause_id = ?",
+                (pause_id,),
+            ).fetchone()
+            return json.loads(row[0]) if row else None
+        except Exception as e:
+            logger.error(f"读取扫描暂停记录失败: {e}")
+            return None
+
+    def update_scan_pause(self, pause_id: str, **updates) -> Optional[Dict[str, Any]]:
+        """更新扫描暂停记录并返回最新快照。"""
+        current = self.get_scan_pause(pause_id)
+        if not current:
+            return None
+        current = {**current, **updates}
+        return current if self.save_scan_pause(current.get("session_id", ""), current) else None
     
     def update_session(self, session_id: str, **kwargs) -> Optional[ScanState]:
         """更新会话状态的部分字段（带版本控制）"""
@@ -813,6 +906,8 @@ class MemoryStore:
                 else:
                     metadata = SessionMetadata(created_at=now, updated_at=now, last_activity=now)
                     self._session_metadata[session_id] = metadata
+
+                state["state_version"] = metadata.version
 
                 try:
                     state_json = json.dumps(state, ensure_ascii=False, default=str)
@@ -870,10 +965,13 @@ class MemoryStore:
         expired_count = 0
         
         with self._lock:
-            expired = [
-                sid for sid, ts in self._session_timestamps.items()
-                if (now - ts).total_seconds() > self._session_ttl
-            ]
+            pause_ttl = int(getattr(settings, "SCAN_PAUSE_TTL", 86400))
+            expired = []
+            for sid, ts in self._session_timestamps.items():
+                state = self._sessions.get(sid, {})
+                ttl = pause_ttl if state.get("scan_status") == "paused_for_chat" else self._session_ttl
+                if (now - ts).total_seconds() > ttl:
+                    expired.append(sid)
             
             for sid in expired:
                 expired_count += 1
@@ -956,7 +1054,8 @@ class MemoryStore:
             return
         
         try:
-            self._cleanup_expired_data_on_startup(max_age_hours=2.0)
+            startup_retention = max(2.0, float(getattr(settings, "SCAN_PAUSE_TTL", 86400)) / 3600.0)
+            self._cleanup_expired_data_on_startup(max_age_hours=startup_retention)
             
             cursor = conn.execute(
                 "SELECT session_id, state_json, created_at, updated_at, version FROM sessions"
@@ -2175,17 +2274,118 @@ async def script_generate_process(state: ScanState) -> ScanState:
     )
 
 
+def _context_task_names(items: Any) -> List[str]:
+    """Normalize legacy string tasks and structured task records."""
+    names = []
+    for item in items or []:
+        if isinstance(item, dict):
+            name = item.get("task") or item.get("name") or item.get("tool")
+        else:
+            name = item
+        if name:
+            names.append(str(name).strip())
+    return names
+
+
+def _unique_tasks(tasks: List[str]) -> List[str]:
+    return list(dict.fromkeys(task for task in tasks if task))
+
+
+def _build_decision_plan(
+    state: ScanState,
+    tool_sequence: List[str],
+    done: List[str],
+    failed: List[str],
+) -> Dict[str, Any]:
+    """Build the safe candidate set used by both prompt and task assignment.
+
+    The decision context is treated as a policy layer around the LLM:
+    excluded tasks are never candidates, explicit requested/priority tasks are
+    placed first, and the normal scan sequence is only used as a fallback.
+    """
+    decision_context = state.get("decision_context", {}) or {}
+    done_set = set(done)
+    failed_set = set(failed)
+    skipped_set = set(state.get("skipped_tasks", []) or [])
+    excluded = set(_context_task_names(decision_context.get("excluded_tasks")))
+    requested = _context_task_names(decision_context.get("requested_tasks"))
+    priority = _context_task_names(decision_context.get("priority_tasks"))
+
+    remaining = [
+        task for task in tool_sequence
+        if task not in done_set and task not in failed_set and task not in skipped_set
+    ]
+    eligible = [task for task in remaining if task not in excluded]
+    explicit = _unique_tasks(
+        [task for task in priority + requested if task in eligible]
+    )
+    ordered_candidates = _unique_tasks(explicit + eligible)
+    newly_skipped = [task for task in remaining if task in excluded]
+
+    return {
+        "remaining": remaining,
+        "eligible": eligible,
+        "explicit": explicit,
+        "ordered_candidates": ordered_candidates,
+        "excluded": sorted(excluded),
+        "newly_skipped": newly_skipped,
+        "is_replanning": bool(
+            state.get("user_choice") in ("resume_after_chat", "__resume_after_chat__")
+            or state.get("pending_action_type") == "resume_after_chat"
+        ),
+    }
+
+
+def _merge_skipped_tasks(state: ScanState, tasks: List[str]) -> List[str]:
+    return _unique_tasks(list(state.get("skipped_tasks", []) or []) + list(tasks or []))
+
+
 def build_react_prompt(state: dict, rag_strategy: str) -> str:
     """构建 ReACT 格式的提示词"""
     target = state.get("target", "")
     mode = state.get("mode", "full_scan")
     done = list(state.get("tool_results", {}).keys())
     failed = state.get("failed_tasks", [])
-    last_result = state.get("task_result", {})
     tool_sequence = get_tool_sequence(mode)
-    remaining = [t for t in tool_sequence if t not in done and t not in failed]
+    decision_plan = _build_decision_plan(state, tool_sequence, done, failed)
+    remaining = decision_plan["eligible"]
+    decision_candidates = decision_plan["ordered_candidates"]
     
     max_rag_length = 2000 if len(remaining) > 3 else 1500
+    decision_context = state.get("decision_context", {}) or {}
+    recent_chat = [
+        item for item in state.get("chat_history", [])[-12:]
+        if item.get("role") == "user"
+    ]
+    recent_chat_text = "\n".join(
+        f"- {item.get('content', '')[:500]}" for item in recent_chat
+    ) or "none"
+    task_result = state.get("task_result", {}) or {}
+    decision_messages = []
+    for item in list(decision_context.get("messages") or [])[-12:]:
+        if not isinstance(item, dict):
+            continue
+        decision_messages.append({
+            "role": item.get("role", "user"),
+            "content": str(item.get("content", ""))[:1200],
+            "timestamp": item.get("timestamp", ""),
+        })
+    prompt_decision_context = {
+        **decision_context,
+        "messages": decision_messages,
+    }
+    structured_decision_factors = {
+        "requested_tasks": list(decision_context.get("requested_tasks") or []),
+        "excluded_tasks": list(decision_context.get("excluded_tasks") or []),
+        "priority_tasks": list(decision_context.get("priority_tasks") or []),
+        "user_constraints": list(decision_context.get("user_constraints") or []),
+        "risk_tolerance": decision_context.get("risk_tolerance", ""),
+        "latest_request": decision_context.get("latest_request", ""),
+    }
+    task_result_json = json.dumps(task_result, ensure_ascii=False, default=str)[:4000]
+    decision_context_json = json.dumps(
+        prompt_decision_context, ensure_ascii=False, default=str
+    )[:8000]
     rag_content = rag_strategy[:max_rag_length] if rag_strategy else '暂无专业知识参考'
 
     prompt = f"""你是一名Web安全扫描专家，使用ReACT框架进行决策。
@@ -2195,8 +2395,22 @@ def build_react_prompt(state: dict, rag_strategy: str) -> str:
 - 扫描模式: {mode}
 - 已完成任务: {done if done else '无'}
 - 已失败任务: {failed if failed else '无'}
-- 剩余任务: {remaining[:10]}
-- 上一步结果: {str(last_result)[:500]}
+- 可执行剩余任务: {remaining[:10]}
+- 结构化上下文优先候选: {decision_candidates[:10]}
+- 明确排除任务: {decision_plan['excluded'][:10]}
+- 上一步任务结果: {task_result_json or '无'}
+
+## 暂停聊天后的决策上下文
+{decision_context_json or '{}'}
+- 结构化决策因素: {json.dumps(structured_decision_factors, ensure_ascii=False, default=str)[:5000]}
+- 最近用户需求：{recent_chat_text}
+
+## 决策规则
+- 用户在暂停期间的最新需求和明确排除项优先级最高。
+- requested_tasks 表示用户明确要求优先考虑的任务；如果任务仍在剩余任务中，应优先选择。
+- excluded_tasks 表示用户明确要求跳过或禁止的任务；不得选择其中的任务。
+- priority_tasks 和 user_constraints 用于调整任务顺序、执行方式和风险边界。
+- 只能从剩余任务中选择 Action；如果用户要求跳过某任务，不要选择该工具。
 
 ## 专业知识参考 (RAG)
 {rag_content}
@@ -2205,7 +2419,7 @@ def build_react_prompt(state: dict, rag_strategy: str) -> str:
 请按以下格式输出，不要输出其他内容：
 
 Thought: [分析当前状态，判断下一步应执行什么工具]
-Action: [工具名称，必须是剩余任务列表中的一个]
+Action: [工具名称，必须是可执行剩余任务或结构化上下文优先候选中的一个]
 Reason: [选择该工具的简短理由]
 """
     return prompt
@@ -2219,7 +2433,7 @@ def parse_react_response(response_text: str) -> dict:
         if line.lower().startswith("thought:"):
             result["thought"] = line.split(":", 1)[1].strip()
         elif line.lower().startswith("action:"):
-            result["action"] = line.split(":", 1)[1].strip()
+            result["action"] = line.split(":", 1)[1].strip().strip("`[]{} \t")
         elif line.lower().startswith("reason:"):
             result["reason"] = line.split(":", 1)[1].strip()
     return result
@@ -2237,16 +2451,25 @@ async def ai_decision(state: ScanState) -> ScanState:
     # 检查是否需要跳过剩余任务（高危漏洞确认后用户选择停止）
     if state.get("skip_remaining_tasks"):
         logger.info(f"[{session_id}] 跳过剩余任务，直接生成报告")
-        return update_state(state, next_task="end", need_generate_script=False)
+        return update_state(
+            state,
+            next_task="end",
+            need_generate_script=False,
+            workflow_node="ai_decision",
+            scan_status="reporting",
+        )
     
     done = list(state.get("tool_results", {}).keys())
     failed = state.get("failed_tasks", [])
     mode = state.get("mode", "full_scan")
     tool_sequence = get_tool_sequence(mode)
     ws_callback = memory_store.get_websocket_callback(session_id)
-    
-    remaining_tasks = [t for t in tool_sequence if t not in done and t not in failed]
-    next_candidate = remaining_tasks[0] if remaining_tasks else ""
+    decision_plan = _build_decision_plan(state, tool_sequence, done, failed)
+    remaining_tasks = decision_plan["eligible"]
+    decision_candidates = decision_plan["ordered_candidates"]
+    explicit_candidates = decision_plan["explicit"]
+    context_skipped_tasks = decision_plan["newly_skipped"]
+    next_candidate = decision_candidates[0] if decision_candidates else ""
     
     # =================== RAG 知识库检索（强制） ===================
     target = state.get("target", "")
@@ -2285,7 +2508,9 @@ async def ai_decision(state: ScanState) -> ScanState:
         react_decision = None
     # ========================================================
     
-    progress_percent = round((len(done) / len(tool_sequence)) * 100, 1) if tool_sequence else 0
+    skipped_tasks = _merge_skipped_tasks(state, context_skipped_tasks)
+    progress_count = len(set(done) | set(skipped_tasks))
+    progress_percent = round((progress_count / len(tool_sequence)) * 100, 1) if tool_sequence else 0
     
     if ws_callback:
         try:
@@ -2307,23 +2532,75 @@ async def ai_decision(state: ScanState) -> ScanState:
     # =================== 任务分配（ReACT 优先） ===================
     next_task_assigned = None
     is_react_selected = False
-    if react_decision and react_decision.get("action"):
-        react_action = react_decision["action"]
-        if react_action in tool_sequence and react_action not in done and react_action not in failed:
+    decision_source = "default_sequence"
+    react_action = (react_decision or {}).get("action", "")
+
+    if explicit_candidates:
+        # Explicit user requests are a hard preference during replanning. The
+        # model can choose among them, but cannot silently replace them with
+        # the old sequence or with an excluded task.
+        if react_action in explicit_candidates:
             next_task_assigned = react_action
             is_react_selected = True
-            logger.info(f"✅ ReACT 决策分配任务：{react_action}")
+            decision_source = "structured_context+react"
+            logger.info(f"ReACT 在结构化优先候选中选择任务：{react_action}")
+        else:
+            next_task_assigned = explicit_candidates[0]
+            decision_source = "structured_context"
+            if react_action:
+                logger.info(
+                    f"结构化上下文覆盖 ReACT 任务选择：{react_action} -> {next_task_assigned}"
+                )
+    elif react_action in remaining_tasks:
+        next_task_assigned = react_action
+        is_react_selected = True
+        decision_source = "react"
+        logger.info(f"ReACT 决策分配任务：{react_action}")
+    elif remaining_tasks:
+        next_task_assigned = remaining_tasks[0]
+        logger.warning(
+            f"ReACT 决策未选出可执行任务，回退到安全候选：{remaining_tasks}"
+        )
 
-    if next_task_assigned is None and len(done) < len(tool_sequence):
-        remaining = [t for t in tool_sequence if t not in done and t not in failed]
-        logger.warning(f"ReACT 决策未选出任务，回退到默认序列。待处理任务: {remaining}")
-        next_task_assigned = remaining[0] if remaining else None
-        is_react_selected = False
-        
-        if next_task_assigned is None:
-            logger.info("所有任务已完成")
-            return update_state(state, next_task="end", need_generate_script=False,
-                rag_last_strategy=rag_strategy)
+    if next_task_assigned is None:
+        logger.info(
+            f"没有可执行的剩余任务，排除任务={decision_plan['excluded']}，结束扫描"
+        )
+        if ws_callback:
+            try:
+                await ws_callback({
+                    "type": "workflow_progress",
+                    "payload": {
+                        "stage": mode,
+                        "status": "completed",
+                        "completed": progress_count,
+                        "total": len(tool_sequence),
+                        "progress_percent": 100 if tool_sequence else 0,
+                        "skipped_tasks": skipped_tasks,
+                        "reason": "decision_context_excluded_remaining_tasks",
+                    },
+                })
+                await ws_callback({
+                    "type": "ai_decision_complete",
+                    "payload": {
+                        "completed_tasks": done,
+                        "skipped_tasks": skipped_tasks,
+                        "total_tasks": len(tool_sequence),
+                        "reason": "decision_context_excluded_remaining_tasks",
+                    },
+                })
+            except Exception as e:
+                logger.error(f"WebSocket 回调失败: {e}")
+        return update_state(
+            state,
+            next_task="end",
+            skipped_tasks=skipped_tasks,
+            need_generate_script=False,
+            rag_last_strategy=rag_strategy,
+            workflow_node="ai_decision",
+            scan_status="reporting",
+            chat_mode=False,
+        )
 
     if next_task_assigned:
         t = next_task_assigned
@@ -2334,6 +2611,10 @@ async def ai_decision(state: ScanState) -> ScanState:
             "next_task": t,
             "completed_count": len(done),
             "total_count": len(tool_sequence),
+            "decision_source": decision_source,
+            "decision_context_version": (state.get("decision_context") or {}).get("version", 0),
+            "excluded_tasks": decision_plan["excluded"],
+            "skipped_tasks": skipped_tasks,
             "rag_reference": rag_strategy[:500] if rag_strategy else "",
             "rag_sources": rag_sources,
             "rag_used": len(rag_strategy) > 0,
@@ -2352,12 +2633,15 @@ async def ai_decision(state: ScanState) -> ScanState:
                     "payload": {
                         "next_task": t,
                         "completed_tasks": done,
+                        "skipped_tasks": skipped_tasks,
                         "total_tasks": len(tool_sequence),
                         "progress": f"{len(done)}/{len(tool_sequence)}",
                         "progress_percent": progress_percent,
                         "rag_enabled": True,
                         "rag_reference": rag_strategy,
                         "react_selected": is_react_selected,
+                        "decision_source": decision_source,
+                        "decision_context_version": (state.get("decision_context") or {}).get("version", 0),
                         "react_thought": react_decision.get("thought", "") if react_decision else ""
                     }
                 })
@@ -2367,8 +2651,12 @@ async def ai_decision(state: ScanState) -> ScanState:
         return update_state(state,
             next_task=t,
             need_generate_script=False,
+            skipped_tasks=skipped_tasks,
             decision_history=decision_history,
             rag_last_strategy=rag_strategy,
+            workflow_node="ai_decision",
+            scan_status="waiting_user",
+            chat_mode=False,
             last_activity_time=datetime.now().isoformat()
         )
     # ================================================================
@@ -2401,7 +2689,9 @@ async def ai_decision(state: ScanState) -> ScanState:
             logger.error(f"WebSocket推送失败: {e}")
     
     return update_state(state, next_task="end", need_generate_script=False,
-        rag_last_strategy=rag_strategy)
+        rag_last_strategy=rag_strategy,
+        workflow_node="ai_decision",
+        scan_status="reporting")
 
 
 async def user_interact(state: ScanState) -> ScanState:
@@ -2439,6 +2729,16 @@ async def user_interact(state: ScanState) -> ScanState:
     
     logger.info(f"🎯 目标：{target} | 模式：{mode} | 下一个任务：{next_task}")
     logger.info("[1]执行 [2]停止 [3]聊天 [4]上传脚本 [5]生成脚本")
+
+    state = update_state(
+        state,
+        scan_status="waiting_user",
+        workflow_node="user_interact",
+        current_task=next_task,
+        chat_mode=False,
+        last_activity_time=datetime.now().isoformat(),
+    )
+    memory_store.save_session(session_id, state)
     
     ws_callback = memory_store.get_websocket_callback(session_id)
     logger.info(f"获取到 WebSocket 回调: {ws_callback}")
@@ -2464,16 +2764,41 @@ async def user_interact(state: ScanState) -> ScanState:
 
     memory_store.clear_pending_interaction(session_id)
     
+    control_action = ""
     if isinstance(user_choice, dict):
+        control_action = str(user_choice.get("action", "") or "")
+        if control_action == "resume_after_chat":
+            resume_context = {
+                key: user_choice[key]
+                for key in (
+                    "decision_context",
+                    "decision_context_version",
+                    "chat_history",
+                )
+                if key in user_choice
+            }
+            if resume_context:
+                state = update_state(state, **resume_context)
         user_choice = user_choice.get("choice", "1")
     
     logger.info(f"👤 用户选择: {user_choice}")
     
     choice = str(user_choice)
+    is_replanning = control_action == "resume_after_chat"
     return update_state(
         state,
         user_choice=choice,
-        authorized_task=next_task if choice == "1" else ""
+        authorized_task=next_task if choice == "1" else "",
+        workflow_node="ai_decision" if is_replanning else "router",
+        pending_action_type=control_action,
+        scan_status=(
+            "running" if is_replanning
+            else
+            "running" if choice == "1"
+            else "reporting" if choice == "2"
+            else state.get("scan_status", "waiting_user")
+        ),
+        chat_mode=False if is_replanning else state.get("chat_mode", False),
     )
 
 
@@ -2488,6 +2813,15 @@ async def execute_task(state: ScanState) -> ScanState:
     
     target = state.get("target", "")
     session_id = state.get("websocket_session_id") or state.get("task_id")
+    state = update_state(
+        state,
+        current_tool=task,
+        current_task=task,
+        workflow_node="execute_task",
+        scan_status="running",
+        last_activity_time=datetime.now().isoformat(),
+    )
+    memory_store.save_session(session_id, state)
     log_collector.add_log(session_id, "execute_task", "info", f"任务开始: {task}, 目标={target}")
     ws_callback = memory_store.get_websocket_callback(session_id)
     
@@ -2608,7 +2942,10 @@ async def execute_task(state: ScanState) -> ScanState:
         return update_state(state, 
             errors=state.get("errors", []) + [f"工具 {task} 不存在，已跳过"],
             completed_tasks=completed_tasks,
-            next_task="continue")
+            next_task="continue",
+            current_tool="",
+            workflow_node="ai_decision",
+            last_activity_time=datetime.now().isoformat())
     
     try:
         from .tools import invoke_tool_with_auth, extract_auth_from_result
@@ -2636,7 +2973,14 @@ async def execute_task(state: ScanState) -> ScanState:
                     logger.error(f"WebSocket推送失败: {e}")
             
             if retry_count < AUTH_MAX_RETRY_COUNT:
-                state = update_state(state, need_reauth=True, auth_retry_count=retry_count)
+                state = update_state(
+                    state,
+                    need_reauth=True,
+                    auth_retry_count=retry_count,
+                    current_tool="",
+                    workflow_node="user_interact",
+                    scan_status="waiting_user",
+                )
                 return state
             else:
                 logger.error(f"[{session_id}] 认证重试次数已达上限")
@@ -2762,6 +3106,9 @@ async def execute_task(state: ScanState) -> ScanState:
             task_history=task_history,
             stage_status=stage_status,
             task_result={"tool": task, "result": res},
+            current_tool="",
+            workflow_node="vulnerability_check",
+            scan_status="running",
             last_activity_time=datetime.now().isoformat()
         )
         
@@ -2807,7 +3154,11 @@ async def execute_task(state: ScanState) -> ScanState:
             failed_tasks=failed_tasks,
             current_task_vulnerabilities=[],
             authorized_task="",
-            next_task="continue"
+            next_task="continue",
+            current_tool="",
+            workflow_node="ai_decision",
+            scan_status="running",
+            last_activity_time=datetime.now().isoformat(),
         )
 
 
@@ -3335,6 +3686,8 @@ def router(state: ScanState) -> str:
         return "script_manager"
     
     c = user_choice
+    if c in ("resume_after_chat", "__resume_after_chat__"):
+        return "ai_decision"
     if c == "1":
         return "execute_task"
     if c == "2":
@@ -3352,9 +3705,60 @@ def router(state: ScanState) -> str:
     return "user_interact"
 
 
-def create_checkpointer(db_path: str = "data/langgraph_checkpoints.db") -> MemorySaver:
-    """创建内存检查点器"""
-    return MemorySaver()
+def create_checkpointer(db_path: str = None):
+    """创建持久化 SQLite 检查点器。
+
+    LangGraph 的业务状态保存在 MemoryStore 中，工作流游标则由该
+    checkpointer 保存。两者必须同时存在，才能在服务重启后恢复 interrupt。
+    """
+    if SqliteSaver is None:
+        raise RuntimeError(
+            "缺少 langgraph-checkpoint-sqlite，请先安装项目 requirements.txt 中的依赖"
+        )
+
+    db_path = db_path or getattr(settings, "CHECKPOINT_DB_PATH", "data/langgraph_checkpoints.db")
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    checkpointer = SqliteSaver(conn)
+    checkpointer.setup()
+    # 保存连接引用，便于应用关闭时释放资源。
+    setattr(checkpointer, "_toskill_connection", conn)
+    logger.info(f"LangGraph SQLite Checkpointer 已启用: {db_path}")
+    return checkpointer
+
+
+async def create_async_checkpointer(db_path: str = None):
+    """Create and initialize the async SQLite checkpointer used by ainvoke."""
+    if AsyncSqliteSaver is None or aiosqlite is None:
+        raise RuntimeError(
+            "缺少 langgraph-checkpoint-sqlite 或 aiosqlite，请先安装 TOSKill/requirements.txt 中的依赖"
+        )
+
+    db_path = db_path or getattr(settings, "CHECKPOINT_DB_PATH", "data/langgraph_checkpoints.db")
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
+    conn = await aiosqlite.connect(db_path)
+    try:
+        await conn.execute("PRAGMA synchronous=NORMAL")
+        await conn.execute("PRAGMA busy_timeout=30000")
+        await conn.commit()
+        checkpointer = AsyncSqliteSaver(conn)
+        await checkpointer.setup()
+    except Exception:
+        await conn.close()
+        raise
+
+    setattr(checkpointer, "_toskill_connection", conn)
+    logger.info(f"LangGraph Async SQLite Checkpointer 已启用: {db_path}")
+    return checkpointer
 
 
 class IntentRecognitionGraph:
@@ -3385,7 +3789,7 @@ class IntentRecognitionGraph:
         workflow.add_edge("script_generate_process", END)
         
         if checkpointer is None:
-            checkpointer = create_checkpointer()
+            checkpointer = MemorySaver()
         return workflow.compile(checkpointer=checkpointer)
 
 
@@ -3420,7 +3824,7 @@ class InfoCollectionGraph:
         workflow.add_edge("report_generation", END)
         
         if checkpointer is None:
-            checkpointer = create_checkpointer()
+            checkpointer = MemorySaver()
         return workflow.compile(checkpointer=checkpointer)
 
 
@@ -3455,7 +3859,7 @@ class VulnScanGraph:
         workflow.add_edge("report_generation", END)
         
         if checkpointer is None:
-            checkpointer = create_checkpointer()
+            checkpointer = MemorySaver()
         return workflow.compile(checkpointer=checkpointer)
 
 
@@ -3472,7 +3876,7 @@ class ReportGraph:
         workflow.add_edge("report_generation", END)
         
         if checkpointer is None:
-            checkpointer = create_checkpointer()
+            checkpointer = MemorySaver()
         return workflow.compile(checkpointer=checkpointer)
 
 class AgentOrchestrator:
@@ -3486,33 +3890,101 @@ class AgentOrchestrator:
         self.report_graph = None
         self._running_tasks: Dict[str, asyncio.Task] = {}
         self._initialized = False
+        self._initialization_lock = asyncio.Lock()
         logger.info("Agent 编排器初始化完成")
     
     async def _ensure_initialized(self):
         """确保异步初始化完成"""
-        if not self._initialized:
-            self._checkpointer = create_checkpointer()
-            self.intent_graph = IntentRecognitionGraph.build(checkpointer=self._checkpointer)
-            self.info_graph = InfoCollectionGraph.build(checkpointer=self._checkpointer)
-            self.vuln_graph = VulnScanGraph.build(checkpointer=self._checkpointer)
-            self.report_graph = ReportGraph.build(checkpointer=self._checkpointer)
-            self._initialized = True
+        if self._initialized:
+            return
+        async with self._initialization_lock:
+            if self._initialized:
+                return
+            self._checkpointer = await create_async_checkpointer()
+            try:
+                self.intent_graph = IntentRecognitionGraph.build(checkpointer=self._checkpointer)
+                self.info_graph = InfoCollectionGraph.build(checkpointer=self._checkpointer)
+                self.vuln_graph = VulnScanGraph.build(checkpointer=self._checkpointer)
+                self.report_graph = ReportGraph.build(checkpointer=self._checkpointer)
+                self._initialized = True
+            except Exception:
+                conn = getattr(self._checkpointer, "_toskill_connection", None)
+                if conn is not None:
+                    await conn.close()
+                self._checkpointer = None
+                raise
             logger.info("Agent 编排器异步初始化完成")
     
     def set_websocket_callback(self, session_id: str, callback: Callable):
         """设置 WebSocket 回调"""
         memory_store.set_websocket_callback(session_id, callback)
+
+    async def aclose(self):
+        """关闭持久化检查点连接。"""
+        if self._checkpointer is not None:
+            conn = getattr(self._checkpointer, "_toskill_connection", None)
+            if conn is not None:
+                try:
+                    await conn.close()
+                except Exception as exc:
+                    logger.warning(f"关闭 LangGraph Checkpointer 失败: {exc}")
+        self._checkpointer = None
+        self.intent_graph = None
+        self.info_graph = None
+        self.vuln_graph = None
+        self.report_graph = None
+        self._initialized = False
+
+    def close(self):
+        """Backward-compatible close wrapper for sync callers."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.aclose())
+        return loop.create_task(self.aclose())
+
+    @staticmethod
+    def _merge_workflow_result(session_id: str, result: Optional[Dict[str, Any]]):
+        """Merge graph output with MemoryStore fields updated during chat.
+
+        Chat messages and decision context are intentionally written outside
+        LangGraph while a scan is paused.  A resumed checkpoint may therefore
+        contain an older copy of those fields; the durable session copy wins.
+        The interrupt envelope is returned to callers but is not written into
+        the ScanState JSON record.
+        """
+        if not result:
+            return result, None
+        result = dict(result)
+        interrupt_envelope = result.pop("__interrupt__", None)
+        stored = memory_store.get_session(session_id) or {}
+        merged = {**stored, **result}
+        for key in (
+            "chat_history",
+            "decision_context",
+            "decision_context_version",
+        ):
+            if key in stored:
+                merged[key] = stored[key]
+        return merged, interrupt_envelope
     
     async def resume_workflow(self, session_id: str, user_choice: str) -> Optional[ScanState]:
         """恢复暂停的工作流 - 使用 Command(resume=...) 恢复 interrupt
         添加状态校验和超时保护：超过30分钟未响应自动结束
         """
+        await self._ensure_initialized()
         config = {"configurable": {"thread_id": session_id}}
         
         if isinstance(user_choice, dict):
-            resume_value = user_choice
+            resume_value = dict(user_choice)
         else:
             resume_value = {"choice": user_choice}
+
+        if resume_value.get("action") == "resume_after_chat":
+            stored_state = memory_store.get_session(session_id) or {}
+            for key in ("decision_context", "decision_context_version", "chat_history"):
+                if key in stored_state:
+                    resume_value.setdefault(key, stored_state[key])
         
         try:
             checkpoint = await self.info_graph.aget_state(config)
@@ -3576,8 +4048,12 @@ class AgentOrchestrator:
             if result and not isinstance(result, dict):
                 result = dict(result)
 
+            result, interrupt_envelope = self._merge_workflow_result(session_id, result)
             if result:
                 memory_store.save_session(session_id, result)
+            if interrupt_envelope is not None:
+                result = dict(result or {})
+                result["__interrupt__"] = interrupt_envelope
             
             logger.info(f"工作流 {session_id} 已恢复完成")
             return result
@@ -3614,6 +4090,7 @@ class AgentOrchestrator:
     
     async def run_intent_recognition(self, state: ScanState, websocket_callback: Callable = None) -> ScanState:
         """运行意图识别流程"""
+        await self._ensure_initialized()
         session_id = state.get("websocket_session_id") or state.get("task_id")
         
         if websocket_callback:
@@ -3685,6 +4162,7 @@ class AgentOrchestrator:
     
     async def run_full_scan(self, state: ScanState, websocket_callback: Callable = None) -> ScanState:
         """运行完整扫描流程"""
+        await self._ensure_initialized()
         logger.info(f"[{state.get('task_id')}] 开始完整扫描流程")
         
         session_id = state.get("websocket_session_id") or state.get("task_id")
@@ -3698,12 +4176,16 @@ class AgentOrchestrator:
                 state,
                 config={"configurable": {"thread_id": session_id}}
             )
+            if state.get("__interrupt__"):
+                return state
             
             state = update_state(state, mode="vuln_scan")
             state = await self.vuln_graph.ainvoke(
                 state,
                 config={"configurable": {"thread_id": session_id}}
             )
+            if state.get("__interrupt__"):
+                return state
             
             state = await self.report_graph.ainvoke(
                 state,
@@ -3720,6 +4202,7 @@ class AgentOrchestrator:
     
     async def run_info_collection(self, state: ScanState, websocket_callback: Callable = None) -> ScanState:
         """仅运行信息收集"""
+        await self._ensure_initialized()
         session_id = state.get("websocket_session_id") or state.get("task_id")
         
         if websocket_callback:
@@ -3733,6 +4216,7 @@ class AgentOrchestrator:
     
     async def run_vuln_scan(self, state: ScanState, websocket_callback: Callable = None) -> ScanState:
         """仅运行漏洞扫描"""
+        await self._ensure_initialized()
         session_id = state.get("websocket_session_id") or state.get("task_id")
         
         if websocket_callback:
@@ -3746,6 +4230,7 @@ class AgentOrchestrator:
     
     async def run_report(self, state: ScanState) -> ScanState:
         """仅生成报告"""
+        await self._ensure_initialized()
         session_id = state.get("websocket_session_id") or state.get("task_id")
         return await self.report_graph.ainvoke(
             state,

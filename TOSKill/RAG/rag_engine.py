@@ -9,14 +9,10 @@ import logging
 import hashlib
 import threading
 import functools
+import time
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
-
-# 启用离线模式：网络无法访问 huggingface.co 时避免 4 分钟重试刷屏
-# 模型未缓存时 RAG 降级到关键词检索，不影响扫描主流程
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from llama_index.core import (
     VectorStoreIndex,
@@ -132,23 +128,60 @@ class TOSKillRAGEngine:
             cls._instance = cls()
         return cls._instance
 
-    def _load_embed_model_with_timeout(self, model_name: str, cache_folder: str, timeout: int = None) -> Optional[HuggingFaceEmbedding]:
-        """带超时的模型加载"""
+    def _load_embed_model_with_timeout(
+        self,
+        model_name: str,
+        cache_folder: str,
+        timeout: int = None,
+        local_model_path: Optional[Path] = None,
+    ) -> Optional[HuggingFaceEmbedding]:
+        """加载嵌入模型；本地 snapshot 直接加载，下载路径保留超时保护。"""
         if timeout is None:
             timeout = self.MODEL_LOAD_TIMEOUT
+
+        load_target = str(local_model_path) if local_model_path else model_name
+
+        def _load_model() -> HuggingFaceEmbedding:
+            logger.info(
+                "正在加载嵌入模型: %s%s",
+                model_name,
+                f" (本地 snapshot: {local_model_path})" if local_model_path else "",
+            )
+            return HuggingFaceEmbedding(
+                model_name=load_target,
+                cache_folder=cache_folder,
+            )
+
+        started_at = time.monotonic()
+
+        # 本地模型不需要网络，也不应该因为下载超时机制被误判为不可用。
+        # 服务启动本身已经在 asyncio.to_thread 中执行 RAG 初始化；这里直接等待
+        # 本地模型完成加载，避免留下无法取消的后台加载线程。
+        if local_model_path is not None:
+            try:
+                embed_model = _load_model()
+                logger.info(
+                    "嵌入模型加载成功: %s (%.1fs)",
+                    model_name,
+                    time.monotonic() - started_at,
+                )
+                return embed_model
+            except Exception as exc:
+                logger.warning("本地嵌入模型加载失败: %s, 错误: %s", model_name, exc)
+                return None
         
         result = [None]
         exception = [None]
         
         def _load():
             try:
-                logger.info(f"正在加载嵌入模型: {model_name}")
-                embed_model = HuggingFaceEmbedding(
-                    model_name=model_name,
-                    cache_folder=cache_folder
-                )
+                embed_model = _load_model()
                 result[0] = embed_model
-                logger.info(f"嵌入模型加载成功: {model_name}")
+                logger.info(
+                    "嵌入模型加载成功: %s (%.1fs)",
+                    model_name,
+                    time.monotonic() - started_at,
+                )
             except Exception as e:
                 exception[0] = e
         
@@ -157,7 +190,12 @@ class TOSKillRAGEngine:
         thread.join(timeout=timeout)
         
         if thread.is_alive():
-            logger.warning(f"模型加载超时 ({timeout}s): {model_name}")
+            logger.warning(
+                "模型加载超时 (%ss): %s；后台加载线程无法被强制终止，"
+                "本次 RAG 初始化将降级",
+                timeout,
+                model_name,
+            )
             return None
         
         if exception[0]:
@@ -166,23 +204,99 @@ class TOSKillRAGEngine:
         
         return result[0]
 
-    def _check_model_cached(self, model_name: str, cache_folder: str) -> bool:
-        """检查模型是否已在本地缓存"""
+    @staticmethod
+    def _is_valid_snapshot(snapshot_path: Path) -> bool:
+        """判断 snapshot 是否包含可供 sentence-transformers 加载的核心文件。"""
+        if not snapshot_path.is_dir():
+            return False
+        if not (snapshot_path / "config.json").is_file():
+            return False
+        model_files = (
+            "model.safetensors",
+            "pytorch_model.bin",
+            "tf_model.h5",
+            "model.ckpt.index",
+        )
+        return any((snapshot_path / filename).is_file() for filename in model_files)
+
+    @classmethod
+    def _find_cached_model_snapshot(
+        cls,
+        model_name: str,
+        cache_folder: str,
+    ) -> Optional[Path]:
+        """查找 HuggingFace 的本地 snapshot，兼容不同版本的缓存布局。"""
         model_dir_name = model_name.replace("/", "--")
-        model_cache_path = Path(cache_folder) / "hub" / f"models--{model_dir_name}"
-        if model_cache_path.exists():
+        cache_root = Path(cache_folder).expanduser()
+
+        candidate_repositories = [
+            cache_root / f"models--{model_dir_name}",
+            cache_root / "hub" / f"models--{model_dir_name}",
+        ]
+
+        # 如果用户通过 HF_HUB_CACHE/HF_HOME 指定了其他目录，也纳入查找范围。
+        hf_hub_cache = os.getenv("HF_HUB_CACHE")
+        if hf_hub_cache:
+            candidate_repositories.append(Path(hf_hub_cache).expanduser() / f"models--{model_dir_name}")
+        hf_home = os.getenv("HF_HOME")
+        if hf_home:
+            hf_home_path = Path(hf_home).expanduser()
+            candidate_repositories.extend([
+                hf_home_path / f"models--{model_dir_name}",
+                hf_home_path / "hub" / f"models--{model_dir_name}",
+            ])
+
+        seen = set()
+        for model_cache_path in candidate_repositories:
+            model_cache_path = model_cache_path.resolve()
+            if model_cache_path in seen or not model_cache_path.is_dir():
+                continue
+            seen.add(model_cache_path)
+
             snapshots_path = model_cache_path / "snapshots"
-            if snapshots_path.exists():
-                snapshots = list(snapshots_path.iterdir())
-                if snapshots:
-                    logger.info(f"模型已在本地缓存: {model_name}")
-                    return True
-        logger.debug(f"模型未缓存: {model_name}")
+            if not snapshots_path.is_dir():
+                continue
+
+            snapshots = [path for path in snapshots_path.iterdir() if cls._is_valid_snapshot(path)]
+            if not snapshots:
+                continue
+
+            # 优先使用 refs/main 指向的 revision；没有 refs 时按修改时间选择最新 snapshot。
+            revision = ""
+            ref_path = model_cache_path / "refs" / "main"
+            if ref_path.is_file():
+                try:
+                    revision = ref_path.read_text(encoding="utf-8").strip()
+                except OSError:
+                    revision = ""
+            if revision:
+                referenced = snapshots_path / revision
+                if cls._is_valid_snapshot(referenced):
+                    return referenced
+
+            return max(snapshots, key=lambda path: path.stat().st_mtime)
+
+        return None
+
+    @classmethod
+    def _check_model_cached(cls, model_name: str, cache_folder: str) -> bool:
+        """检查模型是否已在本地缓存且包含可加载的 snapshot。"""
+        snapshot = cls._find_cached_model_snapshot(model_name, cache_folder)
+        if snapshot:
+            logger.info("模型已在本地缓存: %s (%s)", model_name, snapshot)
+            return True
+        logger.debug("模型未缓存或缓存不完整: %s", model_name)
         return False
 
     def _try_load_embed_model(self) -> Optional[HuggingFaceEmbedding]:
         """优先加载本地模型，并按配置允许首次下载主模型。"""
-        cache_folder = settings.RAG_MODEL_CACHE_DIR
+        cache_folder = str(Path(settings.RAG_MODEL_CACHE_DIR).expanduser())
+
+        # 只有明确禁止下载时才启用离线模式；RAG_ALLOW_DOWNLOAD=True 时不再
+        # 无条件覆盖用户网络配置。已找到的本地 snapshot 始终走本地路径。
+        if not settings.RAG_ALLOW_DOWNLOAD:
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
         
         if not os.path.exists(cache_folder):
             os.makedirs(cache_folder, exist_ok=True)
@@ -190,20 +304,22 @@ class TOSKillRAGEngine:
         
         model_names = list(dict.fromkeys([settings.RAG_EMBED_MODEL, *self.FALLBACK_MODELS]))
         for model_name in model_names:
-            is_cached = self._check_model_cached(model_name, cache_folder)
+            local_model_path = self._find_cached_model_snapshot(model_name, cache_folder)
+            is_cached = local_model_path is not None
             can_download = settings.RAG_ALLOW_DOWNLOAD and model_name == settings.RAG_EMBED_MODEL
             if not is_cached and not can_download:
                 logger.info(f"跳过未缓存模型: {model_name}")
                 continue
 
             if is_cached:
-                logger.info(f"尝试加载本地缓存模型: {model_name}")
+                logger.info(f"尝试加载本地缓存模型: {model_name} ({local_model_path})")
             else:
                 logger.info(f"本地未缓存，尝试下载嵌入模型: {model_name}")
             embed_model = self._load_embed_model_with_timeout(
                 model_name=model_name,
                 cache_folder=cache_folder,
-                timeout=self.MODEL_LOAD_TIMEOUT
+                timeout=self.MODEL_LOAD_TIMEOUT,
+                local_model_path=local_model_path,
             )
             if embed_model:
                 logger.info(f"模型加载成功: {model_name}")

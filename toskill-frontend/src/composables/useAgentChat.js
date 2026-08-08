@@ -1,4 +1,4 @@
-import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { ws } from '../services/websocket.js'
 import { showToast, globalState, scanProgressState, scanStatusState,
   conversationState, loadConversationIndex, createNewConversation,
@@ -38,7 +38,69 @@ export function useAgentChat() {
   const scriptGenerationProgress = ref({ stage: '', progress: 0, message: '' })
   const scriptHistory = ref([])
   const MAX_SCRIPT_SIZE = 500 * 1024
+  const SCAN_PAUSE_STORAGE_PREFIX = 'toskill_scan_pause_'
+  const createEmptyScanPause = () => ({
+    status: 'idle',
+    pauseId: '',
+    interactionId: '',
+    nextTask: '',
+    pausedAt: '',
+    expiresAt: '',
+    requestId: '',
+    decisionContextVersion: 0
+  })
+  const scanPause = reactive(createEmptyScanPause())
+  const isScanPausedForChat = computed(() => scanPause.status === 'paused')
+  const canResumeScan = computed(() => isScanPausedForChat.value && Boolean(scanPause.pauseId))
+  const chatInputPlaceholder = computed(() => (
+    isScanPausedForChat.value
+      ? '扫描已暂停，输入聊天内容将影响下一步扫描决策...'
+      : '输入扫描目标或用自然语言与 Agent 对话...'
+  ))
   let persistTimer = null
+
+  const getPauseStorageKey = (conversationId = conversationState.currentId) => (
+    conversationId ? `${SCAN_PAUSE_STORAGE_PREFIX}${conversationId}` : ''
+  )
+
+  const persistScanPause = () => {
+    const key = getPauseStorageKey()
+    if (!key) return
+    try {
+      if (scanPause.status === 'idle') {
+        localStorage.removeItem(key)
+        return
+      }
+      localStorage.setItem(key, JSON.stringify({ ...scanPause, savedAt: new Date().toISOString() }))
+    } catch (error) {
+      console.warn('保存扫描暂停状态失败:', error)
+    }
+  }
+
+  const resetScanPause = ({ clearPersisted = true } = {}) => {
+    Object.assign(scanPause, createEmptyScanPause())
+    if (clearPersisted) {
+      const key = getPauseStorageKey()
+      if (key) {
+        try { localStorage.removeItem(key) } catch (error) { /* ignore */ }
+      }
+    }
+  }
+
+  const restorePersistedScanPause = (conversationId = conversationState.currentId) => {
+    resetScanPause({ clearPersisted: false })
+    const key = getPauseStorageKey(conversationId)
+    if (!key) return
+    try {
+      const raw = localStorage.getItem(key)
+      if (!raw) return
+      const saved = JSON.parse(raw)
+      if (!saved?.pauseId || !['pausing', 'paused', 'resuming'].includes(saved.status)) return
+      Object.assign(scanPause, createEmptyScanPause(), saved)
+    } catch (error) {
+      console.warn('恢复扫描暂停状态失败:', error)
+    }
+  }
   
   const validateScriptFile = (file) => {
     if (!file) return { valid: false, error: '未选择文件' }
@@ -111,6 +173,7 @@ export function useAgentChat() {
   // - 等待后端 get_status / run_snapshot 响应后更新为实际状态
   const restoreConsoleState = (sessionId) => {
     if (!sessionId) return
+    restorePersistedScanPause(conversationState.currentId)
     const data = loadConversationBlocks(sessionId)
     if (data && data.blocks) {
       // 遍历将 running 状态的 agent_run 标记为 cancelled
@@ -147,6 +210,7 @@ export function useAgentChat() {
   const persistConsoleState = () => {
     const currentId = conversationState.currentId
     if (!currentId) return
+    persistScanPause()
     // 仅在有内容时保存
     if (workspaceBlocks.value.length === 0 && !inputText.value) return
     saveConversationBlocks(currentId, workspaceBlocks.value, inputText.value)
@@ -193,6 +257,7 @@ export function useAgentChat() {
     waitingForChoice.value = false
     pendingScanConfirm.value = null
     showScanConfirm.value = false
+    resetScanPause()
     // 断开重连，创建新后端 session（传 null = 不带 session_id，后端分配新 ID）
     try {
       await ws.switchSession(null)
@@ -223,6 +288,7 @@ export function useAgentChat() {
     waitingForChoice.value = false
     pendingScanConfirm.value = null
     showScanConfirm.value = false
+    restorePersistedScanPause(id)
 
     // 切换后端 session（如果有 sessionId 则恢复，否则创建新的）
     try {
@@ -244,6 +310,10 @@ export function useAgentChat() {
     // 用后端 sessionId 取消订阅
     if (conv.sessionId) {
       ws.unsubscribeSession(conv.sessionId)
+    }
+    const pauseStorageKey = getPauseStorageKey(id)
+    if (pauseStorageKey) {
+      try { localStorage.removeItem(pauseStorageKey) } catch (error) { /* ignore */ }
     }
     deleteConversation(id)
     if (conversationState.currentId) {
@@ -482,6 +552,104 @@ export function useAgentChat() {
     scanStatus.value = choiceLabel.includes('停止') || choiceLabel.includes('取消') ? 'idle' : 'scanning'
   }
 
+  const markInteractionAsChatPaused = (interactionId, label = '聊天') => {
+    const interaction = findInteraction(interactionId)
+    if (!interaction) return
+    interaction.resolved = true
+    interaction.selectedChoice = label
+    for (const run of workspaceBlocks.value.filter(block => block.type === 'agent_run')) {
+      const step = (run.steps || []).find(item => item.interaction === interaction)
+      if (step) {
+        step.status = 'waiting'
+        break
+      }
+    }
+  }
+
+  const reopenChatPauseInteraction = () => {
+    const interaction = findInteraction(scanPause.interactionId)
+    if (!interaction) return
+    interaction.resolved = false
+    interaction.selectedChoice = ''
+    for (const run of workspaceBlocks.value.filter(block => block.type === 'agent_run')) {
+      const step = (run.steps || []).find(item => item.interaction === interaction)
+      if (step) {
+        step.status = 'waiting'
+        break
+      }
+    }
+  }
+
+  const applyPausedScan = (payload = {}, { announce = true } = {}) => {
+    const pauseInfo = payload.pause_info || payload
+    const pauseId = payload.pause_id || pauseInfo.pause_id || scanPause.pauseId
+    if (!pauseId) return false
+    const wasPaused = scanPause.status === 'paused' && scanPause.pauseId === pauseId
+    Object.assign(scanPause, {
+      status: 'paused',
+      pauseId,
+      interactionId: payload.interaction_id || pauseInfo.interaction_id || scanPause.interactionId,
+      nextTask: payload.next_task || pauseInfo.next_task || scanPause.nextTask,
+      pausedAt: payload.paused_at || pauseInfo.paused_at || scanPause.pausedAt,
+      expiresAt: payload.expires_at || pauseInfo.expires_at || scanPause.expiresAt,
+      requestId: payload.request_id || pauseInfo.request_id || scanPause.requestId,
+      decisionContextVersion: Number(
+        payload.decision_context_version
+          ?? payload.state_version
+          ?? pauseInfo.decision_context_version
+          ?? pauseInfo.state_version
+          ?? scanPause.decisionContextVersion
+          ?? 0
+      )
+    })
+    scanStatus.value = 'paused_for_chat'
+    scanActive.value = false
+    isTyping.value = false
+    isThinking.value = false
+    currentThinking.value = ''
+    waitingForChoice.value = false
+    updateRun(payload, { status: 'waiting' })
+    markInteractionAsChatPaused(scanPause.interactionId)
+    persistScanPause()
+    if (announce && !wasPaused) {
+      addInfoBlock(`扫描已暂停，可继续聊天；聊天内容将影响下一步扫描决策${scanPause.nextTask ? `（下一任务：${scanPause.nextTask}）` : ''}`)
+      if (conversationState.currentId) updateConversationStatus(conversationState.currentId, 'waiting')
+    }
+    return true
+  }
+
+  const applyScanState = (state = {}, { announce = false } = {}) => {
+    const stateStatus = state.scan_status || ''
+    if (stateStatus === 'replanning' && (scanPause.pauseId || state.pause_info?.pause_id)) {
+      Object.assign(scanPause, {
+        status: 'resuming',
+        pauseId: state.pause_info?.pause_id || scanPause.pauseId,
+        interactionId: state.pause_info?.interaction_id || scanPause.interactionId,
+        requestId: state.pause_info?.request_id || scanPause.requestId
+      })
+      scanStatus.value = 'replanning'
+      scanActive.value = false
+      persistScanPause()
+      return true
+    }
+
+    if (stateStatus === 'paused_for_chat' || state.pause_info?.pause_id) {
+      return applyPausedScan({ ...state.pause_info, ...state }, { announce })
+    }
+
+    const hasScan = Boolean(state.target || state.planned_tasks?.length || state.completed_tasks?.length)
+    scanStatus.value = !hasScan ? 'idle' : state.is_complete ? 'completed' : (
+      stateStatus === 'waiting_user' ? 'waiting' : (stateStatus || 'scanning')
+    )
+    scanActive.value = scanStatus.value === 'scanning' || scanStatus.value === 'running'
+    if (stateStatus === 'waiting_user') waitingForChoice.value = true
+    scanProgress.value.current = (state.completed_tasks || []).length
+    scanProgress.value.total = state.total_tasks || state.planned_tasks?.length || state.completed_tasks?.length || 0
+
+    if (scanPause.status !== 'idle') resetScanPause()
+    return true
+  }
+
   const appendRunLog = (payload = {}) => {
     const step = upsertRunStep(payload, {
       title: payload.tool || payload.node || payload.step_id || '执行过程',
@@ -527,7 +695,7 @@ export function useAgentChat() {
   }
 
   const addErrorBlock = (message, errorData = {}) => {
-    const { code, source, category, suggestion, details } = errorData
+    const { code, source, category, suggestion, details, forceStandalone = false } = errorData
     let fullMessage = message
     
     if (source) {
@@ -555,7 +723,7 @@ export function useAgentChat() {
     const activeRun = [...workspaceBlocks.value].reverse().find(
       block => block.type === 'agent_run' && !['completed', 'failed', 'cancelled'].includes(block.status)
     )
-    if (activeRun) {
+    if (activeRun && !forceStandalone) {
       appendRunLog({
         run_id: activeRun.runId,
         step_id: 'workflow',
@@ -589,6 +757,21 @@ export function useAgentChat() {
 
     inputText.value = ''
     addBlock('user_command', { content: text })
+
+    if (isScanPausedForChat.value) {
+      isTyping.value = true
+      if (ws.isConnected()) {
+        const sent = ws.sendChat(text, { pause_id: scanPause.pauseId })
+        if (!sent) {
+          isTyping.value = false
+          addErrorBlock('聊天消息发送失败，请检查 WebSocket 连接', { source: 'websocket' })
+        }
+      } else {
+        isTyping.value = false
+        addErrorBlock('实时连接未就绪，无法发送暂停期间的聊天消息', { source: 'websocket' })
+      }
+      return
+    }
 
     if (waitingForChoice.value) {
       if (text.toLowerCase() === 'stop' || text.toLowerCase() === '停止') {
@@ -912,8 +1095,81 @@ export function useAgentChat() {
     updateRun({}, { status: 'cancelled', summary: '已发送停止请求' })
   }
 
+  const resumeScan = () => {
+    if (!canResumeScan.value || scanPause.status === 'resuming') return false
+    if (!ws.isConnected()) {
+      showToast('WebSocket 已断开，无法恢复扫描', 'error')
+      return false
+    }
+
+    const requestId = ws.createRequestId()
+    Object.assign(scanPause, { status: 'resuming', requestId })
+    scanStatus.value = 'replanning'
+    scanActive.value = false
+    waitingForChoice.value = false
+    isTyping.value = true
+    isThinking.value = true
+    currentThinking.value = ''
+    persistScanPause()
+
+    const sent = ws.sendResumeScan(scanPause.pauseId, requestId)
+    if (!sent) {
+      scanPause.status = 'paused'
+      scanStatus.value = 'paused_for_chat'
+      isTyping.value = false
+      isThinking.value = false
+      persistScanPause()
+      showToast('恢复扫描请求发送失败，请重试', 'error')
+      return false
+    }
+    return true
+  }
+
   // === 交互卡片事件分发 ===
   const handleBlockAction = (block, choiceKey, choiceLabel) => {
+    const isChatPauseChoice = block.actionSource === 'interaction_required' && (
+      String(choiceKey) === '3'
+      || ['chat', 'chat_pause', 'pause_for_chat'].includes(String(choiceKey).toLowerCase())
+    )
+
+    if (isChatPauseChoice) {
+      if (scanPause.status === 'pausing' || scanPause.status === 'paused') return
+      if (!ws.isConnected()) {
+        return showToast('WebSocket 已断开，无法暂停扫描聊天', 'error')
+      }
+
+      const requestId = ws.createRequestId()
+      Object.assign(scanPause, {
+        status: 'pausing',
+        pauseId: '',
+        interactionId: block.interactionId || '',
+        nextTask: '',
+        pausedAt: '',
+        expiresAt: '',
+        requestId,
+        decisionContextVersion: 0
+      })
+      scanStatus.value = 'pausing_for_chat'
+      scanActive.value = false
+      waitingForChoice.value = false
+      isTyping.value = true
+      updateRun({}, { status: 'waiting' })
+      markInteractionAsChatPaused(block.interactionId, choiceLabel || '聊天')
+      persistScanPause()
+
+      const sent = ws.sendPauseForChat(block.interactionId, requestId)
+      if (!sent) {
+        reopenChatPauseInteraction()
+        resetScanPause()
+        scanStatus.value = 'waiting'
+        scanActive.value = false
+        waitingForChoice.value = true
+        isTyping.value = false
+        showToast('暂停扫描请求发送失败，请重试', 'error')
+      }
+      return
+    }
+
     resolveRunInteraction(block, choiceLabel)
     isTyping.value = true
     updateRun({}, { status: 'running' })
@@ -1104,10 +1360,53 @@ export function useAgentChat() {
         currentThinking.value = ''
         break
 
+      case 'scan_paused_for_chat':
+        applyPausedScan(data.payload || {})
+        break
+
+      case 'scan_resume_requested': {
+        const resumePayload = data.payload || {}
+        if (resumePayload.pause_id && scanPause.pauseId && resumePayload.pause_id !== scanPause.pauseId) break
+        Object.assign(scanPause, {
+          status: 'resuming',
+          pauseId: resumePayload.pause_id || scanPause.pauseId,
+          requestId: resumePayload.request_id || scanPause.requestId
+        })
+        scanStatus.value = 'replanning'
+        scanActive.value = false
+        waitingForChoice.value = false
+        isTyping.value = true
+        persistScanPause()
+        break
+      }
+
+      case 'decision_replanned': {
+        const decisionPayload = data.payload || {}
+        if (decisionPayload.pause_id && scanPause.pauseId && decisionPayload.pause_id !== scanPause.pauseId) break
+        scanPause.nextTask = decisionPayload.next_task || scanPause.nextTask
+        scanPause.decisionContextVersion = Number(
+          decisionPayload.decision_context_version ?? scanPause.decisionContextVersion ?? 0
+        )
+        addInfoBlock(`AI 已根据聊天内容重新规划下一步${scanPause.nextTask ? `：${scanPause.nextTask}` : ''}`)
+        persistScanPause()
+        break
+      }
+
+      case 'decision_context_updated': {
+        const contextPayload = data.payload || {}
+        if (contextPayload.pause_id && scanPause.pauseId && contextPayload.pause_id !== scanPause.pauseId) break
+        scanPause.decisionContextVersion = Number(
+          contextPayload.decision_context_version ?? scanPause.decisionContextVersion ?? 0
+        )
+        persistScanPause()
+        break
+      }
+
       case 'interaction_required': {
         isTyping.value = false
-        waitingForChoice.value = true
         const interactionId = data.payload?.interaction_id || data.interaction_id
+        const pausePending = scanPause.status === 'pausing' || scanPause.status === 'paused'
+        waitingForChoice.value = !pausePending
         // 不跳过已存在的交互：后端可能重发相同 interactionId 的消息（如会话恢复），
         // attachRunInteraction 内部会通过 Object.assign 更新现有交互内容
         updateRun(data.payload || {}, { status: 'waiting' })
@@ -1127,6 +1426,11 @@ export function useAgentChat() {
           })),
           resolved: false
         })
+        if (pausePending) {
+          if (!scanPause.interactionId) scanPause.interactionId = interactionId || ''
+          markInteractionAsChatPaused(interactionId)
+          persistScanPause()
+        }
         break
       }
 
@@ -1158,6 +1462,7 @@ export function useAgentChat() {
 
       case 'scan_started':
         if (!acceptRunEvent(data.payload || {})) break
+        resetScanPause()
         scanStatus.value = 'scanning'
         scanActive.value = true
         isThinking.value = false
@@ -1185,6 +1490,7 @@ export function useAgentChat() {
 
       case 'scan_completed':
         if (!acceptRunEvent(data.payload || {})) break
+        resetScanPause()
         scanStatus.value = 'completed'
         scanProgress.value.activeTool = ''
         scanActive.value = false
@@ -1208,6 +1514,7 @@ export function useAgentChat() {
 
       case 'scan_cancelled':
         if (!acceptRunEvent(data.payload || {})) break
+        resetScanPause()
         scanStatus.value = 'idle'
         scanProgress.value.activeTool = ''
         scanActive.value = false
@@ -1226,6 +1533,7 @@ export function useAgentChat() {
 
       case 'scan_terminated':
         if (!acceptRunEvent(data.payload || {})) break
+        resetScanPause()
         scanStatus.value = 'error'
         scanProgress.value.activeTool = ''
         scanActive.value = false
@@ -1516,10 +1824,13 @@ export function useAgentChat() {
         const completedTasks = snapshot.completed_tasks || []
         const failedTasks = snapshot.failed_tasks || []
         if (!snapshot.target && !completedTasks.length && !failedTasks.length && !snapshot.total_tasks) break
+        if (snapshot.scan_status === 'paused_for_chat' && scanPause.pauseId) {
+          applyPausedScan({ ...snapshot, pause_id: scanPause.pauseId }, { announce: false })
+        }
         updateRun(snapshot, {
           target: snapshot.target || '',
           mode: snapshot.mode || '',
-          status: snapshot.is_complete ? 'completed' : 'running',
+          status: snapshot.is_complete ? 'completed' : (snapshot.scan_status === 'paused_for_chat' ? 'waiting' : 'running'),
           completed: completedTasks.length,
           total: snapshot.total_tasks || scanProgress.value.total || 0
         })
@@ -1574,8 +1885,32 @@ export function useAgentChat() {
         break
 
       case 'workflow_resumed':
-        scanStatus.value = 'scanning'
-        addInfoBlock(`工作流已恢复 | 已完成任务: ${(data.payload?.completed_tasks || []).length} 个`)
+        {
+          const resumedPayload = data.payload || {}
+          const resumedStatus = resumedPayload.scan_status || 'running'
+          if (resumedPayload.pause_id && scanPause.pauseId && resumedPayload.pause_id !== scanPause.pauseId) break
+          isTyping.value = false
+          isThinking.value = false
+          currentThinking.value = ''
+          scanStatus.value = resumedStatus === 'waiting_user' ? 'waiting' : (
+            resumedPayload.is_complete ? 'completed' : 'scanning'
+          )
+          scanActive.value = scanStatus.value === 'scanning'
+          waitingForChoice.value = resumedStatus === 'waiting_user'
+          updateRun(resumedPayload, {
+            status: resumedPayload.is_complete ? 'completed' : (resumedStatus === 'waiting_user' ? 'waiting' : 'running'),
+            completed: (resumedPayload.completed_tasks || []).length,
+            summary: resumedPayload.is_complete ? '扫描已完成' : ''
+          })
+          addInfoBlock(`工作流已恢复 | 已完成任务 ${(resumedPayload.completed_tasks || []).length} 个`)
+          resetScanPause()
+          if (conversationState.currentId) {
+            updateConversationStatus(
+              conversationState.currentId,
+              resumedPayload.is_complete ? 'completed' : (resumedStatus === 'waiting_user' ? 'waiting' : 'scanning')
+            )
+          }
+        }
         break
 
       case 'script_registered':
@@ -1688,9 +2023,7 @@ export function useAgentChat() {
         addInfoBlock(`已订阅会话 | Session: ${data.payload?.session_id || '-'}`)
         if (data.payload?.state) {
           const subscribedState = data.payload.state
-          const hasScan = Boolean(subscribedState.target || subscribedState.completed_tasks?.length)
-          scanStatus.value = !hasScan ? 'idle' : subscribedState.is_complete ? 'completed' : 'scanning'
-          scanActive.value = scanStatus.value === 'scanning'
+          applyScanState(subscribedState, { announce: false })
         }
         break
 
@@ -1702,12 +2035,11 @@ export function useAgentChat() {
       case 'status':
         const state = data.payload?.state
         if (state) {
-          const hasScan = Boolean(state.target || state.planned_tasks?.length || state.completed_tasks?.length)
-          scanStatus.value = !hasScan ? 'idle' : state.is_complete ? 'completed' : 'scanning'
-          scanActive.value = scanStatus.value === 'scanning'
-          scanProgress.value.current = (state.completed_tasks || []).length
-          scanProgress.value.total = state.total_tasks || state.planned_tasks?.length || state.completed_tasks?.length || 0
-          if (scanStatus.value !== 'idle') {
+          const wasPaused = scanPause.status === 'paused'
+          applyScanState(state, { announce: !wasPaused })
+          if (state.scan_status === 'paused_for_chat') {
+            if (!wasPaused) addInfoBlock('已恢复扫描暂停状态，可继续聊天或点击“继续扫描”')
+          } else if (scanStatus.value !== 'idle') {
             addInfoBlock(`会话状态: ${scanStatus.value === 'completed' ? '已完成' : '扫描中'}`)
           }
         } else {
@@ -1771,8 +2103,60 @@ export function useAgentChat() {
 
       case 'error':
         isTyping.value = false
-        scanStatus.value = 'error'
+        isThinking.value = false
         const errorPayload = data.payload || {}
+        const errorCode = String(errorPayload.code || '').toUpperCase()
+        const isPauseProtocolError = /^(PAUSE|RESUME|STALE_INTERACTION|STALE_PAUSE)/.test(errorCode)
+        if (isPauseProtocolError) {
+          if (errorCode.startsWith('RESUME') || errorCode === 'STALE_PAUSE') {
+            scanPause.status = 'paused'
+            scanStatus.value = 'paused_for_chat'
+            scanActive.value = false
+            waitingForChoice.value = false
+            persistScanPause()
+          } else {
+            reopenChatPauseInteraction()
+            resetScanPause()
+            scanStatus.value = 'waiting'
+            scanActive.value = false
+            waitingForChoice.value = true
+          }
+          addErrorBlock(
+            errorPayload.message || errorPayload.error || '暂停/恢复请求失败',
+            {
+              code: errorPayload.code,
+              source: errorPayload.source || 'backend',
+              category: errorPayload.category,
+              suggestion: errorPayload.suggestion,
+              details: errorPayload.details
+            }
+          )
+          break
+        }
+        const isPausedChatModelError = isScanPausedForChat.value && (
+          errorCode === 'E006' || errorPayload.source === 'ai_model'
+        )
+        if (isPausedChatModelError) {
+          scanStatus.value = 'paused_for_chat'
+          scanActive.value = false
+          waitingForChoice.value = false
+          isThinking.value = false
+          currentThinking.value = ''
+          persistScanPause()
+          addErrorBlock(
+            errorPayload.message || errorPayload.error || 'AI对话失败，请重试',
+            {
+              code: errorPayload.code,
+              source: errorPayload.source || 'ai_model',
+              category: errorPayload.category,
+              suggestion: errorPayload.suggestion,
+              details: errorPayload.details,
+              forceStandalone: true
+            }
+          )
+          break
+        }
+        scanStatus.value = 'error'
         addErrorBlock(
           errorPayload.message || errorPayload.error || '未知错误',
           {
@@ -1871,6 +2255,11 @@ export function useAgentChat() {
     pendingInputRequest,
     scanStatus,
     scanActive,
+    scanPause,
+    isScanPausedForChat,
+    canResumeScan,
+    chatInputPlaceholder,
+    resumeScan,
     sendMessage,
     handleQuickAction,
     handleBlockAction,

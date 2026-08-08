@@ -80,6 +80,10 @@ def test_html_report_uses_new_security_analysis_layout():
     assert "查看原始扫描完整数据" in html
     assert "工作流执行详情" in html
     assert "AI 智能分析" in html
+    assert 'risk-summary-module' in html
+    assert 'class="risk-summary-content text-body md-content"' in html
+    assert 'analysis-block"><h3>风险总结' not in html
+    assert html.index('<section class="card ai-section">') < html.index('<section class="card risk-summary-module">') < html.index('<section class="appendix-card">')
     assert "SEC-20260805-42" in html
     assert html.index("SQL 注入") < html.index("低风险配置")
     assert "linear-gradient" not in html

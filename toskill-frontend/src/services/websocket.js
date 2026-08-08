@@ -240,6 +240,10 @@ class WSManager {
     onReconnect(callback) { this.onReconnectCallback = callback; }
     isConnected() { return this.connected && this.ws && this.ws.readyState === WebSocket.OPEN; }
     getSessionId() { return this.sessionId; }
+    createRequestId() {
+        return globalThis.crypto?.randomUUID?.()
+            || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
 
     startScan(target, scanMode = 'info') {
         const payload = { target, scan_mode: scanMode };
@@ -247,6 +251,11 @@ class WSManager {
         const result = this.send('start_scan', payload);
         console.log('[WS] startScan 发送结果:', result);
         return result;
+    }
+    startAutoScan(target, scanMode = 'info') {
+        const payload = { target, scan_mode: scanMode };
+        LOG.log('[WS] startAutoScan 发送:', { type: 'start_auto_scan', payload });
+        return this.send('start_auto_scan', payload);
     }
     sendConfirm(choice = 'confirm', interactionId = null) {
         return this.send('user_choice', { choice, ...(interactionId ? { interaction_id: interactionId } : {}) });
@@ -259,7 +268,23 @@ class WSManager {
     sendAlternativeChoice(choiceIndex, choiceLabel) {
         return this.send('alternative_selected', { choice_index: choiceIndex, choice_label: choiceLabel });
     }
-    sendChat(content) { return this.send('chat', { content }); }
+    sendChat(content, metadata = {}) { return this.send('chat', { content, ...metadata }); }
+    sendPauseForChat(interactionId = null, requestId = null) {
+        const resolvedRequestId = requestId || this.createRequestId();
+        return this.send('pause_for_chat', {
+            protocol_version: '1.0',
+            request_id: resolvedRequestId,
+            ...(interactionId ? { interaction_id: interactionId } : {})
+        });
+    }
+    sendResumeScan(pauseId = null, requestId = null) {
+        const resolvedRequestId = requestId || this.createRequestId();
+        return this.send('resume_scan', {
+            protocol_version: '1.0',
+            request_id: resolvedRequestId,
+            ...(pauseId ? { pause_id: pauseId } : {})
+        });
+    }
     sendInputResponse(field, value) { return this.send('input_response', { field, value }); }
     sendSubscribe(sessionId) { return this.send('subscribe', { session_id: sessionId }); }
     sendGetHistory() { return this.send('get_history', {}); }

@@ -103,6 +103,19 @@ class ScanState(TypedDict, total=False):
     skip_remaining_tasks: NotRequired[bool]
     current_task_vulnerabilities: NotRequired[List[Dict[str, Any]]]
     scan_mode: NotRequired[str]
+    run_type: NotRequired[str]
+    scan_status: NotRequired[str]
+    progress: NotRequired[float]
+    current_tool: NotRequired[str]
+    current_task: NotRequired[str]
+    cancelled: NotRequired[bool]
+    schema_version: NotRequired[int]
+    state_version: NotRequired[int]
+    workflow_node: NotRequired[str]
+    pause_info: NotRequired[Dict[str, Any]]
+    decision_context: NotRequired[Dict[str, Any]]
+    decision_context_version: NotRequired[int]
+    chat_mode: NotRequired[bool]
 
 
 def create_initial_state(target: str, task_id: str = None, mode: str = "info_collection") -> ScanState:
@@ -116,6 +129,29 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         run_id="",
         mode=mode,
         scan_mode="人机交互",
+        run_type="interactive",
+        scan_status="idle",
+        progress=0,
+        current_tool="",
+        current_task="",
+        cancelled=False,
+        schema_version=2,
+        state_version=0,
+        workflow_node="",
+        pause_info={},
+        decision_context={
+            "version": 0,
+            "user_constraints": [],
+            "requested_tasks": [],
+            "excluded_tasks": [],
+            "priority_tasks": [],
+            "risk_tolerance": "",
+            "latest_request": "",
+            "messages": [],
+            "updated_at": now,
+        },
+        decision_context_version=0,
+        chat_mode=False,
         planned_tasks=[],
         completed_tasks=[],
         failed_tasks=[],

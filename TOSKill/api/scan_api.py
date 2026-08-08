@@ -21,6 +21,7 @@ from TOSKill.AI.tools import (
     INFO_COLLECTION_TOOLS, VULN_SCAN_TOOLS, clean_target
 )
 from TOSKill.analysis.result_analyzer import get_analyzer
+from TOSKill.utils.target import normalize_scan_target
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="", tags=["TOSKill API"])
@@ -37,12 +38,7 @@ class ScanRequest(BaseModel):
     @field_validator("target")
     @classmethod
     def validate_target(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("target 不能为空")
-        v = v.strip()
-        if not v.startswith(("http://", "https://")):
-            raise ValueError("target 必须以 http:// 或 https:// 开头")
-        return clean_target(v)
+        return normalize_scan_target(v)
 
 
 class ToolExecuteRequest(BaseModel):
@@ -62,12 +58,7 @@ class ToolExecuteRequest(BaseModel):
     @field_validator("target")
     @classmethod
     def validate_target(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("target 不能为空")
-        v = v.strip()
-        if not v.startswith(("http://", "https://")):
-            raise ValueError("target 必须以 http:// 或 https:// 开头")
-        return clean_target(v)
+        return normalize_scan_target(v)
 
 
 class BatchToolExecuteRequest(BaseModel):
@@ -93,6 +84,13 @@ class ParseIntentRequest(BaseModel):
 class SessionRequest(BaseModel):
     target: Optional[str] = Field(default="", description="扫描目标")
     mode: str = Field(default="info_collection", description="扫描模式")
+
+    @field_validator("target")
+    @classmethod
+    def validate_target(cls, v: str) -> str:
+        if not v or not v.strip():
+            return ""
+        return normalize_scan_target(v)
 
 
 class APIResponse(BaseModel):

@@ -68,6 +68,11 @@ async def lifespan(app: FastAPI):
             logger.warning(f"RAG启动初始化失败，将使用关键词降级检索: {e}")
     
     yield
+    try:
+        from TOSKill.AI.graph import get_agent_orchestrator
+        await get_agent_orchestrator().aclose()
+    except Exception as e:
+        logger.warning(f"关闭工作流 Checkpointer 失败: {e}")
     logger.info("服务关闭")
 
 

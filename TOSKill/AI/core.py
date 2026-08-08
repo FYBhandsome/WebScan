@@ -11,6 +11,7 @@ from uuid import uuid4
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from .state import ScanState, create_initial_state, update_state
+from .decision_context import build_decision_context
 from .graph import get_agent_orchestrator, memory_store, safe_ws_send
 from .tools import get_tool_by_name, get_all_tool_names, clean_target, TOOL_MAP
 from .llm_client import get_llm
@@ -206,6 +207,20 @@ async def chat(session_id: str, content: str) -> str:
         memory_store.save_session(session_id, state)
     
     memory_store.append_chat(session_id, "user", content)
+
+    if state.get("scan_status") == "paused_for_chat":
+        context_version = int(state.get("decision_context_version", 0) or 0) + 1
+        state = update_state(
+            append_chat(state, "user", content),
+            decision_context=build_decision_context(
+                state.get("decision_context"),
+                content,
+                version=context_version,
+                pause_id=(state.get("pause_info") or {}).get("pause_id", ""),
+            ),
+            decision_context_version=context_version,
+        )
+        memory_store.save_session(session_id, state)
     
     messages = [SystemMessage(content=CHAT_SYSTEM_PROMPT)]
     for msg in memory_store.get_chat_history(session_id)[-10:]:
