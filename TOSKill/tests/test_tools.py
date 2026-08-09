@@ -67,6 +67,42 @@ class TestToolRegistry:
         result = clean_target("")
         assert result == ""
 
+    def test_webside_query_uses_structured_tool_invoke(self):
+        from TOSKill.AI.tools import webside_query_scan
+
+        raw_result = {
+            "success": True,
+            "data": {"side_sites": [], "total_count": 0},
+            "error": None,
+        }
+        mock_tool = MagicMock()
+        mock_tool.invoke.return_value = raw_result
+        with patch("TOSKill.AI.tools.resolve_target_ip", return_value="44.238.29.244") as resolver:
+            with patch("TOSKill.AI.tools.webside_query", mock_tool):
+                result = webside_query_scan.invoke({"target": "http://testasp.vulnweb.com"})
+
+        resolver.assert_called_once_with("http://testasp.vulnweb.com")
+        mock_tool.invoke.assert_called_once_with({"ip": "44.238.29.244"})
+        assert result["success"] is True
+        assert result["data"]["total_count"] == 0
+
+    def test_webside_query_propagates_tool_error(self):
+        from TOSKill.AI.tools import webside_query_scan
+
+        raw_result = {
+            "success": False,
+            "data": {},
+            "error": "query failed",
+        }
+        mock_tool = MagicMock()
+        mock_tool.invoke.return_value = raw_result
+        with patch("TOSKill.AI.tools.resolve_target_ip", return_value="44.238.29.244"):
+            with patch("TOSKill.AI.tools.webside_query", mock_tool):
+                result = webside_query_scan.invoke({"target": "http://testasp.vulnweb.com"})
+
+        assert result["success"] is False
+        assert result["error"] == "query failed"
+
 
 class TestToolIntegrity:
     """工具完整性检查"""

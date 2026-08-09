@@ -1,7 +1,7 @@
 {
   "embed_model": "BAAI/bge-small-zh-v1.5",
-  "knowledge_fingerprint": "f0d04417dc0ca64790208018b32c9e382e5c66528bd28387dc096f78b497a347",
+  "knowledge_fingerprint": "5a3211e6fd25e65268445ad17ea39d2f5495396e138eca0a60f66db6bee0fc6e",
   "document_count": 17,
-  "version": "v2.17.20260807",
-  "indexed_at": "2026-08-07T20:02:56.600792"
+  "version": "v2.17.20260809",
+  "indexed_at": "2026-08-09T16:46:51.661972"
 }

@@ -3677,6 +3677,11 @@ def router(state: ScanState) -> str:
     user_choice = state.get("user_choice", "")
     
     if next_task == "end":
+        if (
+            state.get("workflow_mode") == "full_scan"
+            and state.get("mode") in {"info_collection", "vuln_scan"}
+        ):
+            return "phase_complete"
         return "report_generation"
     
     if next_task == "continue":
@@ -3703,6 +3708,17 @@ def router(state: ScanState) -> str:
         return "rejection_handler"
     
     return "user_interact"
+
+
+async def phase_complete(state: ScanState) -> ScanState:
+    """Finish one stage of a multi-stage scan without generating a report."""
+    return update_state(
+        state,
+        is_complete=False,
+        should_continue=True,
+        user_choice="",
+        next_task="",
+    )
 
 
 def create_checkpointer(db_path: str = None):
@@ -3810,6 +3826,7 @@ class InfoCollectionGraph:
         workflow.add_node("script_upload_process", script_upload_process)
         workflow.add_node("script_generate_process", script_generate_process)
         workflow.add_node("report_generation", report_generation)
+        workflow.add_node("phase_complete", phase_complete)
         
         workflow.set_entry_point("ai_decision")
         workflow.add_edge("ai_decision", "user_interact")
@@ -3822,6 +3839,7 @@ class InfoCollectionGraph:
         workflow.add_edge("script_upload_process", "ai_decision")
         workflow.add_edge("script_generate_process", "ai_decision")
         workflow.add_edge("report_generation", END)
+        workflow.add_edge("phase_complete", END)
         
         if checkpointer is None:
             checkpointer = MemorySaver()
@@ -3845,6 +3863,7 @@ class VulnScanGraph:
         workflow.add_node("script_upload_process", script_upload_process)
         workflow.add_node("script_generate_process", script_generate_process)
         workflow.add_node("report_generation", report_generation)
+        workflow.add_node("phase_complete", phase_complete)
         
         workflow.set_entry_point("ai_decision")
         workflow.add_edge("ai_decision", "user_interact")
@@ -3857,6 +3876,7 @@ class VulnScanGraph:
         workflow.add_edge("script_upload_process", "ai_decision")
         workflow.add_edge("script_generate_process", "ai_decision")
         workflow.add_edge("report_generation", END)
+        workflow.add_edge("phase_complete", END)
         
         if checkpointer is None:
             checkpointer = MemorySaver()
@@ -3943,6 +3963,34 @@ class AgentOrchestrator:
             return asyncio.run(self.aclose())
         return loop.create_task(self.aclose())
 
+    async def _continue_full_scan(self, session_id: str, state: ScanState) -> ScanState:
+        """Advance a completed full-scan stage until the next interrupt or report."""
+        config = {"configurable": {"thread_id": session_id}}
+        current = state
+
+        while current and not current.get("__interrupt__") and not current.get("is_complete"):
+            mode = current.get("mode")
+            if mode == "info_collection":
+                current = update_state(
+                    current,
+                    mode="vuln_scan",
+                    user_choice="",
+                    next_task="",
+                    should_continue=True,
+                    is_complete=False,
+                )
+                current = await self.vuln_graph.ainvoke(current, config=config)
+            elif mode == "vuln_scan":
+                current = update_state(current, mode="full_scan", is_complete=False)
+                current = await self.report_graph.ainvoke(current, config=config)
+            else:
+                break
+
+            if current and not isinstance(current, dict):
+                current = dict(current)
+
+        return current
+
     @staticmethod
     def _merge_workflow_result(session_id: str, result: Optional[Dict[str, Any]]):
         """Merge graph output with MemoryStore fields updated during chat.
@@ -3987,12 +4035,21 @@ class AgentOrchestrator:
                     resume_value.setdefault(key, stored_state[key])
         
         try:
-            checkpoint = await self.info_graph.aget_state(config)
+            stored_state = memory_store.get_session(session_id) or {}
+            mode = stored_state.get("mode", "full_scan")
+            if mode == "vuln_scan":
+                checkpoint = await self.vuln_graph.aget_state(config)
+            elif mode == "info_collection":
+                checkpoint = await self.info_graph.aget_state(config)
+            else:
+                checkpoint = await self.intent_graph.aget_state(config)
+
+            if not checkpoint or not checkpoint.values:
+                checkpoint = await self.info_graph.aget_state(config)
             if not checkpoint or not checkpoint.values:
                 checkpoint = await self.vuln_graph.aget_state(config)
             if not checkpoint or not checkpoint.values:
                 checkpoint = await self.intent_graph.aget_state(config)
-            mode = "full_scan"
             if checkpoint and checkpoint.values:
                 state_data = checkpoint.values
                 mode = state_data.get("mode", "full_scan")
@@ -4047,6 +4104,14 @@ class AgentOrchestrator:
             
             if result and not isinstance(result, dict):
                 result = dict(result)
+
+            if (
+                result
+                and not result.get("__interrupt__")
+                and not result.get("is_complete")
+                and result.get("workflow_mode") == "full_scan"
+            ):
+                result = await self._continue_full_scan(session_id, result)
 
             result, interrupt_envelope = self._merge_workflow_result(session_id, result)
             if result:
@@ -4171,7 +4236,7 @@ class AgentOrchestrator:
             memory_store.set_websocket_callback(session_id, websocket_callback)
         
         try:
-            state = update_state(state, mode="info_collection")
+            state = update_state(state, mode="info_collection", workflow_mode="full_scan")
             state = await self.info_graph.ainvoke(
                 state,
                 config={"configurable": {"thread_id": session_id}}
@@ -4208,7 +4273,7 @@ class AgentOrchestrator:
         if websocket_callback:
             memory_store.set_websocket_callback(session_id, websocket_callback)
         
-        state = update_state(state, mode="info_collection")
+        state = update_state(state, mode="info_collection", workflow_mode="info_collection")
         return await self.info_graph.ainvoke(
             state,
             config={"configurable": {"thread_id": session_id}}
@@ -4222,7 +4287,7 @@ class AgentOrchestrator:
         if websocket_callback:
             memory_store.set_websocket_callback(session_id, websocket_callback)
         
-        state = update_state(state, mode="vuln_scan")
+        state = update_state(state, mode="vuln_scan", workflow_mode="vuln_scan")
         return await self.vuln_graph.ainvoke(
             state,
             config={"configurable": {"thread_id": session_id}}

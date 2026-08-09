@@ -42,6 +42,7 @@ from TOSKill.tools.info_collection.infoleak import infoleak_scan as infoleak
 from TOSKill.tools.info_collection.iplocating import ip_locate
 from TOSKill.tools.info_collection.webside import webside_query
 from TOSKill.tools.info_collection.webweight import web_weight
+from TOSKill.tools.info_collection.crawler import crawler
 from TOSKill.tools.vuln_scan.sqli import sqli_scan as sqli
 from TOSKill.tools.vuln_scan.xss import xss_scan as xss
 from TOSKill.tools.vuln_scan.csrf import csrf_scan as csrf
@@ -325,6 +326,26 @@ def clean_target(target: str) -> str:
         return parsed.netloc.strip()
     
     return target
+
+
+def resolve_target_ip(target: str) -> str:
+    """Extract the host from a scan target and resolve it to an IPv4 address."""
+    import ipaddress
+    import socket
+
+    value = target.strip()
+    parsed = urlparse(value if "://" in value else f"//{value}")
+    host = parsed.hostname or clean_target(value).split(":", 1)[0]
+    if not host:
+        raise ValueError("扫描目标缺少有效主机名或 IP 地址")
+
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        try:
+            return socket.gethostbyname(host)
+        except OSError as exc:
+            raise ValueError(f"无法解析目标域名 {host} 的 IP 地址") from exc
 
 
 def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None) -> Any:
@@ -797,10 +818,15 @@ def webside_query_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行备案查询：{t}")
     try:
-        raw_result = webside_query(t)
+        target_ip = resolve_target_ip(target)
+        raw_result = webside_query.invoke({"ip": target_ip})
+        raw_success = raw_result.get("success", False) if isinstance(raw_result, dict) else True
+        raw_data = raw_result.get("data") if isinstance(raw_result, dict) else {"result": raw_result}
+        raw_error = raw_result.get("error") if isinstance(raw_result, dict) else None
         return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
+            success=raw_success,
+            data=raw_data if isinstance(raw_data, dict) else {},
+            error=raw_error,
         )
     except Exception as e:
         logger.error(f"备案查询失败: {e}")
@@ -836,6 +862,25 @@ def web_weight_scan(target: str) -> ToolResult:
         )
     except Exception as e:
         logger.error(f"权重查询失败: {e}")
+        return wrap_tool_result(success=False, data={}, error=str(e))
+
+
+# ==================== Web 爬虫工具 ====================
+
+@tool
+def crawler_scan(target: str) -> ToolResult:
+    """
+    Web 站点爬虫工具。
+
+    从目标 URL 开始抓取站内页面，提取链接、表单、参数、脚本和敏感信息，
+    并返回站点地图及抓取统计。target 应为目标 URL 或域名。
+    """
+    t = target.strip()
+    logger.info(f"[+] 执行 Web 站点爬虫：{t}")
+    try:
+        return normalize_scanner_result(crawler(t))
+    except Exception as e:
+        logger.error(f"Web 站点爬虫执行失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
 
 
@@ -1357,6 +1402,7 @@ INFO_COLLECTION_TOOLS = [
     ip_locate_scan,
     webside_query_scan,
     web_weight_scan,
+    crawler_scan,
 ]
 
 VULN_SCAN_TOOLS = [
@@ -1392,6 +1438,7 @@ TOOL_SEQUENCE_INFO = [
     "ip_locate_scan",
     "webside_query_scan",
     "web_weight_scan",
+    "crawler_scan",
 ]
 
 TOOL_SEQUENCE_VULN = [
