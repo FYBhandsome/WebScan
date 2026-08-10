@@ -10,6 +10,9 @@ import hashlib
 import threading
 import functools
 import time
+import shutil
+import tempfile
+import uuid
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
@@ -32,6 +35,7 @@ logger = logging.getLogger(__name__)
 _STORAGE_DIR = Path(__file__).parent / "storage"
 _KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
 _MANIFEST_PATH = _STORAGE_DIR / "index_manifest.json"
+_INDEX_SCHEMA_VERSION = 3
 
 TOOL_KNOWLEDGE_MAP = {
     "baseinfo_scan": ["信息收集", "资产发现", "HTTP头", "SSL证书", "技术栈识别"],
@@ -119,6 +123,10 @@ class TOSKillRAGEngine:
         self._document_count = 0
         self._embed_model = None
         self._model_load_error: Optional[str] = None
+        self._index_generation = 0
+        # 索引重建、首次初始化和状态读取共用此锁。重建完成前绝不替换
+        # 正在服务请求的内存索引。
+        self._index_lock = threading.RLock()
         if settings.RAG_ENABLED:
             self._initialize_rag()
 
@@ -333,15 +341,16 @@ class TOSKillRAGEngine:
 
     def initialize(self, force: bool = False) -> bool:
         """初始化或重新初始化 RAG 引擎。"""
-        if force:
-            self.index = None
-            self.retriever = None
-            self._initialized = False
-            self._embed_model = None
-            self._model_load_error = None
-            self._query_cache.clear()
-        self._initialize_rag()
-        return self.is_ready
+        with self._index_lock:
+            if force:
+                self.index = None
+                self.retriever = None
+                self._initialized = False
+                self._embed_model = None
+                self._model_load_error = None
+                self._query_cache.clear()
+            self._initialize_rag()
+            return self.is_ready
 
     def _knowledge_fingerprint(self) -> str:
         digest = hashlib.sha256(settings.RAG_EMBED_MODEL.encode("utf-8"))
@@ -356,6 +365,8 @@ class TOSKillRAGEngine:
         try:
             manifest = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
             return (
+                manifest.get("storage_schema") == _INDEX_SCHEMA_VERSION
+                and
                 manifest.get("embed_model") == settings.RAG_EMBED_MODEL
                 and manifest.get("knowledge_fingerprint") == self._knowledge_fingerprint()
             )
@@ -363,72 +374,93 @@ class TOSKillRAGEngine:
             logger.warning(f"读取RAG索引清单失败，将重建索引: {e}")
             return False
 
-    def _write_manifest(self):
+    def _write_manifest(self, persist_dir: Optional[Path] = None, document_count: Optional[int] = None):
+        """写入索引清单；重建时写入临时目录而不是线上目录。"""
+        persist_dir = persist_dir or _STORAGE_DIR
+        document_count = self._document_count if document_count is None else document_count
         manifest = {
+            "storage_schema": _INDEX_SCHEMA_VERSION,
             "embed_model": settings.RAG_EMBED_MODEL,
             "knowledge_fingerprint": self._knowledge_fingerprint(),
-            "document_count": self._document_count,
-            "version": f"v2.{self._document_count}.{datetime.now().strftime('%Y%m%d')}",
+            "document_count": document_count,
+            "version": f"v2.{document_count}.{datetime.now().strftime('%Y%m%d')}",
             "indexed_at": datetime.now().isoformat(),
         }
-        _MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        (persist_dir / "index_manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
     def _initialize_rag(self):
-        if self._initialized:
-            return
-        try:
-            self._embed_model = self._try_load_embed_model()
-            
-            if self._embed_model is None:
-                self._model_load_error = "所有嵌入模型加载失败，RAG功能不可用"
-                logger.warning(self._model_load_error)
-                logger.warning("服务将在无RAG模式下启动，工作流将跳过RAG增强步骤")
+        with self._index_lock:
+            if self._initialized:
                 return
-            
-            Settings.embed_model = self._embed_model
+            try:
+                self._embed_model = self._try_load_embed_model()
 
-            _STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-            _KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+                if self._embed_model is None:
+                    self._model_load_error = "所有嵌入模型加载失败，RAG功能不可用"
+                    logger.warning(self._model_load_error)
+                    logger.warning("服务将在无RAG模式下启动，工作流将跳过RAG增强步骤")
+                    return
 
-            index_exists = (_STORAGE_DIR / "docstore.json").exists()
-            if index_exists and self._manifest_matches():
-                try:
-                    storage_context = StorageContext.from_defaults(persist_dir=str(_STORAGE_DIR))
-                    self.index = load_index_from_storage(storage_context)
-                    self._document_count = len(list(_KNOWLEDGE_DIR.glob("*.md")))
-                    logger.info(f"RAG 索引加载成功: {_STORAGE_DIR}")
-                except Exception as e:
-                    logger.warning(f"索引加载失败，将重建: {e}")
+                Settings.embed_model = self._embed_model
+
+                _STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+                _KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+
+                index_exists = (_STORAGE_DIR / "docstore.json").exists()
+                if index_exists and self._manifest_matches():
+                    try:
+                        storage_context = StorageContext.from_defaults(persist_dir=str(_STORAGE_DIR))
+                        self.index = load_index_from_storage(storage_context)
+                        self._document_count = len(list(_KNOWLEDGE_DIR.glob("*.md")))
+                        logger.info(f"RAG 索引加载成功: {_STORAGE_DIR}")
+                    except Exception as e:
+                        logger.warning(f"索引加载失败，将重建: {e}")
+                        self._build_index()
+                else:
                     self._build_index()
-            else:
-                self._build_index()
 
-            self.retriever = VectorIndexRetriever(
-                index=self.index,
-                similarity_top_k=5,
-            )
-            self._initialized = True
-            logger.info(f"TOSKillRAGEngine 初始化完成 (文档数: {self._document_count})")
+                self.retriever = VectorIndexRetriever(
+                    index=self.index,
+                    similarity_top_k=5,
+                )
+                self._initialized = True
+                self._model_load_error = None
+                logger.info(f"TOSKillRAGEngine 初始化完成 (文档数: {self._document_count})")
 
-        except Exception as e:
-            logger.error(f"RAG 初始化失败: {e}", exc_info=True)
-            self._model_load_error = f"RAG初始化失败: {e}"
-            logger.warning("服务将在无RAG模式下启动，工作流将跳过RAG增强步骤")
+            except Exception as e:
+                logger.error(f"RAG 初始化失败: {e}", exc_info=True)
+                self._model_load_error = f"RAG初始化失败: {e}"
+                logger.warning("服务将在无RAG模式下启动，工作流将跳过RAG增强步骤")
 
     def _build_index(self):
-        """从知识库文件构建向量索引"""
+        """从知识库文件构建、验证并发布向量索引。"""
+        index, document_count = self._build_staged_index()
+        self.index = index
+        self._document_count = document_count
+        logger.info(f"RAG 索引创建成功: {self._document_count} 个文档")
+
+    def _load_knowledge_documents(self) -> List[Document]:
+        """读取知识库文档；构建失败不应触碰当前持久化索引。"""
         documents = []
         
         for md_file in _KNOWLEDGE_DIR.glob("*.md"):
             try:
                 reader = SimpleDirectoryReader(
                     input_files=[str(md_file)],
-                    filename_as_id=True
+                    filename_as_id=False,
                 )
                 docs = reader.load_data()
+                source_id = self._portable_source_id(md_file)
                 for doc in docs:
-                    doc.metadata["file_name"] = md_file.name
-                    doc.metadata["source"] = str(md_file)
+                    # SimpleDirectoryReader 会注入 file_path/document_id 等绝对路径
+                    # 元数据。索引需要跨设备可用，因此只保存稳定的相对标识。
+                    doc.id_ = source_id
+                    doc.metadata = {
+                        "file_name": md_file.name,
+                        "source": source_id,
+                    }
                 documents.extend(docs)
                 logger.debug(f"加载知识库: {md_file.name}")
             except Exception as e:
@@ -438,14 +470,105 @@ class TOSKillRAGEngine:
             logger.warning("知识库为空，创建默认文档")
             documents = [Document(
                 text="Web安全扫描知识库。支持XSS、SQL注入、文件上传等漏洞检测。",
-                metadata={"file_name": "default.md"}
+                id_="knowledge/default.md",
+                metadata={"file_name": "default.md", "source": "knowledge/default.md"},
             )]
 
-        self.index = VectorStoreIndex.from_documents(documents, show_progress=True)
-        self.index.storage_context.persist(persist_dir=str(_STORAGE_DIR))
-        self._document_count = len(documents)
-        self._write_manifest()
-        logger.info(f"RAG 索引创建成功: {self._document_count} 个文档")
+        return documents
+
+    @staticmethod
+    def _portable_source_id(knowledge_file: Path) -> str:
+        """生成与项目部署位置无关的知识库文档标识。"""
+        try:
+            return knowledge_file.relative_to(_KNOWLEDGE_DIR.parent).as_posix()
+        except ValueError:
+            # 防御性回退：调用方即使传入外部路径，也绝不将该绝对路径写入索引。
+            return f"knowledge/{knowledge_file.name}"
+
+    def _create_index(self) -> tuple[VectorStoreIndex, int]:
+        documents = self._load_knowledge_documents()
+        return VectorStoreIndex.from_documents(documents, show_progress=True), len(documents)
+
+    def _validate_staged_index(self, persist_dir: Path) -> None:
+        """在发布前重新加载一次临时索引，确保落盘文件完整可用。"""
+        storage_context = StorageContext.from_defaults(persist_dir=str(persist_dir))
+        loaded_index = load_index_from_storage(storage_context)
+        VectorIndexRetriever(index=loaded_index, similarity_top_k=5)
+
+    def _promote_staged_storage(self, staged_dir: Path) -> None:
+        """发布临时索引；兼容 Windows 无法重命名正在访问目录的限制。"""
+        storage_parent = _STORAGE_DIR.parent
+        storage_parent.mkdir(parents=True, exist_ok=True)
+        backup_dir = storage_parent / f"storage-backup-{uuid.uuid4().hex}"
+        staged_files = [path for path in staged_dir.iterdir() if path.is_file()]
+        if not staged_files:
+            raise RuntimeError("临时 RAG 索引目录为空，拒绝发布")
+
+        # manifest 是索引完整可用的提交标志，必须最后替换。这样在发布期间，
+        # 新进程最多看到旧清单而非半成品清单。
+        staged_files.sort(key=lambda path: path.name == "index_manifest.json")
+        replaced_names: List[str] = []
+        removed_names: List[str] = []
+
+        try:
+            backup_dir.mkdir()
+
+            # 先复制现有 JSON 作为回滚备份，不重命名 storage 目录本身。
+            # Windows 上目录句柄（Explorer、杀毒软件、运行中的服务）可能拒绝
+            # 目录 rename，但通常不会阻止单个文件的原子替换。
+            current_json_files = [
+                path for path in _STORAGE_DIR.glob("*.json") if path.is_file()
+            ]
+            for current_file in current_json_files:
+                shutil.copy2(current_file, backup_dir / current_file.name)
+
+            for staged_file in staged_files:
+                target_file = _STORAGE_DIR / staged_file.name
+                os.replace(staged_file, target_file)
+                replaced_names.append(staged_file.name)
+
+            staged_names = {path.name for path in staged_files}
+            for current_file in current_json_files:
+                if current_file.name not in staged_names and current_file.exists():
+                    current_file.unlink()
+                    removed_names.append(current_file.name)
+        except Exception as exc:
+            rollback_errors = []
+            for file_name in reversed(replaced_names + removed_names):
+                backup_file = backup_dir / file_name
+                target_file = _STORAGE_DIR / file_name
+                try:
+                    if backup_file.exists():
+                        os.replace(backup_file, target_file)
+                    elif target_file.exists():
+                        target_file.unlink()
+                except OSError as rollback_exc:
+                    rollback_errors.append(f"{file_name}: {rollback_exc}")
+
+            if rollback_errors:
+                logger.error("RAG 索引发布失败，且部分文件回滚失败: %s", "; ".join(rollback_errors))
+            raise RuntimeError(f"发布 RAG 索引文件失败: {exc}") from exc
+        finally:
+            if backup_dir.exists():
+                try:
+                    shutil.rmtree(backup_dir)
+                except OSError as exc:
+                    logger.warning("清理 RAG 索引备份目录失败 %s: %s", backup_dir, exc)
+
+    def _build_staged_index(self) -> tuple[VectorStoreIndex, int]:
+        """构建到临时目录，验证成功后才替换正式索引目录。"""
+        _STORAGE_DIR.parent.mkdir(parents=True, exist_ok=True)
+        staged_dir = Path(tempfile.mkdtemp(prefix="storage-rebuild-", dir=str(_STORAGE_DIR.parent)))
+        try:
+            index, document_count = self._create_index()
+            index.storage_context.persist(persist_dir=str(staged_dir))
+            self._write_manifest(staged_dir, document_count)
+            self._validate_staged_index(staged_dir)
+            self._promote_staged_storage(staged_dir)
+            return index, document_count
+        finally:
+            if staged_dir.exists():
+                shutil.rmtree(staged_dir, ignore_errors=True)
 
     def _build_retrieval_query(
         self,
@@ -511,6 +634,11 @@ class TOSKillRAGEngine:
         key_str = f"{target}|{current_task}|{'|'.join(completed_tasks)}"
         return hashlib.md5(key_str.encode()).hexdigest()
 
+    def _get_retriever_snapshot(self) -> tuple[Optional[VectorIndexRetriever], int]:
+        """获取一次检索快照，使正在执行的查询可安全使用旧索引。"""
+        with self._index_lock:
+            return self.retriever, self._index_generation
+
     def retrieve_scan_strategy(
         self,
         target: str,
@@ -530,7 +658,8 @@ class TOSKillRAGEngine:
         Returns:
             str: 检索到的专业知识上下文
         """
-        if not self.retriever:
+        retriever, index_generation = self._get_retriever_snapshot()
+        if not retriever:
             if settings.RAG_KEYWORD_FALLBACK:
                 logger.warning("RAG向量检索器未初始化，使用关键词知识库检索")
                 return self._retrieve_keyword_strategy(current_task, completed_tasks, last_result)
@@ -539,7 +668,7 @@ class TOSKillRAGEngine:
 
         self._total_queries += 1
         
-        cache_key = self._get_cache_key(target, current_task, completed_tasks)
+        cache_key = f"{index_generation}:{self._get_cache_key(target, current_task, completed_tasks)}"
         if cache_key in self._query_cache:
             self._cache_hits += 1
             logger.debug(f"RAG缓存命中: {cache_key[:8]}")
@@ -548,7 +677,7 @@ class TOSKillRAGEngine:
         query = self._build_retrieval_query(target, current_task, completed_tasks, last_result)
 
         try:
-            nodes: List[NodeWithScore] = self.retriever.retrieve(query)
+            nodes: List[NodeWithScore] = retriever.retrieve(query)
             if not nodes:
                 logger.warning(f"RAG检索无结果: query='{query[:50]}...'")
                 return ""
@@ -639,7 +768,8 @@ class TOSKillRAGEngine:
         Returns:
             str: 检索到的等保知识上下文
         """
-        if not self.retriever:
+        retriever, index_generation = self._get_retriever_snapshot()
+        if not retriever:
             if settings.RAG_KEYWORD_FALLBACK:
                 logger.warning("RAG未就绪，使用关键词降级检索等保上下文")
                 return self._retrieve_mlps_keyword_fallback(vulnerabilities)
@@ -649,14 +779,14 @@ class TOSKillRAGEngine:
         self._total_queries += 1
 
         query = self._build_mlps_query(vulnerabilities, tool_results)
-        cache_key = hashlib.md5(("mlps:" + query).encode()).hexdigest()
+        cache_key = f"{index_generation}:" + hashlib.md5(("mlps:" + query).encode()).hexdigest()
         if cache_key in self._query_cache:
             self._cache_hits += 1
             logger.debug(f"MLPS RAG缓存命中: {cache_key[:8]}")
             return self._query_cache[cache_key]
 
         try:
-            nodes: List[NodeWithScore] = self.retriever.retrieve(query)
+            nodes: List[NodeWithScore] = retriever.retrieve(query)
             if not nodes:
                 logger.warning(f"MLPS RAG检索无结果: query='{query[:50]}...'")
                 return ""
@@ -774,41 +904,60 @@ class TOSKillRAGEngine:
         return ""
 
     def rebuild_index(self) -> bool:
-        """重建向量索引（知识库更新后调用）"""
-        try:
-            self._build_index()
-            self.retriever = VectorIndexRetriever(
-                index=self.index,
-                similarity_top_k=5,
-            )
-            self._query_cache.clear()
-            logger.info("RAG 索引重建成功")
-            return True
-        except Exception as e:
-            logger.error(f"索引重建失败: {e}")
-            return False
+        """重建向量索引；失败时保留旧索引及其检索能力。"""
+        with self._index_lock:
+            try:
+                if self._embed_model is None:
+                    self._embed_model = self._try_load_embed_model()
+                    if self._embed_model is None:
+                        self._model_load_error = "所有嵌入模型加载失败，无法重建 RAG 索引"
+                        logger.warning(self._model_load_error)
+                        return False
+
+                Settings.embed_model = self._embed_model
+                new_index, new_document_count = self._build_staged_index()
+                new_retriever = VectorIndexRetriever(
+                    index=new_index,
+                    similarity_top_k=5,
+                )
+
+                # 持久化文件已完成验证并发布后，才一次性切换内存检索器。
+                self.index = new_index
+                self.retriever = new_retriever
+                self._document_count = new_document_count
+                self._initialized = True
+                self._model_load_error = None
+                self._index_generation += 1
+                self._query_cache.clear()
+                logger.info("RAG 索引重建成功: 文档数=%s", new_document_count)
+                return True
+            except Exception as e:
+                logger.error("RAG 索引重建失败，继续使用旧索引: %s", e, exc_info=True)
+                return False
 
     def get_stats(self) -> Dict[str, Any]:
-        return {
-            "initialized": self._initialized,
-            "ready": self.is_ready,
-            "document_count": self._document_count,
-            "cache_size": len(self._query_cache),
-            "cache_hits": self._cache_hits,
-            "total_queries": self._total_queries,
-            "hit_rate": f"{self._cache_hits / max(1, self._total_queries) * 100:.1f}%",
-            "knowledge_dir": str(_KNOWLEDGE_DIR),
-            "storage_dir": str(_STORAGE_DIR),
-            "embed_model_loaded": self._embed_model is not None,
-            "model_load_error": self._model_load_error,
-            "embed_model": settings.RAG_EMBED_MODEL,
-            "model_cache_dir": settings.RAG_MODEL_CACHE_DIR,
-            "keyword_fallback_enabled": settings.RAG_KEYWORD_FALLBACK,
-        }
+        with self._index_lock:
+            return {
+                "initialized": self._initialized,
+                "ready": self.is_ready,
+                "document_count": self._document_count,
+                "cache_size": len(self._query_cache),
+                "cache_hits": self._cache_hits,
+                "total_queries": self._total_queries,
+                "hit_rate": f"{self._cache_hits / max(1, self._total_queries) * 100:.1f}%",
+                "knowledge_dir": str(_KNOWLEDGE_DIR),
+                "storage_dir": str(_STORAGE_DIR),
+                "embed_model_loaded": self._embed_model is not None,
+                "model_load_error": self._model_load_error,
+                "embed_model": settings.RAG_EMBED_MODEL,
+                "model_cache_dir": settings.RAG_MODEL_CACHE_DIR,
+                "keyword_fallback_enabled": settings.RAG_KEYWORD_FALLBACK,
+            }
 
     @property
     def is_ready(self) -> bool:
-        return self._initialized and self.retriever is not None
+        with self._index_lock:
+            return self._initialized and self.retriever is not None
 
 
 _rag_engine: Optional[TOSKillRAGEngine] = None

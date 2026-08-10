@@ -45,7 +45,9 @@ def cms_detect(target: str) -> Dict[str, Any]:
                 "tool": "cms_detect",
                 "target": target,
                 "apps_count": len(result.get("data", {}).get("apps", [])),
-                "server": result.get("data", {}).get("server", "")
+                "server": result.get("data", {}).get("server", ""),
+                "error_code": result.get("error_code"),
+                "error_type": result.get("error_type")
             }
         }
     except ImportError as e:

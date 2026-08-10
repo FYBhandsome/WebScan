@@ -187,7 +187,7 @@ class AIChatManager:
             await self._send_run_snapshot(session_id, existing_state)
             pending = memory_store.get_pending_interaction(session_id)
             if pending:
-                await websocket.send_json(pending)
+                await websocket.send_json(self._pending_for_client(session_id, pending))
         return session_id
     
     def disconnect(self, session_id: str, websocket: WebSocket = None):
@@ -267,6 +267,7 @@ class AIChatManager:
         return decorated
 
     async def _send_run_snapshot(self, session_id: str, state: Dict):
+        pending_interaction = memory_store.get_pending_interaction(session_id)
         await self._send(session_id, {
             "type": "run_snapshot",
             "payload": {
@@ -290,6 +291,11 @@ class AIChatManager:
                 "report_url": state.get("report_url", ""),
                 "report_id": state.get("report_id", ""),
                 "html_report_url": state.get("html_report_url", ""),
+                # The persisted scan state is not enough to reconstruct the
+                # active form after a reconnect.  Include the authoritative
+                # pending interaction so the client can discard stale cards
+                # restored from localStorage.
+                "pending_interaction": self._pending_for_client(session_id, pending_interaction),
                 "logs": log_collector.get_logs(session_id)[-100:],
             },
         })
@@ -301,6 +307,20 @@ class AIChatManager:
                 await ws.send_json(message)
             except Exception as e:
                 logger.error(f"发送消息失败: {e}")
+
+    def _pending_for_client(self, session_id: str, pending: Optional[Dict]) -> Optional[Dict]:
+        """Add routing metadata to a pending interaction replay."""
+        if not pending:
+            return None
+        state = memory_store.get_session(session_id) or {}
+        message = dict(pending)
+        payload = dict(message.get("payload") or {})
+        payload.setdefault("session_id", session_id)
+        if state.get("run_id"):
+            payload.setdefault("run_id", state["run_id"])
+        message["payload"] = payload
+        message.setdefault("session_id", session_id)
+        return message
 
     async def _send_multi(self, session_id: str, message: Dict):
         """向所有订阅了 session_id 的连接发送消息（用于后台任务事件广播）"""
@@ -449,6 +469,7 @@ class AIChatManager:
                         "payload": {
                             "choice": choice,
                             "completed_tasks": result.get("completed_tasks", []),
+                            "total_tasks": len(result.get("planned_tasks", [])),
                             "is_complete": result.get("is_complete", False)
                         }
                     })
@@ -466,10 +487,16 @@ class AIChatManager:
                         })
                 else:
                     await self._send_error(session_id, "恢复工作流失败：会话不存在")
-                    
             except Exception as e:
                 logger.error(f"[{session_id}] 恢复工作流失败: {e}")
                 await self._send_error(session_id, f"恢复工作流失败: {str(e)}")
+        else:
+            # A browser can still submit a card restored from an earlier
+            # interaction. Keep the strict ID check, but resend the current
+            # pending interaction so the UI can replace the stale card.
+            pending = memory_store.get_pending_interaction(session_id)
+            if pending and pending.get("type") == "interaction_required":
+                await self._send(session_id, self._pending_for_client(session_id, pending))
     
     async def _handle_pause_for_chat(self, session_id: str, payload: Dict):
         """Serialize pause requests so duplicate clicks/retries share one pause snapshot."""
@@ -809,7 +836,6 @@ class AIChatManager:
     async def _handle_start_scan_impl(self, session_id: str, payload: Dict):
         target = payload.get("target", "")
         scan_mode = payload.get("scan_mode", "info")
-        
         logger.info(f"[{session_id}] ========== 开始扫描请求 ==========")
         logger.info(f"[{session_id}] 原始目标: {target}")
         logger.info(f"[{session_id}] 扫描模式: {scan_mode}")
@@ -1085,6 +1111,7 @@ class AIChatManager:
                         "report_url": state.get("report_url", ""),
                         "report_id": state.get("report_id", ""),
                         "html_report_url": state.get("html_report_url", ""),
+                        "pending_interaction": memory_store.get_pending_interaction(session_id),
                     }
                 }
             })
@@ -1192,6 +1219,48 @@ class AIChatManager:
         if not script_content:
             await self._send_error(session_id, "脚本内容不能为空", error_code="EMPTY_SCRIPT")
             return
+
+        # Console scanning pauses the LangGraph workflow while waiting for a
+        # script.  In that case the submitted content must resume the pending
+        # interrupt, rather than bypassing the workflow through the standalone
+        # script-management path below.
+        pending = memory_store.get_pending_interaction(session_id)
+        if (
+            pending
+            and pending.get("type") == "script_upload_request"
+        ):
+            if payload.get("interaction_id") != pending.get("interaction_id"):
+                await self._send_error(
+                    session_id,
+                    "脚本上传请求已过期，请使用当前上传表单",
+                    error_code="INTERACTION_ID_MISMATCH",
+                    expected_interaction_id=pending.get("interaction_id"),
+                )
+                await self._send(session_id, self._pending_for_client(session_id, pending))
+                return
+            try:
+                orchestrator = get_agent_orchestrator()
+                await orchestrator._ensure_initialized()
+                result = await orchestrator.resume_workflow(session_id, {
+                    "script_content": script_content,
+                    "script_name": payload.get("script_name", ""),
+                })
+                if result is None:
+                    await self._send_error(session_id, "恢复脚本上传工作流失败")
+                else:
+                    await self._send(session_id, {
+                        "type": "workflow_resumed",
+                        "payload": {
+                            "completed_tasks": result.get("completed_tasks", []),
+                            "total_tasks": len(result.get("planned_tasks", [])),
+                            "is_complete": result.get("is_complete", False),
+                            "scan_status": result.get("scan_status", "running"),
+                        },
+                    })
+            except Exception as exc:
+                logger.exception(f"[{session_id}] 恢复脚本上传工作流失败: {exc}")
+                await self._send_error(session_id, f"恢复脚本上传工作流失败: {exc}")
+            return
         
         try:
             from TOSKill.AI.script_safety import (
@@ -1232,9 +1301,11 @@ class AIChatManager:
                 "payload": {"stage": "registering", "progress": 70, "message": "正在注册工具..."}
             })
             
+            # 保留用户输入的脚本名称；只有名称为空时才使用 AI 分析名称/默认名称。
+            registered_name = script_name or analysis.get("tool_name", "")
             result = script_manager.register_script_as_tool(
                 script_content=script_content,
-                script_name=analysis.get("tool_name", script_name),
+                script_name=registered_name,
                 description=analysis.get("description", "自定义扫描脚本"),
                 category=analysis.get("category", "custom")
             )
@@ -1271,6 +1342,46 @@ class AIChatManager:
         description = payload.get("description", "")
         if not description:
             await self._send_error(session_id, "脚本描述不能为空", error_code="EMPTY_DESCRIPTION")
+            return
+
+        # See _handle_script_content.  A matching interaction ID keeps the
+        # console workflow separate from standalone script generation in the
+        # Tools view, which intentionally continues through the legacy path.
+        pending = memory_store.get_pending_interaction(session_id)
+        if (
+            pending
+            and pending.get("type") == "script_generate_request"
+        ):
+            if payload.get("interaction_id") != pending.get("interaction_id"):
+                await self._send_error(
+                    session_id,
+                    "脚本生成请求已过期，请使用当前生成表单",
+                    error_code="INTERACTION_ID_MISMATCH",
+                    expected_interaction_id=pending.get("interaction_id"),
+                )
+                await self._send(session_id, self._pending_for_client(session_id, pending))
+                return
+            try:
+                orchestrator = get_agent_orchestrator()
+                await orchestrator._ensure_initialized()
+                result = await orchestrator.resume_workflow(session_id, {
+                    "description": description,
+                })
+                if result is None:
+                    await self._send_error(session_id, "恢复脚本生成工作流失败")
+                else:
+                    await self._send(session_id, {
+                        "type": "workflow_resumed",
+                        "payload": {
+                            "completed_tasks": result.get("completed_tasks", []),
+                            "total_tasks": len(result.get("planned_tasks", [])),
+                            "is_complete": result.get("is_complete", False),
+                            "scan_status": result.get("scan_status", "running"),
+                        },
+                    })
+            except Exception as exc:
+                logger.exception(f"[{session_id}] 恢复脚本生成工作流失败: {exc}")
+                await self._send_error(session_id, f"恢复脚本生成工作流失败: {exc}")
             return
         
         try:
@@ -1455,6 +1566,9 @@ class AIChatManager:
             state = memory_store.get_session(sid)
             if state and state.get("target"):
                 await self._send_run_snapshot(sid, state)
+                pending = memory_store.get_pending_interaction(sid)
+                if pending:
+                    await ws_conn.send_json(self._pending_for_client(sid, pending))
         logger.info(f"[{session_id}] 多会话订阅: {target_sessions}")
 
     async def _handle_unsubscribe(self, session_id: str, payload: Dict):
@@ -1496,11 +1610,22 @@ class AIChatManager:
                     "task_id": state.get("task_id", ""),
                     "target": state.get("target", ""),
                     "mode": state.get("mode", ""),
+                    "run_id": state.get("run_id", ""),
+                    "planned_tasks": state.get("planned_tasks", []),
+                    "total_tasks": len(state.get("planned_tasks", [])),
                     "completed_tasks": state.get("completed_tasks", []),
-                    "is_complete": state.get("is_complete", False)
+                    "failed_tasks": state.get("failed_tasks", []),
+                    "is_complete": state.get("is_complete", False),
+                    "scan_status": state.get("scan_status", ""),
+                    "current_task": state.get("current_task", ""),
+                    "next_task": state.get("next_task", ""),
+                    "pending_interaction": memory_store.get_pending_interaction(subscribe_id),
                 }
             }
         })
+        pending = memory_store.get_pending_interaction(subscribe_id)
+        if pending:
+            await self._send(subscribe_id, self._pending_for_client(subscribe_id, pending))
         logger.info(f"会话订阅: {old_session} -> {subscribe_id}")
     
     async def _handle_high_risk_confirm(self, session_id: str, payload: Dict):

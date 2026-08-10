@@ -18,7 +18,7 @@ from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm
 from TOSKill.AI.state import create_initial_state, append_chat, update_state, get_state_summary
 from TOSKill.AI.tools import (
     TOOL_MAP, get_tool_by_name, get_all_tool_names,
-    INFO_COLLECTION_TOOLS, VULN_SCAN_TOOLS, clean_target
+    INFO_COLLECTION_TOOLS, VULN_SCAN_TOOLS, clean_target, clean_target_for_tool
 )
 from TOSKill.analysis.result_analyzer import get_analyzer
 from TOSKill.utils.target import normalize_scan_target
@@ -132,7 +132,6 @@ def _get_tools_for_mode(mode: str, custom_tools: List[str] = None) -> List[str]:
 async def _execute_tools_async(target: str, tools: List[str]) -> Tuple[List[Dict], List[str]]:
     results = []
     errors = []
-    cleaned_target = clean_target(target)
     
     for tool_name in tools:
         tool = get_tool_by_name(tool_name)
@@ -140,10 +139,11 @@ async def _execute_tools_async(target: str, tools: List[str]) -> Tuple[List[Dict
             errors.append(f"工具 {tool_name} 不存在")
             continue
         try:
+            tool_target = clean_target_for_tool(tool_name, target)
             if hasattr(tool, 'ainvoke') and callable(getattr(tool, 'ainvoke')):
-                result = await tool.ainvoke(cleaned_target)
+                result = await tool.ainvoke(tool_target)
             else:
-                result = tool.invoke(cleaned_target)
+                result = tool.invoke(tool_target)
             results.append({
                 "tool": tool_name,
                 "success": True,
@@ -354,7 +354,7 @@ async def api_list_tools_by_category():
 @router.post("/tools/execute", response_model=APIResponse)
 async def api_execute_tool(request: ToolExecuteRequest):
     tool = get_tool_by_name(request.tool_name)
-    target = clean_target(request.target)
+    target = clean_target_for_tool(request.tool_name, request.target)
     
     try:
         result = tool.invoke(target)

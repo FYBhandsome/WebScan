@@ -240,5 +240,13 @@ Seebug_Agent/generated_pocs/
 TOSKill/scripts/custom/*
 !TOSKill/scripts/custom/.gitkeep
 
+# -------------------------------------------
+# Project Specific: Generated RAG Index
+# -------------------------------------------
+# LlamaIndex 持久化文件由当前知识文档和嵌入模型生成，不能跨机器复用。
+# 服务启动或设置页的“重建向量索引”会自动重新创建这些文件。
+TOSKill/RAG/storage/*.json
+!TOSKill/RAG/storage/.gitkeep
+
 codeguarddemo/*
 demo_presentation_report/*

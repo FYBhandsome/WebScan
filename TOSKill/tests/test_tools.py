@@ -67,6 +67,25 @@ class TestToolRegistry:
         result = clean_target("")
         assert result == ""
 
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "http://example.com",
+            "https://example.com/page?id=1",
+            "http://127.0.0.1:8080/admin",
+        ],
+    )
+    def test_vulnerability_tools_preserve_complete_url(self, target):
+        from TOSKill.AI.tools import clean_target_for_tool
+
+        assert clean_target_for_tool("sqli_scan", target) == target
+        assert clean_target_for_tool("xss_scan", target) == target
+
+    def test_host_oriented_tools_keep_legacy_target_cleaning(self):
+        from TOSKill.AI.tools import clean_target_for_tool
+
+        assert clean_target_for_tool("baseinfo_scan", "https://example.com/page?id=1") == "example.com"
+
 
 class TestToolIntegrity:
     """工具完整性检查"""

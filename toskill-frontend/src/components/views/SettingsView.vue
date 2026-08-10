@@ -81,6 +81,68 @@
       <div class="settings-card">
         <div class="card-header">
           <Database :size="20" class="card-icon" />
+          <span class="card-title">RAG 知识库</span>
+        </div>
+        <div class="card-body">
+          <div v-if="ragLoading" class="rag-loading">
+            <Loader :size="16" class="spinning" />
+            正在读取知识库状态…
+          </div>
+          <template v-else-if="ragStatus">
+            <div class="rag-status-grid">
+              <div class="rag-status-item">
+                <span class="rag-status-label">模型已加载</span>
+                <span class="rag-status-value" :class="ragStatus.embed_model_loaded ? 'is-ready' : 'is-error'">
+                  {{ ragStatus.embed_model_loaded ? '是' : '否' }}
+                </span>
+              </div>
+              <div class="rag-status-item">
+                <span class="rag-status-label">索引就绪</span>
+                <span class="rag-status-value" :class="ragStatus.ready ? 'is-ready' : 'is-error'">
+                  {{ ragStatus.ready ? '是' : '否' }}
+                </span>
+              </div>
+              <div class="rag-status-item">
+                <span class="rag-status-label">索引状态</span>
+                <span class="rag-status-value" :class="`status-${ragStatus.index_status}`">
+                  {{ formatRagStatus(ragStatus.index_status) }}
+                </span>
+              </div>
+              <div class="rag-status-item">
+                <span class="rag-status-label">知识文档</span>
+                <span class="rag-status-value">{{ ragStatus.document_count }} 个</span>
+              </div>
+            </div>
+            <p class="rag-model">嵌入模型：{{ ragStatus.embed_model || '未配置' }} · 版本：{{ ragStatus.knowledge_base_version || '未生成' }}</p>
+            <p v-if="ragStatus.model_load_error" class="rag-error">{{ ragStatus.model_load_error }}</p>
+            <p v-else-if="!ragStatus.enabled" class="rag-hint">RAG 当前未启用，无法重建向量索引。</p>
+            <div class="card-footer-actions rag-actions">
+              <button
+                class="btn-rebuild-rag"
+                @click="confirmRebuildRagIndex"
+                :disabled="rebuilding || !ragStatus.enabled"
+              >
+                <Loader v-if="rebuilding" :size="15" class="spinning" />
+                <RefreshCw v-else :size="15" />
+                {{ rebuilding ? '正在重建索引…' : '重建向量索引' }}
+              </button>
+              <button class="btn-refresh-rag" @click="refreshRagStatus" :disabled="rebuilding">
+                <RefreshCw :size="14" :class="{ spinning: ragLoading }" />
+                刷新状态
+              </button>
+            </div>
+          </template>
+          <div v-else class="rag-unavailable">
+            <AlertCircle :size="16" />
+            <span>{{ ragError || '无法读取 RAG 知识库状态' }}</span>
+            <button class="btn-refresh-rag" @click="refreshRagStatus">重试</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="card-header">
+          <Database :size="20" class="card-icon" />
           <span class="card-title">数据管理</span>
         </div>
         <div class="card-body">
@@ -118,7 +180,7 @@
 
 <script setup>
 import { reactive, ref, onMounted } from 'vue'
-import { Server, Globe, Radio, Clock, Save, Wifi, Loader, Database, Trash2 } from 'lucide-vue-next'
+import { Server, Globe, Radio, Clock, Save, Wifi, Loader, Database, Trash2, RefreshCw, AlertCircle } from 'lucide-vue-next'
 import { API } from '../../services/api.js'
 import { ws } from '../../services/websocket.js'
 import { showToast, showModal, conversationState, clearAllMemoryData, getStorageUsage } from '../../store.js'
@@ -150,6 +212,10 @@ if (saved) {
 const connState = ref('idle')
 const connMessage = ref('')
 const storageUsage = ref({ bytes: 0, label: '0 B' })
+const ragStatus = ref(null)
+const ragLoading = ref(false)
+const rebuilding = ref(false)
+const ragError = ref('')
 
 const refreshStorageUsage = () => {
   storageUsage.value = getStorageUsage()
@@ -157,6 +223,7 @@ const refreshStorageUsage = () => {
 
 onMounted(() => {
   refreshStorageUsage()
+  refreshRagStatus()
 })
 
 const save = () => {
@@ -189,6 +256,55 @@ const testConn = async () => {
   } catch (error) {
     connState.value = 'error'
     connMessage.value = error.message || '无法连接到服务器'
+  }
+}
+
+const formatRagStatus = (status) => ({
+  ready: '最新',
+  rebuilding: '重建中',
+  disabled: '未启用',
+  not_ready: '未就绪',
+  error: '异常'
+}[status] || '未知')
+
+const refreshRagStatus = async () => {
+  ragLoading.value = true
+  ragError.value = ''
+  try {
+    const response = await API.getRagStatus()
+    ragStatus.value = response.data || null
+    if (!ragStatus.value) {
+      ragError.value = '服务器未返回知识库状态'
+    }
+  } catch (error) {
+    ragStatus.value = null
+    ragError.value = error.message || '无法连接到 RAG 管理服务'
+  } finally {
+    ragLoading.value = false
+  }
+}
+
+const confirmRebuildRagIndex = () => {
+  showModal(
+    '重建向量索引',
+    '将根据当前知识库文档重新生成向量索引。重建期间可继续使用旧索引；完成后将自动切换到新索引。<br><br>是否继续？',
+    rebuildRagIndex
+  )
+}
+
+const rebuildRagIndex = async () => {
+  rebuilding.value = true
+  ragError.value = ''
+  try {
+    const response = await API.rebuildRagIndex()
+    ragStatus.value = response.data || ragStatus.value
+    showToast(response.message || 'RAG 向量索引重建成功', 'success')
+  } catch (error) {
+    ragError.value = error.message || 'RAG 向量索引重建失败'
+    showToast(ragError.value, 'error')
+  } finally {
+    rebuilding.value = false
+    await refreshRagStatus()
   }
 }
 
@@ -338,6 +454,130 @@ const confirmClearMemory = () => {
   color: #A1A1AA;
   line-height: 1.4;
   white-space: nowrap;
+}
+
+.rag-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.rag-status-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid #E4E4E7;
+  background: #FFFFFF;
+}
+
+.rag-status-label {
+  font-size: 12px;
+  color: #888888;
+}
+
+.rag-status-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: #18181B;
+}
+
+.rag-status-value.is-ready,
+.rag-status-value.status-ready {
+  color: #059669;
+}
+
+.rag-status-value.is-error,
+.rag-status-value.status-error {
+  color: #DC2626;
+}
+
+.rag-status-value.status-rebuilding,
+.rag-status-value.status-not_ready,
+.rag-status-value.status-disabled {
+  color: #A16207;
+}
+
+.rag-model,
+.rag-hint,
+.rag-error {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rag-model,
+.rag-hint {
+  color: #71717A;
+}
+
+.rag-error {
+  color: #DC2626;
+}
+
+.rag-loading,
+.rag-unavailable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  color: #71717A;
+  font-size: 13px;
+}
+
+.rag-unavailable {
+  color: #DC2626;
+}
+
+.rag-unavailable .btn-refresh-rag {
+  margin-left: auto;
+}
+
+.rag-actions {
+  margin-top: 16px;
+}
+
+.btn-rebuild-rag,
+.btn-refresh-rag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 16px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-rebuild-rag {
+  color: #FFFFFF;
+  background: #111827;
+  border: 1px solid #111827;
+}
+
+.btn-rebuild-rag:hover:not(:disabled) {
+  background: #059669;
+  border-color: #059669;
+}
+
+.btn-refresh-rag {
+  color: #52525B;
+  background: transparent;
+  border: 1px solid #D4D4D8;
+}
+
+.btn-refresh-rag:hover:not(:disabled) {
+  color: #000000;
+  border-color: #000000;
+  background: #F4F4F5;
+}
+
+.btn-rebuild-rag:disabled,
+.btn-refresh-rag:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .card-footer-actions {
@@ -580,6 +820,20 @@ const confirmClearMemory = () => {
   .timeout-field .settings-input {
     flex: 1;
     width: auto;
+  }
+
+  .rag-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rag-unavailable {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .rag-unavailable .btn-refresh-rag {
+    width: 100%;
+    margin-left: 0;
   }
 
   .card-footer-actions {

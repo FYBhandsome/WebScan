@@ -7,7 +7,7 @@ import pytest
 from TOSKill.AI.graph import MemoryStore, memory_store
 from TOSKill.AI.state import create_initial_state, update_state
 from TOSKill.api.ai_chat_websocket import AIChatManager
-from TOSKill.api.scan_api import ToolExecuteRequest, api_execute_tool
+from TOSKill.api.scan_api import ToolExecuteRequest, _execute_tools_async, api_execute_tool
 from TOSKill.config import settings
 
 
@@ -301,3 +301,44 @@ async def test_tools_view_single_tool_rest_api_regression():
     assert response.data["tool_name"] == "baseinfo_scan"
     assert response.data["success"] is True
     tool.invoke.assert_called_once_with("example.com")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["sqli_scan", "xss_scan"])
+async def test_vulnerability_tool_rest_api_preserves_complete_url(tool_name):
+    tool = MagicMock()
+    tool.invoke.return_value = {"success": True, "data": {"ok": True}}
+    target = "https://example.com/search.php?q=test"
+    request = ToolExecuteRequest(
+        tool_name=tool_name,
+        target=target,
+        analyze=False,
+    )
+
+    with patch("TOSKill.api.scan_api.get_tool_by_name", return_value=tool):
+        response = await api_execute_tool(request)
+
+    assert response.code == 200
+    assert response.data["target"] == target
+    tool.invoke.assert_called_once_with(target)
+
+
+@pytest.mark.asyncio
+async def test_vulnerability_tools_in_automatic_scan_preserve_complete_url():
+    sqli_tool = MagicMock(spec=["invoke"])
+    xss_tool = MagicMock(spec=["invoke"])
+    sqli_tool.invoke.return_value = {"success": True, "data": {}}
+    xss_tool.invoke.return_value = {"success": True, "data": {}}
+    tools = {"sqli_scan": sqli_tool, "xss_scan": xss_tool}
+    target = "https://example.com/search.php?q=test"
+
+    with patch(
+        "TOSKill.api.scan_api.get_tool_by_name",
+        side_effect=lambda name: tools[name],
+    ):
+        results, errors = await _execute_tools_async(target, list(tools))
+
+    assert errors == []
+    assert [result["tool"] for result in results] == ["sqli_scan", "xss_scan"]
+    sqli_tool.invoke.assert_called_once_with(target)
+    xss_tool.invoke.assert_called_once_with(target)

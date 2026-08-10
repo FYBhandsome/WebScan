@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 import threading
 import sqlite3
+from uuid import uuid4
 
 from langgraph.graph import StateGraph, END
 from langgraph.types import interrupt, Command
@@ -2069,6 +2070,64 @@ async def start_scan_node(state: ScanState) -> ScanState:
     )
 
 
+def _restore_after_script_failure(state: ScanState, error: str) -> ScanState:
+    """Return a failed script operation to the original task confirmation."""
+    origin = state.get("script_origin", {}) or {}
+    errors = list(state.get("errors", []))
+    if error:
+        errors.append(error)
+    return update_state(
+        state,
+        next_task=origin.get("next_task") or state.get("next_task", ""),
+        current_task=origin.get("next_task") or state.get("current_task", ""),
+        planned_tasks=list(origin.get("planned_tasks") or state.get("planned_tasks", [])),
+        user_choice="",
+        authorized_task="",
+        pending_action_type="",
+        script_origin={},
+        script_operation="",
+        script_operation_status="failed",
+        workflow_node="user_interact",
+        scan_status="waiting_user",
+        is_complete=False,
+        errors=errors,
+        last_activity_time=datetime.now().isoformat(),
+    )
+
+
+def _queue_registered_script(state: ScanState, tool_name: str, script_content: str,
+                            description: str) -> ScanState:
+    """Insert a registered custom tool before the original pending task."""
+    origin = state.get("script_origin", {}) or {}
+    planned_tasks = list(origin.get("planned_tasks") or state.get("planned_tasks", []))
+    if tool_name and tool_name not in planned_tasks:
+        original_task = origin.get("next_task") or state.get("next_task", "")
+        try:
+            insert_at = planned_tasks.index(original_task)
+        except ValueError:
+            insert_at = len(planned_tasks)
+        planned_tasks.insert(insert_at, tool_name)
+
+    return update_state(
+        state,
+        planned_tasks=planned_tasks,
+        next_task=tool_name or origin.get("next_task") or state.get("next_task", ""),
+        current_task=tool_name or origin.get("next_task") or state.get("current_task", ""),
+        registered_tool_name=tool_name,
+        script_content=script_content,
+        script_description=description,
+        user_choice="",
+        authorized_task="",
+        pending_action_type="",
+        script_origin={},
+        script_operation_status="registered",
+        workflow_node="user_interact",
+        scan_status="waiting_user",
+        is_complete=False,
+        last_activity_time=datetime.now().isoformat(),
+    )
+
+
 async def script_upload_process(state: ScanState) -> ScanState:
     """脚本上传处理节点"""
     from .tools import script_manager
@@ -2077,19 +2136,41 @@ async def script_upload_process(state: ScanState) -> ScanState:
     
     session_id = state.get("websocket_session_id") or state.get("task_id")
     ws_callback = memory_store.get_websocket_callback(session_id)
+    interaction_id = f"{session_id}:script_upload:{uuid4().hex}"
+    interaction_data = {
+        "type": "script_upload_request",
+        "interaction_id": interaction_id,
+        "payload": {
+            "interaction_id": interaction_id,
+            "message": "请上传您的脚本文件或粘贴脚本内容",
+        },
+    }
     
     logger.info(f"[{session_id}] 脚本上传处理")
     
+    # This is a second, workflow-level interaction.  Persist it before the
+    # interrupt so the WebSocket handler can verify and resume this exact
+    # interrupt when the user submits the form.
+    state = update_state(
+        state,
+        scan_status="waiting_user",
+        workflow_node="script_upload_process",
+        last_activity_time=datetime.now().isoformat(),
+    )
+    memory_store.save_session(session_id, state)
+    memory_store.set_pending_interaction(session_id, interaction_data)
+
     if ws_callback:
         try:
-            await ws_callback({
-                "type": "script_upload_request",
-                "payload": {"message": "请上传您的脚本文件或粘贴脚本内容"}
-            })
+            await ws_callback(interaction_data)
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
     
-    upload_data = interrupt({"type": "waiting_for_script_upload"})
+    upload_data = interrupt({
+        "type": "waiting_for_script_upload",
+        "interaction_id": interaction_id,
+    })
+    memory_store.clear_pending_interaction(session_id)
     
     script_content = upload_data.get("script_content", "")
     script_name = upload_data.get("script_name", f"custom_{datetime.now().strftime('%Y%m%d%H%M%S')}")
@@ -2101,8 +2182,7 @@ async def script_upload_process(state: ScanState) -> ScanState:
                 "type": "script_error",
                 "payload": {"error": f"脚本名称不合法: {name_err}"}
             })
-        return update_state(state, is_complete=True,
-            errors=state.get("errors", []) + [f"脚本名称不合法: {name_err}"])
+        return _restore_after_script_failure(state, f"脚本名称不合法: {name_err}")
     script_name = safe_name
     
     if not script_content:
@@ -2111,7 +2191,7 @@ async def script_upload_process(state: ScanState) -> ScanState:
                 "type": "script_error",
                 "payload": {"error": "脚本内容为空"}
             })
-        return update_state(state, is_complete=True)
+        return _restore_after_script_failure(state, "脚本内容为空")
     
     is_safe, safety_err = validate_script_safety(script_content)
     if not is_safe:
@@ -2121,8 +2201,7 @@ async def script_upload_process(state: ScanState) -> ScanState:
                 "type": "script_error",
                 "payload": {"error": f"脚本安全审查未通过: {safety_err}"}
             })
-        return update_state(state, is_complete=True,
-            errors=state.get("errors", []) + [f"安全审查未通过: {safety_err}"])
+        return _restore_after_script_failure(state, f"安全审查未通过: {safety_err}")
     
     if ws_callback:
         try:
@@ -2135,37 +2214,47 @@ async def script_upload_process(state: ScanState) -> ScanState:
     
     analysis = await script_manager.analyze_script_with_ai(script_content)
     
+    # 用户填写的名称是脚本的稳定标识。AI 分析结果中的 tool_name 只能作为
+    # 未填写名称时的兜底，不能覆盖用户输入，否则后续执行会变成随机 custom_xxx。
+    registered_name = script_name or analysis.get("tool_name", "")
     result = script_manager.register_script_as_tool(
         script_content=script_content,
-        script_name=analysis.get("tool_name", script_name),
+        script_name=registered_name,
         description=analysis.get("description", "自定义扫描脚本"),
         category=analysis.get("category", "custom")
     )
     
-    if ws_callback:
-        try:
-            if result.get("success"):
-                await ws_callback({
-                    "type": "script_registered",
-                    "payload": {
-                        "tool_name": result["tool_name"],
-                        "description": analysis.get("description"),
-                        "message": f"脚本已注册为工具: {result['tool_name']}"
-                    }
-                })
-            else:
+    if not result.get("success"):
+        error = result.get("error", "脚本注册失败")
+        if ws_callback:
+            try:
                 await ws_callback({
                     "type": "script_error",
-                    "payload": {"error": result.get("error", "注册失败")}
+                    "payload": {"error": error, "error_code": result.get("error_code", "SCRIPT_REGISTER_FAILED")}
                 })
+            except Exception as e:
+                logger.error(f"WebSocket推送失败: {e}")
+        return _restore_after_script_failure(state, error)
+
+    if ws_callback:
+        try:
+            await ws_callback({
+                "type": "script_registered",
+                "payload": {
+                    "tool_name": result["tool_name"],
+                    "description": analysis.get("description"),
+                    "script_content": script_content,
+                    "message": f"脚本已注册为工具: {result['tool_name']}"
+                }
+            })
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
     
-    return update_state(state, 
-        registered_tool_name=result.get("tool_name", ""),
-        script_description=analysis.get("description", ""),
-        script_content=script_content,
-        is_complete=True
+    return _queue_registered_script(
+        state,
+        result.get("tool_name", ""),
+        script_content,
+        analysis.get("description", ""),
     )
 
 
@@ -2177,19 +2266,38 @@ async def script_generate_process(state: ScanState) -> ScanState:
     
     session_id = state.get("websocket_session_id") or state.get("task_id")
     ws_callback = memory_store.get_websocket_callback(session_id)
+    interaction_id = f"{session_id}:script_generate:{uuid4().hex}"
+    interaction_data = {
+        "type": "script_generate_request",
+        "interaction_id": interaction_id,
+        "payload": {
+            "interaction_id": interaction_id,
+            "message": "请描述您需要的扫描脚本功能",
+        },
+    }
     
     logger.info(f"[{session_id}] AI脚本生成处理")
     
+    state = update_state(
+        state,
+        scan_status="waiting_user",
+        workflow_node="script_generate_process",
+        last_activity_time=datetime.now().isoformat(),
+    )
+    memory_store.save_session(session_id, state)
+    memory_store.set_pending_interaction(session_id, interaction_data)
+
     if ws_callback:
         try:
-            await ws_callback({
-                "type": "script_generate_request",
-                "payload": {"message": "请描述您需要的扫描脚本功能"}
-            })
+            await ws_callback(interaction_data)
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
     
-    desc_data = interrupt({"type": "waiting_for_script_description"})
+    desc_data = interrupt({
+        "type": "waiting_for_script_description",
+        "interaction_id": interaction_id,
+    })
+    memory_store.clear_pending_interaction(session_id)
     description = desc_data.get("description", "")
     
     if not description:
@@ -2198,7 +2306,7 @@ async def script_generate_process(state: ScanState) -> ScanState:
                 "type": "script_error",
                 "payload": {"error": "请提供脚本功能描述"}
             })
-        return update_state(state, is_complete=True)
+        return _restore_after_script_failure(state, "请提供脚本功能描述")
     
     if ws_callback:
         try:
@@ -2210,6 +2318,15 @@ async def script_generate_process(state: ScanState) -> ScanState:
             logger.error(f"WebSocket推送失败: {e}")
     
     script_code = await script_manager.generate_script_with_ai(description)
+
+    if ws_callback:
+        try:
+            await ws_callback({
+                "type": "script_generation_progress",
+                "payload": {"stage": "validating", "progress": 60, "message": "正在进行安全审查..."},
+            })
+        except Exception as e:
+            logger.error(f"WebSocket推送失败: {e}")
     
     if not script_code:
         if ws_callback:
@@ -2217,7 +2334,7 @@ async def script_generate_process(state: ScanState) -> ScanState:
                 "type": "script_error",
                 "payload": {"error": "AI生成脚本失败"}
             })
-        return update_state(state, is_complete=True)
+        return _restore_after_script_failure(state, "AI生成脚本失败")
     
     is_safe, safety_err = validate_script_safety(script_code)
     if not is_safe:
@@ -2227,10 +2344,18 @@ async def script_generate_process(state: ScanState) -> ScanState:
                 "type": "script_error",
                 "payload": {"error": f"AI生成脚本安全审查未通过: {safety_err}"}
             })
-        return update_state(state, is_complete=True,
-            errors=state.get("errors", []) + [f"安全审查未通过: {safety_err}"])
+        return _restore_after_script_failure(state, f"AI生成脚本安全审查未通过: {safety_err}")
     
     analysis = await script_manager.analyze_script_with_ai(script_code)
+
+    if ws_callback:
+        try:
+            await ws_callback({
+                "type": "script_generation_progress",
+                "payload": {"stage": "registering", "progress": 80, "message": "正在注册生成的脚本..."},
+            })
+        except Exception as e:
+            logger.error(f"WebSocket推送失败: {e}")
     
     default_name = f"ai_gen_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     tool_name = analysis.get("tool_name", default_name)
@@ -2246,31 +2371,37 @@ async def script_generate_process(state: ScanState) -> ScanState:
         category=analysis.get("category", "custom")
     )
     
-    if ws_callback:
-        try:
-            if result.get("success"):
-                await ws_callback({
-                    "type": "script_generated",
-                    "payload": {
-                        "tool_name": result["tool_name"],
-                        "script_code": script_code,
-                        "description": analysis.get("description"),
-                        "message": f"AI脚本已生成并注册: {result['tool_name']}"
-                    }
-                })
-            else:
+    if not result.get("success"):
+        error = result.get("error", "脚本注册失败")
+        if ws_callback:
+            try:
                 await ws_callback({
                     "type": "script_error",
-                    "payload": {"error": result.get("error", "注册失败")}
+                    "payload": {"error": error, "error_code": result.get("error_code", "SCRIPT_REGISTER_FAILED")}
                 })
+            except Exception as e:
+                logger.error(f"WebSocket推送失败: {e}")
+        return _restore_after_script_failure(state, error)
+
+    if ws_callback:
+        try:
+            await ws_callback({
+                "type": "script_generated",
+                "payload": {
+                    "tool_name": result["tool_name"],
+                    "script_code": script_code,
+                    "description": analysis.get("description"),
+                    "message": f"AI脚本已生成并注册: {result['tool_name']}"
+                }
+            })
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
     
-    return update_state(state,
-        script_content=script_code,
-        registered_tool_name=result.get("tool_name", ""),
-        script_description=analysis.get("description", ""),
-        is_complete=True
+    return _queue_registered_script(
+        state,
+        result.get("tool_name", ""),
+        script_code,
+        analysis.get("description", description),
     )
 
 
@@ -2463,6 +2594,13 @@ async def ai_decision(state: ScanState) -> ScanState:
     failed = state.get("failed_tasks", [])
     mode = state.get("mode", "full_scan")
     tool_sequence = get_tool_sequence(mode)
+    # Interactive info/vulnerability scans do not pass through start_scan_node,
+    # so persist their base queue before a custom script is inserted. This
+    # keeps the progress denominator at 11/8 plus any custom tools.
+    planned_tasks = list(state.get("planned_tasks") or tool_sequence)
+    if list(state.get("planned_tasks") or []) != planned_tasks:
+        state = update_state(state, planned_tasks=planned_tasks)
+    progress_total = len(planned_tasks)
     ws_callback = memory_store.get_websocket_callback(session_id)
     decision_plan = _build_decision_plan(state, tool_sequence, done, failed)
     remaining_tasks = decision_plan["eligible"]
@@ -2510,7 +2648,7 @@ async def ai_decision(state: ScanState) -> ScanState:
     
     skipped_tasks = _merge_skipped_tasks(state, context_skipped_tasks)
     progress_count = len(set(done) | set(skipped_tasks))
-    progress_percent = round((progress_count / len(tool_sequence)) * 100, 1) if tool_sequence else 0
+    progress_percent = round((progress_count / progress_total) * 100, 1) if progress_total else 0
     
     if ws_callback:
         try:
@@ -2520,7 +2658,7 @@ async def ai_decision(state: ScanState) -> ScanState:
                     "stage": mode,
                     "status": "running",
                     "completed": len(done),
-                    "total": len(tool_sequence),
+                    "total": progress_total,
                     "progress_percent": progress_percent,
                     "rag_enabled": True,
                     "rag_strategy": rag_strategy
@@ -2574,8 +2712,8 @@ async def ai_decision(state: ScanState) -> ScanState:
                         "stage": mode,
                         "status": "completed",
                         "completed": progress_count,
-                        "total": len(tool_sequence),
-                        "progress_percent": 100 if tool_sequence else 0,
+                        "total": progress_total,
+                        "progress_percent": 100 if progress_total else 0,
                         "skipped_tasks": skipped_tasks,
                         "reason": "decision_context_excluded_remaining_tasks",
                     },
@@ -2585,7 +2723,7 @@ async def ai_decision(state: ScanState) -> ScanState:
                     "payload": {
                         "completed_tasks": done,
                         "skipped_tasks": skipped_tasks,
-                        "total_tasks": len(tool_sequence),
+                        "total_tasks": progress_total,
                         "reason": "decision_context_excluded_remaining_tasks",
                     },
                 })
@@ -2610,7 +2748,7 @@ async def ai_decision(state: ScanState) -> ScanState:
             "timestamp": datetime.now().isoformat(),
             "next_task": t,
             "completed_count": len(done),
-            "total_count": len(tool_sequence),
+            "total_count": progress_total,
             "decision_source": decision_source,
             "decision_context_version": (state.get("decision_context") or {}).get("version", 0),
             "excluded_tasks": decision_plan["excluded"],
@@ -2634,8 +2772,8 @@ async def ai_decision(state: ScanState) -> ScanState:
                         "next_task": t,
                         "completed_tasks": done,
                         "skipped_tasks": skipped_tasks,
-                        "total_tasks": len(tool_sequence),
-                        "progress": f"{len(done)}/{len(tool_sequence)}",
+                        "total_tasks": progress_total,
+                        "progress": f"{len(done)}/{progress_total}",
                         "progress_percent": progress_percent,
                         "rag_enabled": True,
                         "rag_reference": rag_strategy,
@@ -2671,7 +2809,7 @@ async def ai_decision(state: ScanState) -> ScanState:
                     "stage": mode,
                     "status": "completed",
                     "completed": len(done),
-                    "total": len(tool_sequence),
+                    "total": progress_total,
                     "progress_percent": 100,
                     "rag_enabled": True,
                     "rag_strategy": rag_strategy
@@ -2681,7 +2819,7 @@ async def ai_decision(state: ScanState) -> ScanState:
                 "type": "ai_decision_complete",
                 "payload": {
                     "completed_tasks": done,
-                    "total_tasks": len(tool_sequence),
+                    "total_tasks": progress_total,
                     "rag_reference": rag_strategy
                 }
             })
@@ -2717,6 +2855,10 @@ async def user_interact(state: ScanState) -> ScanState:
             "target": target,
             "mode": mode,
             "completed_tasks": state.get("completed_tasks", []),
+            # planned_tasks includes custom scripts inserted by the upload or
+            # generate flow, so the client can update the progress denominator
+            # before the next tool starts.
+            "total_tasks": len(state.get("planned_tasks", [])),
             "options": [
                 {"key": "1", "label": "执行", "description": f"执行任务: {next_task}"},
                 {"key": "2", "label": "停止", "description": "停止扫描并生成报告"},
@@ -2785,12 +2927,29 @@ async def user_interact(state: ScanState) -> ScanState:
     
     choice = str(user_choice)
     is_replanning = control_action == "resume_after_chat"
+    script_origin = {}
+    if choice in ("4", "5"):
+        # Preserve the task that was being confirmed before entering the
+        # script flow.  The script is an addition to this scan, not a new
+        # standalone workflow.
+        script_origin = {
+            "source_node": "user_interact",
+            "interaction_id": interaction_id,
+            "next_task": next_task,
+            "target": target,
+            "mode": mode,
+            "planned_tasks": list(state.get("planned_tasks", [])),
+            "completed_tasks": list(state.get("completed_tasks", [])),
+        }
     return update_state(
         state,
         user_choice=choice,
         authorized_task=next_task if choice == "1" else "",
         workflow_node="ai_decision" if is_replanning else "router",
         pending_action_type=control_action,
+        script_origin=script_origin,
+        script_operation=("upload" if choice == "4" else "generate" if choice == "5" else ""),
+        script_operation_status="waiting" if choice in ("4", "5") else "",
         scan_status=(
             "running" if is_replanning
             else
@@ -3819,8 +3978,11 @@ class InfoCollectionGraph:
         workflow.add_edge("rejection_handler", "user_interact")
         workflow.add_edge("chat", "ai_decision")
         workflow.add_edge("script_manager", "ai_decision")
-        workflow.add_edge("script_upload_process", "ai_decision")
-        workflow.add_edge("script_generate_process", "ai_decision")
+        # A custom script is inserted into the active scan queue.  Both a
+        # successful registration and a recoverable failure must return to a
+        # user confirmation for the current task, not start a fresh AI plan.
+        workflow.add_edge("script_upload_process", "user_interact")
+        workflow.add_edge("script_generate_process", "user_interact")
         workflow.add_edge("report_generation", END)
         
         if checkpointer is None:
@@ -3854,8 +4016,8 @@ class VulnScanGraph:
         workflow.add_edge("rejection_handler", "user_interact")
         workflow.add_edge("chat", "ai_decision")
         workflow.add_edge("script_manager", "ai_decision")
-        workflow.add_edge("script_upload_process", "ai_decision")
-        workflow.add_edge("script_generate_process", "ai_decision")
+        workflow.add_edge("script_upload_process", "user_interact")
+        workflow.add_edge("script_generate_process", "user_interact")
         workflow.add_edge("report_generation", END)
         
         if checkpointer is None:

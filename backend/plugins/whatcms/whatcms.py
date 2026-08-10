@@ -442,10 +442,16 @@ def getwhatcms(url: str = '') -> Dict[str, Union[bool, str, List[str], Dict]]:
         result["message"] = f"请求失败 | 状态码:{e.response.status_code} | URL:{url}"
         logger.error(result["message"])
     except requests.exceptions.RequestException as e:
-        result["message"] = f"请求异常:{str(e)[:50]} | URL:{url}"
+        # Keep the complete exception. Truncating at 50 characters turned
+        # "port=443" into "port=4" in the scan UI.
+        result["error_code"] = "CMS_REQUEST_ERROR"
+        result["error_type"] = type(e).__name__
+        result["message"] = f"请求异常({type(e).__name__}): {e} | URL:{url}"
         logger.error(result["message"])
     except Exception as e:
-        result["message"] = f"识别未知异常:{str(e)[:50]} | URL:{url}"
+        result["error_code"] = "CMS_UNEXPECTED_ERROR"
+        result["error_type"] = type(e).__name__
+        result["message"] = f"识别未知异常({type(e).__name__}): {e} | URL:{url}"
         logger.error(result["message"])
     finally:
         session.close()

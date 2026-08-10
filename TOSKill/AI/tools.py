@@ -29,6 +29,8 @@ from urllib.parse import urlparse
 from datetime import datetime, timedelta
 import logging
 import re
+import ipaddress
+import socket
 
 # 预先导入所有工具模块，避免并发执行时的模块导入死锁
 from TOSKill.tools.info_collection.baseinfo import baseinfo
@@ -53,6 +55,7 @@ from TOSKill.tools.vuln_scan.weakpass import weakpass_scan as weakpass
 from TOSKill.tools.poc.thinkphp import thinkphp_rce
 from TOSKill.tools.poc.struts2 import struts2_s2_032
 from TOSKill.tools.poc.weblogic import weblogic_cve_2020_2551
+from TOSKill.utils.target import normalize_scan_target
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +328,34 @@ def clean_target(target: str) -> str:
         return parsed.netloc.strip()
     
     return target
+
+
+URL_PRESERVING_TOOLS = frozenset({"sqli_scan", "xss_scan"})
+
+
+def clean_target_for_tool(tool_name: str, target: str) -> str:
+    """Prepare a target using the input shape expected by a specific tool."""
+    if tool_name in URL_PRESERVING_TOOLS:
+        return normalize_scan_target(target)
+    return clean_target(target)
+
+
+def _resolve_ipv4_target(target: str) -> str:
+    """Return an IPv4 address for tools whose backend only accepts IPv4."""
+    try:
+        address = ipaddress.ip_address(target)
+    except ValueError:
+        address = None
+
+    if address is not None:
+        if address.version != 4:
+            raise ValueError(f"目标必须解析为IPv4地址: {target}")
+        return str(address)
+
+    try:
+        return socket.gethostbyname(target)
+    except socket.gaierror as exc:
+        raise ValueError(f"目标域名解析失败: {target} ({exc})") from exc
 
 
 def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None) -> Any:
@@ -797,11 +828,13 @@ def webside_query_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行备案查询：{t}")
     try:
-        raw_result = webside_query(t)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        query_ip = _resolve_ipv4_target(t)
+
+        # webside_query is decorated with @tool, so it is a StructuredTool.
+        # Invoke it through LangChain's protocol instead of calling it like a
+        # normal Python function.
+        raw_result = webside_query.invoke({"ip": query_ip})
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"备案查询失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -1521,8 +1554,23 @@ class ScriptManager:
         """将脚本注册为LangChain工具"""
         from pathlib import Path
         from datetime import datetime
-        from langchain.tools import Tool
         import importlib.util
+
+        # LangChain 1.x moved the Tool implementation to langchain_core. Keep
+        # a fallback for older installations, but never let an import failure
+        # escape before the registration error can be reported to the client.
+        try:
+            from langchain_core.tools import Tool
+        except ImportError:
+            try:
+                from langchain.tools import Tool
+            except ImportError as exc:
+                logger.error(f"加载 LangChain Tool 失败: {exc}")
+                return {
+                    "success": False,
+                    "error": f"脚本工具注册依赖不可用: {exc}",
+                    "error_code": "SCRIPT_TOOL_IMPORT_FAILED",
+                }
         
         try:
             from ..AI.script_safety import validate_script_safety
@@ -1613,7 +1661,8 @@ class ScriptManager:
 
 要求：
 1. 必须包含 run(target: str) 函数
-2. 返回 Dict 类型的结果，包含 success、data、message 字段
+2. 返回完整 ToolResult 字典：success 必须是 bool，data 必须是 dict，
+   error 必须是字符串或 None，auth_info 必须是字典或 None，timestamp 必须是字符串
 3. 包含错误处理
 4. 使用 requests 库进行HTTP请求
 5. 代码简洁高效

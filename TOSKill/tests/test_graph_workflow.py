@@ -196,3 +196,76 @@ class TestWorkflowTypes:
         from TOSKill.AI.tools import ALL_TOOLS
         assert len(ALL_TOOLS) > 0
         assert len(ALL_TOOLS) >= 22
+
+
+class TestScriptWorkflowState:
+    """自定义脚本成功入队与失败回退状态测试。"""
+
+    def test_script_failure_restores_original_interaction(self):
+        from TOSKill.AI.graph import _restore_after_script_failure
+
+        state = {
+            "next_task": "baseinfo_scan",
+            "current_task": "baseinfo_scan",
+            "planned_tasks": ["baseinfo_scan", "port_scan"],
+            "completed_tasks": [],
+            "errors": [],
+            "script_origin": {
+                "next_task": "baseinfo_scan",
+                "planned_tasks": ["baseinfo_scan", "port_scan"],
+            },
+            "is_complete": False,
+        }
+
+        restored = _restore_after_script_failure(state, "脚本安全审查未通过")
+
+        assert restored["next_task"] == "baseinfo_scan"
+        assert restored["workflow_node"] == "user_interact"
+        assert restored["scan_status"] == "waiting_user"
+        assert restored["is_complete"] is False
+        assert restored["script_origin"] == {}
+        assert "脚本安全审查未通过" in restored["errors"]
+
+    def test_registered_script_is_inserted_before_original_task(self):
+        from TOSKill.AI.graph import _queue_registered_script
+
+        state = {
+            "next_task": "baseinfo_scan",
+            "planned_tasks": ["baseinfo_scan", "port_scan"],
+            "script_origin": {
+                "next_task": "baseinfo_scan",
+                "planned_tasks": ["baseinfo_scan", "port_scan"],
+            },
+            "is_complete": False,
+        }
+
+        queued = _queue_registered_script(
+            state, "custom_scan", "def run(target):\n    return {}", "测试工具"
+        )
+
+        assert queued["planned_tasks"] == ["custom_scan", "baseinfo_scan", "port_scan"]
+        assert queued["next_task"] == "custom_scan"
+        assert queued["workflow_node"] == "user_interact"
+        assert queued["scan_status"] == "waiting_user"
+        assert queued["is_complete"] is False
+
+    def test_script_registration_works_with_current_langchain(self, tmp_path):
+        from TOSKill.AI.tools import ALL_TOOLS, TOOL_MAP, script_manager
+
+        script_name = "custom_langchain_compat_test"
+        old_scripts_dir = script_manager._scripts_dir
+        script_manager._scripts_dir = tmp_path
+        try:
+            result = script_manager.register_script_as_tool(
+                "def run(target):\n    return {'success': True, 'target': target}",
+                script_name,
+                "LangChain兼容性测试工具",
+            )
+            assert result["success"] is True
+            assert result["tool_name"] == script_name
+        finally:
+            script_manager._scripts_dir = old_scripts_dir
+            script_manager._registered_scripts.pop(script_name, None)
+            tool = TOOL_MAP.pop(script_name, None)
+            if tool in ALL_TOOLS:
+                ALL_TOOLS.remove(tool)

@@ -358,6 +358,200 @@ class TestMessageHandlers:
             
             mock_websocket.send_json.assert_called()
 
+    @pytest.mark.asyncio
+    async def test_script_content_resumes_matching_console_workflow(self, manager, clean_memory_store):
+        """交互式扫描上传脚本时，内容必须恢复对应的工作流中断。"""
+        from TOSKill.AI.graph import memory_store
+
+        session_id = "script_upload_workflow"
+        interaction_id = "script-upload-interaction"
+        memory_store.set_pending_interaction(session_id, {
+            "type": "script_upload_request",
+            "interaction_id": interaction_id,
+        })
+        orchestrator = MagicMock()
+        orchestrator._ensure_initialized = AsyncMock()
+        orchestrator.resume_workflow = AsyncMock(return_value={
+            "completed_tasks": [], "is_complete": False, "scan_status": "waiting_user"
+        })
+
+        with patch('TOSKill.api.ai_chat_websocket.get_agent_orchestrator', return_value=orchestrator), \
+             patch.object(manager, '_send', new_callable=AsyncMock) as mock_send:
+            await manager._handle_script_content(session_id, {
+                "script_content": "def run(target):\n    return {}",
+                "script_name": "custom_scan",
+                "interaction_id": interaction_id,
+            })
+
+        orchestrator.resume_workflow.assert_awaited_once_with(session_id, {
+            "script_content": "def run(target):\n    return {}",
+            "script_name": "custom_scan",
+        })
+        mock_send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_script_description_resumes_matching_console_workflow(self, manager, clean_memory_store):
+        """交互式扫描生成脚本时，描述必须恢复对应的工作流中断。"""
+        from TOSKill.AI.graph import memory_store
+
+        session_id = "script_generate_workflow"
+        interaction_id = "script-generate-interaction"
+        memory_store.set_pending_interaction(session_id, {
+            "type": "script_generate_request",
+            "interaction_id": interaction_id,
+        })
+        orchestrator = MagicMock()
+        orchestrator._ensure_initialized = AsyncMock()
+        orchestrator.resume_workflow = AsyncMock(return_value={
+            "completed_tasks": [], "is_complete": False, "scan_status": "waiting_user"
+        })
+
+        with patch('TOSKill.api.ai_chat_websocket.get_agent_orchestrator', return_value=orchestrator), \
+             patch.object(manager, '_send', new_callable=AsyncMock) as mock_send:
+            await manager._handle_script_description(session_id, {
+                "description": "检测敏感文件泄露",
+                "interaction_id": interaction_id,
+            })
+
+        orchestrator.resume_workflow.assert_awaited_once_with(session_id, {
+            "description": "检测敏感文件泄露",
+        })
+        mock_send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_script_content_with_wrong_interaction_id_does_not_resume(self, manager, clean_memory_store):
+        """错误交互 ID 不能劫持另一条扫描工作流。"""
+        from TOSKill.AI.graph import memory_store
+
+        session_id = "script_upload_wrong_id"
+        memory_store.set_pending_interaction(session_id, {
+            "type": "script_upload_request",
+            "interaction_id": "expected-id",
+        })
+        orchestrator = MagicMock()
+        orchestrator.resume_workflow = AsyncMock()
+
+        with patch('TOSKill.api.ai_chat_websocket.get_agent_orchestrator', return_value=orchestrator):
+            await manager._handle_script_content(session_id, {
+                "script_content": "def run(target):\n    return {}",
+                "script_name": "custom_scan",
+                "interaction_id": "wrong-id",
+            })
+
+        orchestrator.resume_workflow.assert_not_awaited()
+        assert memory_store.get_pending_interaction(session_id)["interaction_id"] == "expected-id"
+
+    @pytest.mark.asyncio
+    async def test_script_content_with_wrong_interaction_id_resends_current_form(self, manager, clean_memory_store):
+        """脚本表单过期时应重新发送当前表单，而不是静默落入独立注册流程。"""
+        from TOSKill.AI.graph import memory_store
+
+        session_id = "script_upload_resend"
+        pending = {
+            "type": "script_upload_request",
+            "interaction_id": "expected-id",
+            "payload": {"interaction_id": "expected-id"},
+        }
+        memory_store.set_pending_interaction(session_id, pending)
+        orchestrator = MagicMock()
+        orchestrator.resume_workflow = AsyncMock()
+
+        with patch('TOSKill.api.ai_chat_websocket.get_agent_orchestrator', return_value=orchestrator), \
+             patch.object(manager, '_send', new_callable=AsyncMock) as mock_send:
+            await manager._handle_script_content(session_id, {
+                "script_content": "def run(target):\n    return {}",
+                "interaction_id": "stale-id",
+            })
+
+        orchestrator.resume_workflow.assert_not_awaited()
+        assert mock_send.await_count == 2
+        replayed = mock_send.await_args_list[-1].args[1]
+        assert replayed["type"] == pending["type"]
+        assert replayed["interaction_id"] == pending["interaction_id"]
+        assert replayed["payload"]["session_id"] == session_id
+
+    @pytest.mark.asyncio
+    async def test_stale_user_choice_resends_current_interaction(self, manager, clean_memory_store):
+        """旧按钮点击后应收到当前交互，而不是让扫描继续等待。"""
+        from TOSKill.AI.graph import memory_store
+
+        session_id = "stale_choice_resend"
+        pending = {
+            "type": "interaction_required",
+            "interaction_id": "current-id",
+            "payload": {"interaction_id": "current-id"},
+        }
+        memory_store.set_pending_interaction(session_id, pending)
+        orchestrator = MagicMock()
+        orchestrator._ensure_initialized = AsyncMock()
+        orchestrator.resume_workflow = AsyncMock()
+
+        with patch('TOSKill.api.ai_chat_websocket.get_agent_orchestrator', return_value=orchestrator), \
+             patch.object(manager, '_send', new_callable=AsyncMock) as mock_send:
+            await manager._handle_user_confirm(session_id, {
+                "choice": "1",
+                "interaction_id": "stale-id",
+            })
+
+        orchestrator.resume_workflow.assert_not_awaited()
+        mock_send.assert_awaited_once()
+        replayed = mock_send.await_args.args[1]
+        assert replayed["interaction_id"] == pending["interaction_id"]
+        assert replayed["payload"]["session_id"] == session_id
+
+    @pytest.mark.asyncio
+    async def test_run_snapshot_includes_pending_interaction(self, manager, mock_websocket, clean_memory_store):
+        """重连快照必须携带当前待处理交互，供前端关闭旧卡片。"""
+        from TOSKill.AI.graph import memory_store
+
+        session_id = "snapshot_pending"
+        clean_memory_store.save_session(session_id, {
+            "run_id": "run-1",
+            "target": "http://example.com",
+            "planned_tasks": ["baseinfo_scan"],
+            "completed_tasks": [],
+            "scan_status": "waiting_user",
+        })
+        pending = {
+            "type": "interaction_required",
+            "interaction_id": "run-1:interaction:baseinfo_scan:0",
+            "payload": {"interaction_id": "run-1:interaction:baseinfo_scan:0"},
+        }
+        memory_store.set_pending_interaction(session_id, pending)
+        manager.connections[session_id] = mock_websocket
+
+        await manager._send_run_snapshot(session_id, memory_store.get_session(session_id))
+
+        snapshot = mock_websocket.send_json.call_args.args[0]
+        assert snapshot["type"] == "run_snapshot"
+        replayed = snapshot["payload"]["pending_interaction"]
+        assert replayed["interaction_id"] == pending["interaction_id"]
+        assert replayed["payload"]["session_id"] == session_id
+
+    @pytest.mark.asyncio
+    async def test_empty_script_does_not_resume_workflow(self, manager, clean_memory_store):
+        """空脚本在入口处拒绝，不应恢复工作流。"""
+        from TOSKill.AI.graph import memory_store
+
+        session_id = "script_upload_empty"
+        interaction_id = "empty-script-id"
+        memory_store.set_pending_interaction(session_id, {
+            "type": "script_upload_request",
+            "interaction_id": interaction_id,
+        })
+        orchestrator = MagicMock()
+        orchestrator.resume_workflow = AsyncMock()
+
+        with patch('TOSKill.api.ai_chat_websocket.get_agent_orchestrator', return_value=orchestrator), \
+             patch.object(manager, '_send', new_callable=AsyncMock) as mock_send:
+            await manager._handle_script_content(session_id, {
+                "script_content": "",
+                "interaction_id": interaction_id,
+            })
+
+        orchestrator.resume_workflow.assert_not_awaited()
+        mock_send.assert_awaited_once()
+
 
 @pytest.mark.websocket
 class TestMessageAck:

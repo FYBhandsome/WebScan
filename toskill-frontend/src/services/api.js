@@ -133,6 +133,15 @@ class ApiService {
     return this.delete(`/reports/${filename}`);
   }
 
+  // --- RAG Knowledge Base ---
+  async getRagStatus() {
+    return this.get('/rag/status');
+  }
+
+  async rebuildRagIndex() {
+    return this.post('/rag/rebuild', {});
+  }
+
   // --- System/Other ---
   async healthCheck() {
     return this.get('/health');

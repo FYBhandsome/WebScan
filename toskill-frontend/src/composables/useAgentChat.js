@@ -428,6 +428,48 @@ export function useAgentChat() {
     findInteraction(interactionId) && !findInteraction(interactionId).resolved
   )
 
+  // A reconnect replays historical interaction events before sending the
+  // authoritative pending interaction.  Keep the historical card as a
+  // compact record, but never leave an older card clickable alongside the
+  // current one.
+  const closeStaleInteractions = (payload = {}, activeInteractionId = '') => {
+    const runId = payload.run_id || ''
+    const activeRuns = workspaceBlocks.value.filter(block =>
+      block.type === 'agent_run' && !['completed', 'failed', 'cancelled'].includes(block.status)
+    )
+    const runs = runId
+      ? activeRuns.filter(run => run.runId === runId)
+      : (activeRuns.length ? [activeRuns[activeRuns.length - 1]] : [])
+    let closed = 0
+    for (const run of runs) {
+      for (const step of run.steps || []) {
+        const interaction = step.interaction
+        if (!interaction || interaction.resolved || interaction.interactionId === activeInteractionId) continue
+        if (!['interaction_required', 'input_request'].includes(interaction.actionSource)) continue
+        interaction.resolved = true
+        interaction.selectedChoice = interaction.selectedChoice || '已过期'
+        step.status = 'completed'
+        if (pendingInputRequest.value === interaction) pendingInputRequest.value = null
+        closed += 1
+      }
+    }
+    return closed
+  }
+
+  // Restore the server's current pending interaction after a snapshot or
+  // subscription.  The normal message handler remains the single rendering
+  // path so live and restored interactions behave identically.
+  const restorePendingInteraction = (pending) => {
+    if (!pending) return
+    const message = pending.type
+      ? pending
+      : { type: pending.interaction_type || 'interaction_required', payload: pending }
+    const payload = message.payload || {}
+    const interactionId = payload.interaction_id || message.interaction_id
+    closeStaleInteractions(payload, interactionId)
+    handleWSMessage(message)
+  }
+
   const lastRunSequences = new Map()
 
   const getRunId = (payload = {}) => {
@@ -1030,10 +1072,13 @@ export function useAgentChat() {
     })
   }
 
-  const showUploadScriptForm = (block) => {
-    attachRunInteraction({ step_id: `upload-script:${Date.now()}` }, {
+  const showUploadScriptForm = (block = {}) => {
+    const request = block.payload || block
+    const interactionId = request.interaction_id || block.interactionId || block.interaction_id || `upload-script:${Date.now()}`
+    return attachRunInteraction({ ...request, step_id: `upload-script:${Date.now()}` }, {
       type: 'input',
       actionSource: 'input_request',
+      interactionId,
       stepTitle: '上传自定义脚本',
       title: '上传自定义脚本',
       description: '请粘贴你的 Python 脚本代码。脚本必须包含 `run(target: str)` 函数并返回 `Dict` 类型结果。系统将自动进行安全审查。',
@@ -1050,7 +1095,9 @@ export function useAgentChat() {
         field: 'script_content',
         label: '脚本内容',
         description: '脚本必须包含 def run(target): 函数',
-        placeholder: 'def run(target):\n    # your code here\n    return {"success": True}',
+        // 这个示例必须符合后端 ToolResult 规范，避免用户直接提交占位内容时
+        // 得到“工具返回格式不符合 ToolResult 规范”。
+        placeholder: 'def run(target):\n    target = str(target).strip()\n    return {\n        "success": True,\n        "data": {"target": target, "message": "脚本执行成功"},\n        "error": None,\n        "auth_info": None,\n        "timestamp": "manual-test"\n    }',
         required: true,
         validation: 'python_code',
         options: [],
@@ -1062,10 +1109,13 @@ export function useAgentChat() {
     })
   }
 
-  const showGenerateScriptForm = (block) => {
-    attachRunInteraction({ step_id: `generate-script:${Date.now()}` }, {
+  const showGenerateScriptForm = (block = {}) => {
+    const request = block.payload || block
+    const interactionId = request.interaction_id || block.interactionId || block.interaction_id || `generate-script:${Date.now()}`
+    return attachRunInteraction({ ...request, step_id: `generate-script:${Date.now()}` }, {
       type: 'input',
       actionSource: 'input_request',
+      interactionId,
       stepTitle: 'AI 生成扫描脚本',
       title: 'AI 生成扫描脚本',
       description: '请描述你需要的脚本功能，AI 将自动生成对应的 Python 扫描脚本。',
@@ -1228,12 +1278,15 @@ export function useAgentChat() {
           updateRun({}, { status: 'cancelled', summary: '脚本循环已终止' })
         } else if (choiceKey === 'upload_script') {
           pendingUploadScript.value = true
-          showUploadScriptForm(block)
-          updateRun({}, { status: 'waiting' })
+          // 表单由后端返回的 script_upload_request 创建。这里不提前创建
+          // 临时表单，否则会和真实 interaction_id 的表单重复显示。
+          waitingForChoice.value = false
+          updateRun({}, { status: 'running' })
         } else if (choiceKey === 'generate_script') {
           pendingGenerateScript.value = true
-          showGenerateScriptForm(block)
-          updateRun({}, { status: 'waiting' })
+          // 表单由后端返回的 script_generate_request 创建，避免重复收集描述。
+          waitingForChoice.value = false
+          updateRun({}, { status: 'running' })
         }
         break
     }
@@ -1259,17 +1312,29 @@ export function useAgentChat() {
 
       if (block.context === 'upload_script') {
         pendingUploadScript.value = false
+        waitingForChoice.value = false
         const scriptName = fields.find(f => f.field === 'script_name')?.value || null
         const scriptContent = fields.find(f => f.field === 'script_content')?.value || ''
         const name = scriptName || `custom_${Date.now().toString(36)}`
         isTyping.value = true
-        ws.send('script_content', { script_content: scriptContent, script_name: name })
+        ws.send('script_content', {
+          script_content: scriptContent,
+          script_name: name,
+          interaction_id: block.interactionId
+        })
         return
       } else if (block.context === 'generate_script') {
         pendingGenerateScript.value = false
+        waitingForChoice.value = false
         const description = fields.find(f => f.field === 'script_description')?.value || ''
         isTyping.value = true
-        ws.send('script_description', { description: description })
+        isThinking.value = true
+        currentThinking.value = 'AI 正在生成扫描脚本，请稍候…'
+        addInfoBlock('AI 正在生成扫描脚本…')
+        ws.send('script_description', {
+          description: description,
+          interaction_id: block.interactionId
+        })
         return
       }
 
@@ -1407,9 +1472,21 @@ export function useAgentChat() {
         const interactionId = data.payload?.interaction_id || data.interaction_id
         const pausePending = scanPause.status === 'pausing' || scanPause.status === 'paused'
         waitingForChoice.value = !pausePending
+        closeStaleInteractions(data.payload || {}, interactionId)
+        const completedTasks = data.payload?.completed_tasks || []
+        const totalTasks = Number(data.payload?.total_tasks) || 0
+        if (totalTasks > 0) {
+          scanProgress.value.current = completedTasks.length
+          scanProgress.value.total = totalTasks
+          scanProgress.value.activeTool = data.payload?.next_task || ''
+        }
         // 不跳过已存在的交互：后端可能重发相同 interactionId 的消息（如会话恢复），
         // attachRunInteraction 内部会通过 Object.assign 更新现有交互内容
-        updateRun(data.payload || {}, { status: 'waiting' })
+        updateRun(data.payload || {}, {
+          status: 'waiting',
+          completed: completedTasks.length,
+          total: totalTasks || undefined
+        })
         attachRunInteraction(data.payload || {}, {
           type: 'actions',
           actionSource: 'interaction_required',
@@ -1439,6 +1516,7 @@ export function useAgentChat() {
         waitingForChoice.value = true
         const highRiskPayload = data.payload || data
         const interactionId = highRiskPayload.interaction_id || data.interaction_id
+        closeStaleInteractions(highRiskPayload, interactionId)
         if (hasOpenInteraction(interactionId)) break
         updateRun(highRiskPayload, { status: 'waiting' })
         attachRunInteraction(highRiskPayload, {
@@ -1649,6 +1727,7 @@ export function useAgentChat() {
       case 'input_request':
         isTyping.value = false
         const field = data.payload
+        closeStaleInteractions(field, field.interaction_id || data.interaction_id)
         const inputBlock = attachRunInteraction(field, {
           type: 'input',
           actionSource: 'input_request',
@@ -1673,6 +1752,7 @@ export function useAgentChat() {
 
       case 'multi_field_input_request':
         isTyping.value = false
+        closeStaleInteractions(data.payload || {}, data.payload?.interaction_id || data.interaction_id)
         const multiFields = (data.payload?.fields || []).map(f => ({
           field: f.field,
           label: f.label,
@@ -1699,6 +1779,7 @@ export function useAgentChat() {
       case 'tool_confirm_required': {
         isTyping.value = false
         const interactionId = data.payload?.interaction_id || data.interaction_id
+        closeStaleInteractions(data.payload || {}, interactionId)
         if (hasOpenInteraction(interactionId)) break
         attachRunInteraction(data.payload || {}, {
           type: 'actions',
@@ -1721,6 +1802,7 @@ export function useAgentChat() {
       case 'tool_not_found':
         isTyping.value = false
         const notFoundOpts = (data.payload?.options || []).map(o => ({ key: o.key, label: o.label, style: 'btn-secondary' }))
+        closeStaleInteractions(data.payload || {}, data.payload?.interaction_id || data.interaction_id)
         attachRunInteraction(data.payload || {}, {
           type: 'actions',
           actionSource: 'interaction_required',
@@ -1845,6 +1927,11 @@ export function useAgentChat() {
           message: '此前执行失败'
         }))
         ;(snapshot.logs || []).forEach(entry => appendRunLog({ run_id: snapshot.run_id, ...entry }))
+        if (snapshot.pending_interaction) {
+          restorePendingInteraction(snapshot.pending_interaction)
+        } else if (snapshot.scan_status !== 'waiting_user' && !snapshot.is_complete) {
+          closeStaleInteractions(snapshot, '__no_pending_interaction__')
+        }
         break
       }
 
@@ -1897,9 +1984,16 @@ export function useAgentChat() {
           )
           scanActive.value = scanStatus.value === 'scanning'
           waitingForChoice.value = resumedStatus === 'waiting_user'
+          const resumedCompleted = resumedPayload.completed_tasks || []
+          const resumedTotal = Number(resumedPayload.total_tasks) || 0
+          if (resumedTotal > 0) {
+            scanProgress.value.current = resumedCompleted.length
+            scanProgress.value.total = resumedTotal
+          }
           updateRun(resumedPayload, {
             status: resumedPayload.is_complete ? 'completed' : (resumedStatus === 'waiting_user' ? 'waiting' : 'running'),
-            completed: (resumedPayload.completed_tasks || []).length,
+            completed: resumedCompleted.length,
+            total: resumedTotal || undefined,
             summary: resumedPayload.is_complete ? '扫描已完成' : ''
           })
           addInfoBlock(`工作流已恢复 | 已完成任务 ${(resumedPayload.completed_tasks || []).length} 个`)
@@ -1958,6 +2052,11 @@ export function useAgentChat() {
           progress: data.payload?.progress || 0,
           message: data.payload?.message || ''
         }
+        if (data.payload?.stage && data.payload.stage !== 'failed') {
+          isTyping.value = true
+          isThinking.value = true
+          currentThinking.value = data.payload?.message || 'AI 正在生成扫描脚本，请稍候…'
+        }
         if (data.payload?.stage === 'analyzing') {
           addInfoBlock(`分析需求中...`)
         } else if (data.payload?.stage === 'generating') {
@@ -1967,6 +2066,9 @@ export function useAgentChat() {
         } else if (data.payload?.stage === 'registering') {
           addInfoBlock(`注册工具中...`)
         } else if (data.payload?.stage === 'failed') {
+          isTyping.value = false
+          isThinking.value = false
+          currentThinking.value = ''
           addErrorBlock(`脚本生成失败: ${data.payload?.message || '未知错误'}`, { source: 'backend' })
         }
         break
@@ -1981,7 +2083,17 @@ export function useAgentChat() {
           source: 'generate',
           script_content: data.payload?.script_code || ''
         })
+        upsertRunStep(
+          { step_id: `script-generated:${genToolName}`, tool: genToolName },
+          {
+            title: `脚本已生成：${genToolName}`,
+            status: 'completed',
+            message: data.payload?.message || `AI 已生成并注册脚本 ${genToolName}`
+          }
+        )
         isTyping.value = false
+        isThinking.value = false
+        currentThinking.value = ''
         if (pendingGenerateScript.value) {
           const target = scriptQueue.value[currentScriptIndex.value]?.target || ''
           scriptQueue.value.splice(currentScriptIndex.value + 1, 0, { tool_name: genToolName, status: 'pending', target })
@@ -1997,15 +2109,36 @@ export function useAgentChat() {
         break
 
       case 'script_upload_request':
-        addInfoBlock(`${data.payload?.message || '请在输入框中粘贴脚本内容'}`)
+        {
+          const interactionId = data.payload?.interaction_id || data.interaction_id
+          closeStaleInteractions(data.payload || {}, interactionId)
+          if (hasOpenInteraction(interactionId)) break
+          isTyping.value = false
+          waitingForChoice.value = true
+          const uploadBlock = showUploadScriptForm({ ...data.payload, interaction_id: interactionId })
+          pendingInputRequest.value = uploadBlock
+          updateRun({}, { status: 'waiting' })
+        }
         break
 
       case 'script_error':
+        isTyping.value = false
+        isThinking.value = false
+        currentThinking.value = ''
         addErrorBlock(`脚本错误: ${data.payload?.error || '未知错误'}`)
         break
 
       case 'script_generate_request':
-        addInfoBlock(`${data.payload?.message || '请描述需要生成的脚本功能'}`)
+        {
+          const interactionId = data.payload?.interaction_id || data.interaction_id
+          closeStaleInteractions(data.payload || {}, interactionId)
+          if (hasOpenInteraction(interactionId)) break
+          isTyping.value = false
+          waitingForChoice.value = true
+          const generateBlock = showGenerateScriptForm({ ...data.payload, interaction_id: interactionId })
+          pendingInputRequest.value = generateBlock
+          updateRun({}, { status: 'waiting' })
+        }
         break
 
       case 'node_retry':
@@ -2024,6 +2157,11 @@ export function useAgentChat() {
         if (data.payload?.state) {
           const subscribedState = data.payload.state
           applyScanState(subscribedState, { announce: false })
+          if (subscribedState.pending_interaction) {
+            restorePendingInteraction(subscribedState.pending_interaction)
+          } else if (subscribedState.scan_status !== 'waiting_user' && !subscribedState.is_complete) {
+            closeStaleInteractions(subscribedState, '__no_pending_interaction__')
+          }
         }
         break
 
@@ -2037,6 +2175,11 @@ export function useAgentChat() {
         if (state) {
           const wasPaused = scanPause.status === 'paused'
           applyScanState(state, { announce: !wasPaused })
+          if (state.pending_interaction) {
+            restorePendingInteraction(state.pending_interaction)
+          } else if (state.scan_status !== 'waiting_user' && !state.is_complete) {
+            closeStaleInteractions(state, '__no_pending_interaction__')
+          }
           if (state.scan_status === 'paused_for_chat') {
             if (!wasPaused) addInfoBlock('已恢复扫描暂停状态，可继续聊天或点击“继续扫描”')
           } else if (scanStatus.value !== 'idle') {

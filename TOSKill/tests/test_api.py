@@ -56,6 +56,29 @@ class TestToolsAPI:
         response = client.get("/api/tools")
         assert response.status_code in [200, 404]
 
+    @pytest.mark.parametrize("tool_name", ["sqli_scan", "xss_scan"])
+    @patch("TOSKill.api.scan_api.get_tool_by_name")
+    def test_vulnerability_tool_endpoint_preserves_complete_url(
+        self, mock_get_tool, client, tool_name
+    ):
+        tool = MagicMock(spec=["invoke"])
+        tool.invoke.return_value = {"success": True, "data": {"ok": True}}
+        mock_get_tool.return_value = tool
+        target = "https://example.com/search.php?q=test"
+
+        response = client.post(
+            "/api/tools/execute",
+            json={
+                "tool_name": tool_name,
+                "target": target,
+                "analyze": False,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["data"]["target"] == target
+        tool.invoke.assert_called_once_with(target)
+
 
 class TestIntentAPI:
     """意图解析API测试"""

@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from .state import ScanState, create_initial_state, update_state
 from .decision_context import build_decision_context
 from .graph import get_agent_orchestrator, memory_store, safe_ws_send
-from .tools import get_tool_by_name, get_all_tool_names, clean_target, TOOL_MAP
+from .tools import get_tool_by_name, get_all_tool_names, clean_target_for_tool, TOOL_MAP
 from .llm_client import get_llm
 from ..config import settings
 
@@ -147,7 +147,7 @@ def execute_tool(tool_name: str, target: str) -> Dict[str, Any]:
     if not tool:
         raise ValueError(f"工具 {tool_name} 不存在")
     
-    cleaned_target = clean_target(target)
+    cleaned_target = clean_target_for_tool(tool_name, target)
     logger.info(f"执行工具: {tool_name} -> {cleaned_target}")
     
     result = tool.invoke(cleaned_target)
@@ -161,7 +161,6 @@ def execute_tool(tool_name: str, target: str) -> Dict[str, Any]:
 
 
 def execute_tools_batch(tool_names: List[str], target: str) -> Dict[str, Any]:
-    cleaned_target = clean_target(target)
     results = {}
     errors = []
     
@@ -172,7 +171,8 @@ def execute_tools_batch(tool_names: List[str], target: str) -> Dict[str, Any]:
             continue
         
         try:
-            results[tool_name] = tool.invoke(cleaned_target)
+            tool_target = clean_target_for_tool(tool_name, target)
+            results[tool_name] = tool.invoke(tool_target)
         except Exception as e:
             errors.append(f"{tool_name}: {str(e)}")
     
