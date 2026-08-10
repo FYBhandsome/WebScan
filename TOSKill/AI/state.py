@@ -14,6 +14,7 @@ class ScanState(TypedDict, total=False):
     task_id: str
     run_id: str
     mode: str
+    workflow_mode: NotRequired[str]
     planned_tasks: List[str]
     completed_tasks: List[str]
     failed_tasks: List[str]
@@ -133,6 +134,7 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         task_id=task_id or str(uuid.uuid4())[:8],
         run_id="",
         mode=mode,
+        workflow_mode=mode,
         scan_mode="人机交互",
         run_type="interactive",
         scan_status="idle",

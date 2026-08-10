@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from TOSKill.AI.graph import MemoryStore, memory_store
+from TOSKill.AI.graph import AgentOrchestrator, MemoryStore, memory_store, router
 from TOSKill.AI.state import create_initial_state, update_state
 from TOSKill.api.ai_chat_websocket import AIChatManager
 from TOSKill.api.scan_api import ToolExecuteRequest, _execute_tools_async, api_execute_tool
@@ -263,6 +263,97 @@ async def test_scan_view_automatic_mode_regression(scan_mode, expected_mode):
         assert state["scan_status"] == "queued"
     finally:
         memory_store.delete_session(session_id)
+
+
+def test_full_scan_info_stage_finishes_without_early_report():
+    state = create_initial_state(
+        "http://example.com",
+        task_id="lifecycle-full-stage-router",
+        mode="full_scan",
+    )
+    state = update_state(
+        state,
+        workflow_mode="full_scan",
+        mode="info_collection",
+        next_task="end",
+    )
+
+    assert router(state) == "phase_complete"
+    assert router(update_state(state, workflow_mode="info_collection")) == "report_generation"
+
+
+@pytest.mark.asyncio
+async def test_full_scan_resume_continues_into_vulnerability_stage():
+    session_id = "lifecycle-full-resume"
+    orchestrator = AgentOrchestrator()
+    orchestrator._initialized = True
+    checkpoint = SimpleNamespace(values={
+        "mode": "info_collection",
+        "workflow_mode": "full_scan",
+    })
+    info_result = update_state(
+        create_initial_state("http://example.com", task_id=session_id, mode="full_scan"),
+        workflow_mode="full_scan",
+        mode="info_collection",
+        next_task="",
+        is_complete=False,
+    )
+    vuln_result = update_state(
+        info_result,
+        mode="vuln_scan",
+        __interrupt__=("waiting",),
+    )
+    orchestrator.info_graph = MagicMock(
+        aget_state=AsyncMock(return_value=checkpoint),
+        ainvoke=AsyncMock(return_value=info_result),
+    )
+    orchestrator.vuln_graph = MagicMock(
+        aget_state=AsyncMock(return_value=SimpleNamespace(values={})),
+        ainvoke=AsyncMock(return_value=vuln_result),
+    )
+    orchestrator.intent_graph = MagicMock(
+        aget_state=AsyncMock(return_value=SimpleNamespace(values={})),
+    )
+    orchestrator.report_graph = MagicMock(ainvoke=AsyncMock())
+    memory_store.save_session(session_id, info_result)
+
+    try:
+        result = await orchestrator.resume_workflow(session_id, "1")
+
+        orchestrator.info_graph.ainvoke.assert_awaited_once()
+        orchestrator.vuln_graph.ainvoke.assert_awaited_once()
+        orchestrator.report_graph.ainvoke.assert_not_awaited()
+        assert result["mode"] == "vuln_scan"
+        assert result["__interrupt__"] == ("waiting",)
+    finally:
+        memory_store.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_full_scan_vulnerability_stage_finishes_with_report():
+    session_id = "lifecycle-full-report"
+    orchestrator = AgentOrchestrator()
+    vuln_result = update_state(
+        create_initial_state("http://example.com", task_id=session_id, mode="full_scan"),
+        workflow_mode="full_scan",
+        mode="vuln_scan",
+        is_complete=False,
+    )
+    report_result = update_state(
+        vuln_result,
+        mode="full_scan",
+        is_complete=True,
+        report="complete",
+    )
+    orchestrator.vuln_graph = MagicMock(ainvoke=AsyncMock())
+    orchestrator.report_graph = MagicMock(ainvoke=AsyncMock(return_value=report_result))
+
+    result = await orchestrator._continue_full_scan(session_id, vuln_result)
+
+    orchestrator.vuln_graph.ainvoke.assert_not_awaited()
+    orchestrator.report_graph.ainvoke.assert_awaited_once()
+    assert result["is_complete"] is True
+    assert result["report"] == "complete"
 
 
 @pytest.mark.asyncio

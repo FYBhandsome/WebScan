@@ -17,6 +17,7 @@ from .loginfo import log_handler
 from .randheader import random_headers
 from .webside import webside_query
 from .webweight import web_weight
+from .crawler import crawler
 
 __all__ = [
     "baseinfo",
@@ -32,6 +33,7 @@ __all__ = [
     "random_headers",
     "webside_query",
     "web_weight",
+    "crawler",
 ]
 
 INFO_COLLECTION_TOOLS = [
@@ -48,4 +50,5 @@ INFO_COLLECTION_TOOLS = [
     random_headers,
     webside_query,
     web_weight,
+    crawler,
 ]

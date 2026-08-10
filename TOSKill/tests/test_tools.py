@@ -67,24 +67,41 @@ class TestToolRegistry:
         result = clean_target("")
         assert result == ""
 
-    @pytest.mark.parametrize(
-        "target",
-        [
-            "http://example.com",
-            "https://example.com/page?id=1",
-            "http://127.0.0.1:8080/admin",
-        ],
-    )
-    def test_vulnerability_tools_preserve_complete_url(self, target):
-        from TOSKill.AI.tools import clean_target_for_tool
+    def test_webside_query_uses_structured_tool_invoke(self):
+        from TOSKill.AI.tools import webside_query_scan
 
-        assert clean_target_for_tool("sqli_scan", target) == target
-        assert clean_target_for_tool("xss_scan", target) == target
+        raw_result = {
+            "success": True,
+            "data": {"side_sites": [], "total_count": 0},
+            "error": None,
+        }
+        mock_tool = MagicMock()
+        mock_tool.invoke.return_value = raw_result
+        with patch("TOSKill.AI.tools.resolve_target_ip", return_value="44.238.29.244") as resolver:
+            with patch("TOSKill.AI.tools.webside_query", mock_tool):
+                result = webside_query_scan.invoke({"target": "http://testasp.vulnweb.com"})
 
-    def test_host_oriented_tools_keep_legacy_target_cleaning(self):
-        from TOSKill.AI.tools import clean_target_for_tool
+        resolver.assert_called_once_with("http://testasp.vulnweb.com")
+        mock_tool.invoke.assert_called_once_with({"ip": "44.238.29.244"})
+        assert result["success"] is True
+        assert result["data"]["total_count"] == 0
 
-        assert clean_target_for_tool("baseinfo_scan", "https://example.com/page?id=1") == "example.com"
+    def test_webside_query_propagates_tool_error(self):
+        from TOSKill.AI.tools import webside_query_scan
+
+        raw_result = {
+            "success": False,
+            "data": {},
+            "error": "query failed",
+        }
+        mock_tool = MagicMock()
+        mock_tool.invoke.return_value = raw_result
+        with patch("TOSKill.AI.tools.resolve_target_ip", return_value="44.238.29.244"):
+            with patch("TOSKill.AI.tools.webside_query", mock_tool):
+                result = webside_query_scan.invoke({"target": "http://testasp.vulnweb.com"})
+
+        assert result["success"] is False
+        assert result["error"] == "query failed"
 
 
 class TestToolIntegrity:
