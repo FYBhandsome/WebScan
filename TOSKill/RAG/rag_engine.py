@@ -11,6 +11,7 @@ import threading
 import functools
 import time
 import shutil
+import subprocess
 import tempfile
 import uuid
 from typing import List, Dict, Any, Optional
@@ -495,6 +496,24 @@ class TOSKillRAGEngine:
         loaded_index = load_index_from_storage(storage_context)
         VectorIndexRetriever(index=loaded_index, similarity_top_k=5)
 
+    @staticmethod
+    def _enable_windows_acl_inheritance(path: Path) -> None:
+        """让生成的索引继承父目录 ACL，避免跨 Windows 账户后不可访问。"""
+        if os.name != "nt":
+            return
+
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        result = subprocess.run(
+            ["icacls", str(path), "/inheritance:e", "/t", "/c"],
+            capture_output=True,
+            text=True,
+            check=False,
+            creationflags=creation_flags,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "未知错误").strip()
+            raise RuntimeError(f"恢复 RAG 索引 ACL 继承失败: {detail}")
+
     def _promote_staged_storage(self, staged_dir: Path) -> None:
         """发布临时索引；兼容 Windows 无法重命名正在访问目录的限制。"""
         storage_parent = _STORAGE_DIR.parent
@@ -504,11 +523,17 @@ class TOSKillRAGEngine:
         if not staged_files:
             raise RuntimeError("临时 RAG 索引目录为空，拒绝发布")
 
+        # 某些受限运行环境会为新文件创建仅所有者可访问的保护 ACL。
+        # os.replace 会保留源文件 ACL，因此必须在发布前恢复目录继承，否则
+        # 换用普通用户启动服务后将无法读取已生成的索引。
+        self._enable_windows_acl_inheritance(staged_dir)
+
         # manifest 是索引完整可用的提交标志，必须最后替换。这样在发布期间，
         # 新进程最多看到旧清单而非半成品清单。
         staged_files.sort(key=lambda path: path.name == "index_manifest.json")
         replaced_names: List[str] = []
         removed_names: List[str] = []
+        moved_backup_names: List[str] = []
 
         try:
             backup_dir.mkdir()
@@ -520,7 +545,19 @@ class TOSKillRAGEngine:
                 path for path in _STORAGE_DIR.glob("*.json") if path.is_file()
             ]
             for current_file in current_json_files:
-                shutil.copy2(current_file, backup_dir / current_file.name)
+                backup_file = backup_dir / current_file.name
+                try:
+                    shutil.copy2(current_file, backup_file)
+                except PermissionError:
+                    # 兼容旧版本留下的仅原所有者可读文件。当前账户可能无法
+                    # 打开文件内容，但只要拥有父目录修改权限，仍可在同卷内
+                    # 原子移动文件。移动后的备份同样可用于完整回滚。
+                    logger.warning(
+                        "现有 RAG 索引不可读，改用原子移动备份: %s",
+                        current_file,
+                    )
+                    os.replace(current_file, backup_file)
+                    moved_backup_names.append(current_file.name)
 
             for staged_file in staged_files:
                 target_file = _STORAGE_DIR / staged_file.name
@@ -534,7 +571,10 @@ class TOSKillRAGEngine:
                     removed_names.append(current_file.name)
         except Exception as exc:
             rollback_errors = []
-            for file_name in reversed(replaced_names + removed_names):
+            changed_names = list(dict.fromkeys(
+                replaced_names + removed_names + moved_backup_names
+            ))
+            for file_name in reversed(changed_names):
                 backup_file = backup_dir / file_name
                 target_file = _STORAGE_DIR / file_name
                 try:

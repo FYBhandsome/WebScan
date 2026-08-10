@@ -331,6 +331,16 @@ def clean_target(target: str) -> str:
     return target
 
 
+URL_PRESERVING_TOOLS = frozenset({"sqli_scan", "xss_scan"})
+
+
+def clean_target_for_tool(tool_name: str, target: str) -> str:
+    """Prepare a target using the input shape expected by a specific tool."""
+    if tool_name in URL_PRESERVING_TOOLS:
+        return normalize_scan_target(target)
+    return clean_target(target)
+
+
 def resolve_target_ip(target: str) -> str:
     """Extract the host from a scan target and resolve it to an IPv4 address."""
     import ipaddress

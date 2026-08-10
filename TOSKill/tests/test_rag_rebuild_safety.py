@@ -43,6 +43,84 @@ def test_promote_staged_storage_replaces_complete_directory(monkeypatch, tmp_pat
     assert not list(tmp_path.glob("storage-backup-*"))
 
 
+def test_promote_staged_storage_restores_staged_acl_inheritance(monkeypatch, tmp_path):
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+    staged_dir = tmp_path / "storage-rebuild-test"
+    staged_dir.mkdir()
+    (staged_dir / "docstore.json").write_text("new", encoding="utf-8")
+    monkeypatch.setattr(rag_module, "_STORAGE_DIR", storage_dir)
+    engine = _bare_engine()
+    enable_acl = MagicMock()
+    engine._enable_windows_acl_inheritance = enable_acl
+
+    engine._promote_staged_storage(staged_dir)
+
+    enable_acl.assert_called_once_with(staged_dir)
+
+
+def test_promote_recovers_when_existing_index_cannot_be_read(monkeypatch, tmp_path):
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+    old_file = storage_dir / "docstore.json"
+    old_file.write_text("old", encoding="utf-8")
+    staged_dir = tmp_path / "storage-rebuild-test"
+    staged_dir.mkdir()
+    (staged_dir / "docstore.json").write_text("new", encoding="utf-8")
+    monkeypatch.setattr(rag_module, "_STORAGE_DIR", storage_dir)
+    engine = _bare_engine()
+
+    real_copy2 = rag_module.shutil.copy2
+
+    def deny_old_index_read(source, target, *args, **kwargs):
+        if Path(source) == old_file:
+            raise PermissionError("old index ACL denies reads")
+        return real_copy2(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(rag_module.shutil, "copy2", deny_old_index_read)
+
+    engine._promote_staged_storage(staged_dir)
+
+    assert old_file.read_text(encoding="utf-8") == "new"
+    assert not list(tmp_path.glob("storage-backup-*"))
+
+
+def test_unreadable_index_backup_is_rolled_back_on_publish_failure(monkeypatch, tmp_path):
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+    old_file = storage_dir / "docstore.json"
+    old_file.write_text("old", encoding="utf-8")
+    staged_dir = tmp_path / "storage-rebuild-test"
+    staged_dir.mkdir()
+    staged_file = staged_dir / "docstore.json"
+    staged_file.write_text("new", encoding="utf-8")
+    monkeypatch.setattr(rag_module, "_STORAGE_DIR", storage_dir)
+    engine = _bare_engine()
+
+    monkeypatch.setattr(
+        rag_module.shutil,
+        "copy2",
+        MagicMock(side_effect=PermissionError("old index ACL denies reads")),
+    )
+    real_replace = rag_module.os.replace
+
+    def fail_staged_publish(source, target):
+        if Path(source) == staged_file:
+            raise PermissionError("new index is locked")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(rag_module.os, "replace", fail_staged_publish)
+
+    try:
+        engine._promote_staged_storage(staged_dir)
+        raise AssertionError("Expected staged publish to fail")
+    except RuntimeError as exc:
+        assert "发布 RAG 索引文件失败" in str(exc)
+
+    assert old_file.read_text(encoding="utf-8") == "old"
+    assert not list(tmp_path.glob("storage-backup-*"))
+
+
 def test_promote_staged_storage_rolls_back_replaced_files(monkeypatch, tmp_path):
     storage_dir = tmp_path / "storage"
     storage_dir.mkdir()

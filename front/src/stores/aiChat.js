@@ -9,6 +9,8 @@ export const useAIChatStore = defineStore('aiChat', () => {
   const ws = ref(null)
   const isWaitingConfirm = ref(false)
   const confirmationPrompt = ref('')
+  const pendingInteraction = ref(null)
+  const scanResult = ref(null)
   const isScanning = ref(false)
   const currentTaskId = ref(null)
   
@@ -124,6 +126,31 @@ export const useAIChatStore = defineStore('aiChat', () => {
         confirmationPrompt.value = payload.prompt
         addMessage('assistant', payload.prompt, { type: 'confirmation' })
         break
+
+      case 'interaction_required':
+      case 'high_risk_vulnerability_detected':
+      case 'tool_confirm_required': {
+        const interaction = { ...(payload || {}) }
+        const options = interaction.options?.length
+          ? interaction.options
+          : type === 'tool_confirm_required'
+            ? [{ key: 'approve', label: '确认执行' }, { key: 'reject', label: '拒绝' }]
+            : [{ key: '1', label: '执行' }, { key: '2', label: '停止' }]
+        pendingInteraction.value = {
+          ...interaction,
+          eventType: type,
+          options,
+          interaction_id: interaction.interaction_id || data.interaction_id || null,
+          prompt: interaction.message || interaction.description || `请确认下一步操作：${interaction.next_task || ''}`
+        }
+        isWaitingConfirm.value = true
+        confirmationPrompt.value = pendingInteraction.value.prompt
+        addMessage('assistant', confirmationPrompt.value, {
+          type: 'interaction',
+          interaction: pendingInteraction.value
+        })
+        break
+      }
         
       case 'tool_execution':
         handleToolExecution(payload)
@@ -140,12 +167,29 @@ export const useAIChatStore = defineStore('aiChat', () => {
       case 'scan_started':
         currentTaskId.value = payload.task_id
         isScanning.value = true
+        scanResult.value = null
         addSystemMessage(`开始扫描: ${payload.target}`)
         break
+
+      case 'scan_completed': {
+        scanResult.value = payload || {}
+        isScanning.value = false
+        isWaitingConfirm.value = false
+        pendingInteraction.value = null
+        const completed = payload?.completed_tasks?.length || 0
+        const vulnerabilities = payload?.vulnerabilities_count ?? payload?.vulnerabilities?.length ?? 0
+        const report = payload?.report ? `\n\n报告：${payload.report}` : ''
+        addMessage('assistant', `扫描完成\n已完成任务：${completed}\n发现漏洞：${vulnerabilities}${report}`, {
+          type: 'report_ready',
+          report: payload
+        })
+        break
+      }
         
       case 'scan_cancelled':
         isScanning.value = false
         isWaitingConfirm.value = false
+        pendingInteraction.value = null
         addSystemMessage('扫描已取消')
         break
         
@@ -224,8 +268,19 @@ export const useAIChatStore = defineStore('aiChat', () => {
   }
   
   const sendUserConfirm = (choice) => {
-    if (sendMessage('user_confirm', { choice })) {
+    const interaction = pendingInteraction.value
+    const interactionId = interaction?.interaction_id
+    let messageType = 'user_choice'
+    let payload = { choice, ...(interactionId ? { interaction_id: interactionId } : {}) }
+    if (interaction?.eventType === 'tool_confirm_required') {
+      messageType = choice === 'approve' ? 'tool_confirmed' : 'tool_rejected'
+      payload = { confirmed: choice === 'approve', ...payload }
+    } else if (interaction?.eventType === 'high_risk_vulnerability_detected') {
+      messageType = 'high_risk_confirm'
+    }
+    if (sendMessage(messageType, payload)) {
       isWaitingConfirm.value = false
+      pendingInteraction.value = null
       addMessage('user', `用户选择: ${choice}`)
     }
   }
@@ -259,6 +314,8 @@ export const useAIChatStore = defineStore('aiChat', () => {
     sessionId,
     isWaitingConfirm,
     confirmationPrompt,
+    pendingInteraction,
+    scanResult,
     isScanning,
     currentTaskId,
     connect,

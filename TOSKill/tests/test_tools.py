@@ -67,6 +67,21 @@ class TestToolRegistry:
         result = clean_target("")
         assert result == ""
 
+    @pytest.mark.parametrize("tool_name", ["sqli_scan", "xss_scan"])
+    def test_clean_target_for_url_preserving_tool(self, tool_name):
+        from TOSKill.AI.tools import clean_target_for_tool
+
+        target = "https://example.com/search?q=test"
+        assert clean_target_for_tool(tool_name, target) == target
+
+    def test_clean_target_for_host_only_tool(self):
+        from TOSKill.AI.tools import clean_target_for_tool
+
+        assert clean_target_for_tool(
+            "baseinfo_scan",
+            "https://example.com/search?q=test",
+        ) == "example.com"
+
     def test_webside_query_uses_structured_tool_invoke(self):
         from TOSKill.AI.tools import webside_query_scan
 

@@ -48,9 +48,18 @@
       <div v-if="isWaitingConfirm" class="confirmation-panel">
         <div class="confirmation-prompt">{{ confirmationPrompt }}</div>
         <div class="confirmation-buttons">
-          <el-button type="primary" @click="handleConfirm('confirm')">确认执行</el-button>
-          <el-button type="warning" @click="handleConfirm('skip')">跳过</el-button>
-          <el-button type="danger" @click="handleConfirm('cancel')">取消</el-button>
+          <el-button
+            v-for="option in (pendingInteraction?.options || [
+              { key: 'confirm', label: '确认执行' },
+              { key: 'skip', label: '跳过' },
+              { key: 'cancel', label: '取消' }
+            ])"
+            :key="option.key"
+            :type="String(option.key) === '2' || option.key === 'reject' || option.key === 'cancel' ? 'danger' : 'primary'"
+            @click="handleConfirm(option.key)"
+          >
+            {{ option.label || option.description || option.key }}
+          </el-button>
         </div>
       </div>
       
@@ -119,6 +128,7 @@ const {
   sessionId, 
   isWaitingConfirm,
   confirmationPrompt,
+  pendingInteraction,
   isScanning
 } = storeToRefs(aiChatStore)
 

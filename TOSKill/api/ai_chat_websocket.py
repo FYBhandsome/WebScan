@@ -130,6 +130,7 @@ class AIChatManager:
         self.chat_client: Optional[AsyncOpenAI] = None
         self._event_sequences: Dict[str, int] = {}
         self._run_events: Dict[str, List[Dict]] = {}
+        self._completion_notified = set()
         self._disconnect_cleanup: Dict[str, asyncio.Task] = {}
         # 多会话订阅：client_id -> {session_id1, session_id2, ...}
         self._subscriptions: Dict[str, set] = {}
@@ -365,6 +366,51 @@ class AIChatManager:
             error_response.setdefault("payload", {})["run_type"] = extra["run_type"]
         await self._send(session_id, error_response)
 
+    async def _send_scan_completed_if_ready(
+        self,
+        session_id: str,
+        result: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Emit one canonical completion payload after an interactive resume.
+
+        Interactive scans can resume through several handlers (normal choice,
+        high-risk confirmation, tool confirmation, script input, or an
+        alternative tool).  Historically only ``user_choice`` emitted the
+        final event, so a scan could finish in storage while the UI remained
+        stuck on the last interaction card.  Read the durable state as the
+        source of truth and include the full report fields in every completion
+        event.
+        """
+        state = memory_store.get_session(session_id) or {}
+        candidate = dict(state)
+        if isinstance(result, dict):
+            candidate.update(result)
+        # The graph return value can be a checkpoint from just before the
+        # durable merge.  Never let that stale ``False`` hide a completed
+        # state that was already persisted by the resume path.
+        candidate["is_complete"] = bool(
+            state.get("is_complete") or (result or {}).get("is_complete")
+        )
+        if not candidate["is_complete"]:
+            return False
+
+        # A completion event may be replayed by a reconnect or by two related
+        # confirmation handlers.  Keep the event idempotent per run.
+        run_id = candidate.get("run_id") or session_id
+        if run_id in self._completion_notified:
+            return True
+        self._completion_notified.add(run_id)
+
+        await self._send(session_id, {
+            "type": "scan_completed",
+            "payload": self._build_scan_result_payload(
+                candidate,
+                candidate.get("target", ""),
+                candidate.get("run_type", "interactive"),
+            ),
+        })
+        return True
+
     def _matches_pending_interaction(self, session_id: str, payload: Dict, expected_type: str) -> bool:
         pending = memory_store.get_pending_interaction(session_id)
         if not pending or pending.get("type") != expected_type:
@@ -474,17 +520,7 @@ class AIChatManager:
                         }
                     })
                     
-                    if result.get("is_complete"):
-                        await self._send(session_id, {
-                            "type": "scan_completed",
-                            "payload": {
-                                "session_id": session_id,
-                                "target": result.get("target", ""),
-                                "completed_tasks": result.get("completed_tasks", []),
-                                "vulnerabilities_count": len(result.get("vulnerabilities", [])),
-                                "report": result.get("report", "")
-                            }
-                        })
+                    await self._send_scan_completed_if_ready(session_id, result)
                 else:
                     await self._send_error(session_id, "恢复工作流失败：会话不存在")
             except Exception as e:
@@ -780,6 +816,7 @@ class AIChatManager:
                         result_available=result is not None,
                     ),
                 })
+                await self._send_scan_completed_if_ready(session_id, result)
             except Exception as exc:
                 logger.exception(f"[{session_id}] 恢复聊天暂停失败: {exc}")
                 failed_state = memory_store.get_session(session_id) or current
@@ -1057,17 +1094,7 @@ class AIChatManager:
             if persisted_result:
                 memory_store.save_session(session_id, persisted_result)
             
-            if result and result.get("is_complete"):
-                await self._send(session_id, {
-                    "type": "scan_completed",
-                    "payload": {
-                        "session_id": session_id,
-                        "target": target,
-                        "completed_tasks": result.get("completed_tasks", []),
-                        "vulnerabilities_count": len(result.get("vulnerabilities", [])),
-                        "report": result.get("report", "")
-                    }
-                })
+            await self._send_scan_completed_if_ready(session_id, result)
         except asyncio.CancelledError:
             await self._send(session_id, {"type": "scan_cancelled", "payload": {"session_id": session_id}})
         except Exception as e:
@@ -1257,6 +1284,7 @@ class AIChatManager:
                             "scan_status": result.get("scan_status", "running"),
                         },
                     })
+                    await self._send_scan_completed_if_ready(session_id, result)
             except Exception as exc:
                 logger.exception(f"[{session_id}] 恢复脚本上传工作流失败: {exc}")
                 await self._send_error(session_id, f"恢复脚本上传工作流失败: {exc}")
@@ -1379,6 +1407,7 @@ class AIChatManager:
                             "scan_status": result.get("scan_status", "running"),
                         },
                     })
+                    await self._send_scan_completed_if_ready(session_id, result)
             except Exception as exc:
                 logger.exception(f"[{session_id}] 恢复脚本生成工作流失败: {exc}")
                 await self._send_error(session_id, f"恢复脚本生成工作流失败: {exc}")
@@ -1650,6 +1679,7 @@ class AIChatManager:
             "type": "high_risk_confirmed",
             "payload": {"choice": choice, "resumed": result is not None}
         })
+        await self._send_scan_completed_if_ready(session_id, result)
         logger.info(f"[{session_id}] 高危漏洞确认: {choice}")
 
     async def _handle_tool_confirmed(self, session_id: str, payload: Dict):
@@ -1666,6 +1696,7 @@ class AIChatManager:
                     "payload": {"status": "executing"}
                 })
                 result = await orchestrator.resume_workflow(session_id, {"confirmed": True})
+                await self._send_scan_completed_if_ready(session_id, result)
             except Exception as e:
                 logger.error(f"[{session_id}] 恢复工作流失败: {e}")
                 await self._send_error(session_id, f"恢复工作流失败: {str(e)}")
@@ -1685,6 +1716,7 @@ class AIChatManager:
                         "type": "tool_rejected_processing",
                         "payload": {"status": "generating_alternatives"}
                     })
+                    await self._send_scan_completed_if_ready(session_id, result)
             except Exception as e:
                 logger.error(f"[{session_id}] 恢复工作流失败: {e}")
                 await self._send_error(session_id, f"恢复工作流失败: {str(e)}")
@@ -1711,17 +1743,7 @@ class AIChatManager:
                         "payload": {"choice_index": choice_index, "choice_label": choice_label}
                     })
 
-                    if result.get("is_complete"):
-                        await self._send(session_id, {
-                            "type": "scan_completed",
-                            "payload": {
-                                "session_id": session_id,
-                                "target": result.get("target", ""),
-                                "completed_tasks": result.get("completed_tasks", []),
-                                "vulnerabilities_count": len(result.get("vulnerabilities", [])),
-                                "report": result.get("report", "")
-                            }
-                        })
+                    await self._send_scan_completed_if_ready(session_id, result)
             except Exception as e:
                 logger.error(f"[{session_id}] 恢复工作流失败: {e}")
                 await self._send_error(session_id, f"恢复工作流失败: {str(e)}")
