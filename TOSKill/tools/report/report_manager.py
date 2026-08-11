@@ -114,7 +114,8 @@ class ReportManager:
         vulnerabilities: List[Dict[str, Any]],
         tool_results: Dict[str, Any],
         ai_analysis: Optional[Dict[str, Any]] = None,
-        confidence: Optional[Dict[str, Any]] = None
+        confidence: Optional[Dict[str, Any]] = None,
+        report_type: str = "vuln_scan",
     ) -> Dict[str, Any]:
         """生成并保存HTML报告
 
@@ -126,6 +127,7 @@ class ReportManager:
             tool_results: 工具执行结果
             ai_analysis: AI分析结果（可选）
             confidence: AI等保评估置信度数据（可选，dict格式）
+            report_type: 用户选择的报告类型（info_collection/vuln_scan/full_scan）
 
         Returns:
             包含报告信息的字典
@@ -142,7 +144,8 @@ class ReportManager:
             tool_results=tool_results,
             ai_analysis=ai_analysis,
             confidence=confidence,
-            session_id=session_id
+            session_id=session_id,
+            report_type=report_type,
         )
         
         report_file = self.generate_report_filename(session_id, "html")
@@ -167,6 +170,7 @@ class ReportManager:
             "created_at": created_at,
             "download_url": download_url,
             "format": "html",
+            "report_type": report_type,
             "vulnerabilities_count": len(vulnerabilities),
             "tool_results": tool_results,
             "vulnerabilities": vulnerabilities

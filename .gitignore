@@ -250,3 +250,6 @@ TOSKill/RAG/storage/*.json
 
 codeguarddemo/*
 demo_presentation_report/*
+
+tests/
+report_previews/

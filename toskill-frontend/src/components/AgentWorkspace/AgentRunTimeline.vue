@@ -28,7 +28,7 @@
             <span class="step-status">{{ statusLabel(step.status) }}</span>
           </div>
           <div v-if="step.message" class="step-message">{{ step.message }}</div>
-          <div v-if="step.analysis" class="step-analysis">{{ step.analysis }}</div>
+          <div v-if="step.analysis && step.analysis !== step.message" class="step-analysis">{{ step.analysis }}</div>
 
           <div v-if="step.interaction" class="step-interaction">
             <div v-if="!step.interaction.resolved" class="interaction-active">

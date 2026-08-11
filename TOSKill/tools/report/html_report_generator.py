@@ -1,4 +1,5 @@
 # -*- coding:utf-8 -*-
+from __future__ import annotations
 """
 HTML报告生成器模块
 
@@ -11,17 +12,45 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
-from backend.services.report_service import (
-    AIAnalysisData,
-    ConfidenceData,
-    ConfidenceDimension,
-    ReportData,
-    ReportService,
-    ReportSummary,
-    RiskAssessment,
-)
+from TOSKill.tools.report.scan_report_template import render_scan_report
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ConfidenceDimension:
+    """兼容既有置信度转换测试的轻量数据结构。"""
+
+    label: str = ""
+    value: float = 0.0
+
+
+@dataclass
+class ConfidenceData:
+    """新报告模板只读取原始 dict；此结构保留给历史诊断接口。"""
+
+    overall_score: float = 0.0
+    level: str = "info"
+    standard_text: str = ""
+    kb_version: str = ""
+    dimensions: List[ConfidenceDimension] = field(default_factory=list)
+    compliance_estimate: float = 0.0
+    compliance_margin: str = ""
+    kb_refs: str = ""
+    scan_mode: str = ""
+    note: str = ""
+
+
+@dataclass
+class AIAnalysisData:
+    """兼容历史私有转换方法的数据结构。"""
+
+    summary: str = ""
+    risk_level: str = "info"
+    causes: List[str] = field(default_factory=list)
+    risks: List[str] = field(default_factory=list)
+    priorities: List[Dict[str, Any]] = field(default_factory=list)
+    recommendations: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -50,10 +79,6 @@ class HTMLReportGenerator:
         "info": {"score": 1.0, "color": "#95a5a6", "label": "信息"}
     }
 
-    def __init__(self):
-        # HTML 渲染方法不依赖 ReportService 的目录和 AI 客户端初始化。
-        self._template_renderer = ReportService.__new__(ReportService)
-    
     def generate_report(
         self,
         target: str,
@@ -62,7 +87,8 @@ class HTMLReportGenerator:
         tool_results: Dict[str, Any],
         ai_analysis: Optional[Dict[str, Any]] = None,
         confidence: Optional[Dict[str, Any]] = None,
-        session_id: str = ""
+        session_id: str = "",
+        report_type: str = "vuln_scan",
     ) -> str:
         """生成HTML报告
 
@@ -74,80 +100,21 @@ class HTMLReportGenerator:
             ai_analysis: AI分析结果（可选）
             confidence: AI等保评估置信度数据（可选，dict格式）
             session_id: 会话ID
+            report_type: 用户选择的报告类型（信息收集/漏洞扫描/完整扫描）
 
         Returns:
             str: HTML报告内容
         """
-        severity_count = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-        for v in vulnerabilities:
-            sev = str(v.get("severity") or "info").lower()
-            if sev in severity_count:
-                severity_count[sev] += 1
-
-        if ai_analysis:
-            risk = ai_analysis.get("risk_assessment", {})
-            risk_score = risk.get("risk_score", 50)
-            risk_level = str(risk.get("overall_risk", "medium")).lower()
-        else:
-            risk_score = self._calculate_risk_score(severity_count)
-            risk_level = self._determine_risk_level(severity_count)
-
-        if risk_level not in self.SEVERITY_CONFIG:
-            risk_level = self._determine_risk_level(severity_count)
-        try:
-            risk_score = max(0.0, min(100.0, float(risk_score)))
-        except (TypeError, ValueError):
-            risk_score = float(self._calculate_risk_score(severity_count))
-
-        risk_color = self.SEVERITY_CONFIG.get(risk_level, self.SEVERITY_CONFIG["medium"])["color"]
-
-        normalized_vulnerabilities = []
-        for vuln in vulnerabilities:
-            normalized = dict(vuln)
-            normalized["severity"] = str(vuln.get("severity") or "info").lower()
-            normalized["title"] = vuln.get("title") or vuln.get("name") or vuln.get("vuln_type") or "Unknown"
-            normalized["remediation"] = (
-                vuln.get("remediation")
-                or vuln.get("solution")
-                or "请参考安全最佳实践进行修复"
-            )
-            normalized_vulnerabilities.append(normalized)
-
-        converted_ai = self._convert_ai_analysis(ai_analysis) if ai_analysis else None
-        converted_confidence = self._convert_confidence(confidence) if confidence else None
-        summary = ReportSummary(
-            total_vulnerabilities=len(normalized_vulnerabilities),
-            critical_count=severity_count["critical"],
-            high_count=severity_count["high"],
-            medium_count=severity_count["medium"],
-            low_count=severity_count["low"],
-            info_count=severity_count["info"],
-            vulnerability_rate=(
-                sum(severity_count[level] for level in ("critical", "high", "medium", "low"))
-                / len(normalized_vulnerabilities) * 100
-                if normalized_vulnerabilities else 0.0
-            ),
-        )
-        report_data = ReportData(
-            task_id=session_id,
-            task_name=f"{target} 安全扫描任务",
+        return render_scan_report(
             target=target,
             scan_time=scan_time,
-            generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            summary=summary,
-            risk_assessment=RiskAssessment(
-                score=risk_score,
-                level=risk_level,
-                label=self.SEVERITY_CONFIG[risk_level]["label"],
-                color=risk_color,
-            ),
-            vulnerabilities=normalized_vulnerabilities,
-            ai_analysis=converted_ai,
-            confidence=converted_confidence,
+            vulnerabilities=vulnerabilities or [],
             tool_results=tool_results or {},
+            ai_analysis=ai_analysis,
+            confidence=confidence,
+            session_id=session_id,
+            report_type=report_type,
         )
-
-        return self._template_renderer.generate_html_report(report_data)
 
     @staticmethod
     def _convert_ai_analysis(ai_analysis: Dict[str, Any]) -> AIAnalysisData:

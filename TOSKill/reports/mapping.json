@@ -14181,5 +14181,2590 @@
         "source_tool": "lfi_scan"
       }
     ]
+  },
+  "905a5afd": {
+    "report_id": "scan_report_905a5afd_20260811_164622",
+    "session_id": "905a5afd",
+    "report_file": "scan_report_905a5afd_20260811_164622.html",
+    "target": "http://testasp.vulnweb.com",
+    "created_at": "2026-08-11 16:46:22",
+    "download_url": "/api/reports/download/scan_report_905a5afd_20260811_164622.html",
+    "format": "html",
+    "report_type": "info_collection",
+    "vulnerabilities_count": 0,
+    "tool_results": {
+      "baseinfo_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": null,
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T16:42:11.921163"
+      },
+      "port_scan": {
+        "success": true,
+        "data": {
+          "open_ports": [
+            "http:80"
+          ],
+          "total_count": 1,
+          "portspoof_detected": false
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T16:42:33.687568"
+      },
+      "subdomain_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {
+            "subdomains": [],
+            "total_count": 0
+          },
+          "error": "未找到 testasp.vulnweb.com 的子域名",
+          "metadata": {
+            "tool": "subdomain",
+            "domain": "testasp.vulnweb.com",
+            "subdomain_count": 0
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T16:43:45.161753"
+      },
+      "infoleak_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "risk_links": [],
+            "grouped_results": {},
+            "total_count": 0
+          },
+          "error": null,
+          "metadata": {
+            "tool": "infoleak_scan",
+            "target": "testasp.vulnweb.com",
+            "risk_count": 0,
+            "risk_types": []
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T16:44:03.993732"
+      },
+      "waf_detect_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {
+            "has_waf": "unknown",
+            "waf_name": "未知",
+            "message": "URL格式非法:testasp.vulnweb.com(需以http/https开头且包含有效域名)"
+          },
+          "error": "URL格式非法:testasp.vulnweb.com(需以http/https开头且包含有效域名)",
+          "metadata": {
+            "tool": "waf_detect",
+            "target": "testasp.vulnweb.com",
+            "has_waf": "unknown",
+            "waf_name": "未知"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T16:45:30.078452"
+      },
+      "dir_brute": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "results": [
+              {
+                "url": "http://testasp.vulnweb.com/login.asp",
+                "path": "/login.asp",
+                "status_code": 200,
+                "content_length": 3194,
+                "redirect": "",
+                "content_type": "text/html",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/robots.txt",
+                "path": "/robots.txt",
+                "status_code": 200,
+                "content_length": 13,
+                "redirect": "",
+                "content_type": "text/plain",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/db.asp",
+                "path": "/db.asp",
+                "status_code": 200,
+                "content_length": 0,
+                "redirect": "",
+                "content_type": "text/html",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/search.asp",
+                "path": "/search.asp",
+                "status_code": 200,
+                "content_length": 2809,
+                "redirect": "",
+                "content_type": "text/html",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/images",
+                "path": "/images",
+                "status_code": 301,
+                "content_length": 157,
+                "redirect": "http://testasp.vulnweb.com/images/",
+                "content_type": "text/html; charset=UTF-8",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/cgi-bin",
+                "path": "/cgi-bin",
+                "status_code": 301,
+                "content_length": 158,
+                "redirect": "http://testasp.vulnweb.com/cgi-bin/",
+                "content_type": "text/html; charset=UTF-8",
+                "server": "Microsoft-IIS/8.5"
+              }
+            ],
+            "total_scanned": 1305,
+            "found_count": 6
+          },
+          "error": null,
+          "metadata": {
+            "tool": "dirscan",
+            "target": "testasp.vulnweb.com",
+            "dict_path": null,
+            "found_count": 6
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T16:45:42.989873"
+      },
+      "cms_detect_scan": {
+        "success": true,
+        "data": {
+          "apps": [
+            "Windows Server",
+            "jenkins",
+            "drupal",
+            "outlook",
+            "asp",
+            "DreamWeaver",
+            "IIS",
+            "IlohaMail",
+            "Microsoft ASP.NET"
+          ],
+          "title": "acuforum forums",
+          "server": "Microsoft-IIS/8.5",
+          "security": [],
+          "url": "http://testasp.vulnweb.com/"
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T16:45:48.281526"
+      },
+      "cdn_detect_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "has_cdn": false,
+            "message": "目标未使用CDN"
+          },
+          "error": null,
+          "metadata": {
+            "tool": "cdn_detect",
+            "target": "testasp.vulnweb.com",
+            "has_cdn": false
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T16:45:50.833241"
+      },
+      "crawler_scan": {
+        "success": true,
+        "data": {
+          "target": "http://testasp.vulnweb.com",
+          "total_pages": 46,
+          "total_links": 46,
+          "total_forms": 31,
+          "duration": 5.893420457839966,
+          "pages": [
+            {
+              "url": "http://testasp.vulnweb.com",
+              "depth": 0,
+              "status_code": 200,
+              "title": "acuforum forums",
+              "content_type": "text/html",
+              "links_count": 13,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {}
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showforum.asp?id=2",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum Miscellaneous",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "2"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showforum.asp?id=0",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum Acunetix Web Vulnerability Scanner",
+              "content_type": "text/html",
+              "links_count": 19,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "0"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showforum.asp?id=1",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum Weather",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "1"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Templatize.asp?item=html%2Fabout.html",
+              "depth": 1,
+              "status_code": 200,
+              "title": "Untitled Document",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "item": "html/about.html"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Search.asp",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum search",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {}
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Default.asp",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum forums",
+              "content_type": "text/html",
+              "links_count": 13,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {}
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FDefault.asp%3F",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/Default.asp?"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault.asp%3F",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/Default.asp?"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showforum.asp?id=0"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=2",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\n3",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "2"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showforum.asp?id=2"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=7",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\na licensed online betting and casino site",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "7"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showforum.asp?id=2"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=1",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\n2",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "1"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=6",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\nПодсветка Растения",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "6"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=5",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\nпосетить сайт",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "5"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showforum.asp?id=0"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=8",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\nparimatch casino",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "8"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FSearch.asp%3F",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/Search.asp?"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=3",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\naaa",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "3"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showforum.asp?id=1"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=4",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\nНогти Ног Грибок",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "4"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showforum.asp?id=1"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=0",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\n1",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "0"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/Templatize.asp?item=html%2Fabout.html"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/Templatize.asp?item=html%2Fabout.html"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FSearch.asp%3F",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/Search.asp?"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=1"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D6",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=6"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=2"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D5",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=5"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=2"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D7",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=7"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D6",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=6"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=1"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D7",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=7"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D5",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=5"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D4",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=4"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D4",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=4"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D8",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=8"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D8",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=8"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=3"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=3"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=0"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=0"
+              }
+            }
+          ],
+          "forms": [
+            {
+              "url": "http://testasp.vulnweb.com/Search.asp",
+              "action": "http://testasp.vulnweb.com/Search.asp",
+              "method": "GET",
+              "has_file_upload": false,
+              "has_password": false,
+              "inputs_count": 2
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FDefault.asp%3F",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FDefault.asp%3F",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault.asp%3F",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault.asp%3F",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FSearch.asp%3F",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FSearch.asp%3F",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FSearch.asp%3F",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FSearch.asp%3F",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D6",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D6",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D5",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D5",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D7",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D7",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D6",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D6",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D7",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D7",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D5",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D5",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D4",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D4",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D4",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D4",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D8",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D8",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D8",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D8",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            }
+          ],
+          "urls": [
+            "http://testasp.vulnweb.com/showforum.asp?id=2",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2FDefault.asp%3F",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+            "http://testasp.vulnweb.com",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D5",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault.asp%3F",
+            "http://testasp.vulnweb.com/showthread.asp?id=7",
+            "http://testasp.vulnweb.com/showforum.asp?id=1",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2FSearch.asp%3F",
+            "http://testasp.vulnweb.com/Search.asp",
+            "http://testasp.vulnweb.com/showthread.asp?id=1",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2FSearch.asp%3F",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+            "http://testasp.vulnweb.com/showthread.asp?id=5",
+            "http://testasp.vulnweb.com/showforum.asp?id=0",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D8",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D6",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D5",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D6",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D4",
+            "http://testasp.vulnweb.com/Default.asp",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D7",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+            "http://testasp.vulnweb.com/showthread.asp?id=6",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D4",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D8",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+            "http://testasp.vulnweb.com/showthread.asp?id=2",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+            "http://testasp.vulnweb.com/Templatize.asp?item=html%2Fabout.html",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D7",
+            "http://testasp.vulnweb.com/showthread.asp?id=8",
+            "http://testasp.vulnweb.com/showthread.asp?id=0",
+            "http://testasp.vulnweb.com/showthread.asp?id=4",
+            "http://testasp.vulnweb.com/showthread.asp?id=3"
+          ],
+          "site_map": {
+            "/": {
+              "url": "http://testasp.vulnweb.com",
+              "links": [
+                "/showforum.asp",
+                "/Search.asp",
+                "/vulnerability-scanner/sql-injection/",
+                "/Default.asp",
+                "/Login.asp",
+                "/Templatize.asp",
+                "/Register.asp",
+                "/styles.css"
+              ],
+              "linked_from": []
+            },
+            "/showforum.asp": {
+              "url": "http://testasp.vulnweb.com/showforum.asp?id=2",
+              "links": [
+                "/Search.asp",
+                "/vulnerability-scanner/sql-injection/",
+                "/Login.asp",
+                "/Default.asp",
+                "/Templatize.asp",
+                "/Register.asp",
+                "/styles.css",
+                "/vulnerability-scanner/",
+                "/websitesecurity/sql-injection/",
+                "/",
+                "/showthread.asp"
+              ],
+              "linked_from": []
+            },
+            "/Templatize.asp": {
+              "url": "http://testasp.vulnweb.com/Templatize.asp?item=html%2Fabout.html",
+              "links": [
+                "/Search.asp",
+                "/vulnerability-scanner/sql-injection/",
+                "/company/contact.htm",
+                "/Default.asp",
+                "/websitesecurity/sql-injection/",
+                "/Templatize.asp",
+                "/Login.asp",
+                "/styles.css",
+                "/vulnerability-scanner/",
+                "/Register.asp"
+              ],
+              "linked_from": []
+            },
+            "/Search.asp": {
+              "url": "http://testasp.vulnweb.com/Search.asp",
+              "links": [
+                "/Search.asp",
+                "/vulnerability-scanner/sql-injection/",
+                "/Login.asp",
+                "/Default.asp",
+                "/Templatize.asp",
+                "/Register.asp",
+                "/styles.css",
+                "/vulnerability-scanner/",
+                "/websitesecurity/sql-injection/",
+                "/"
+              ],
+              "linked_from": []
+            },
+            "/Default.asp": {
+              "url": "http://testasp.vulnweb.com/Default.asp",
+              "links": [
+                "/showforum.asp",
+                "/Search.asp",
+                "/vulnerability-scanner/sql-injection/",
+                "/Default.asp",
+                "/Login.asp",
+                "/Templatize.asp",
+                "/Register.asp",
+                "/styles.css"
+              ],
+              "linked_from": []
+            },
+            "/Register.asp": {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FDefault.asp%3F",
+              "links": [
+                "/Search.asp",
+                "/vulnerability-scanner/sql-injection/",
+                "/Default.asp",
+                "/Login.asp",
+                "/Templatize.asp",
+                "/Register.asp",
+                "/styles.css",
+                "/vulnerability-scanner/",
+                "/websitesecurity/sql-injection/",
+                "/"
+              ],
+              "linked_from": []
+            },
+            "/Login.asp": {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault.asp%3F",
+              "links": [
+                "/Search.asp",
+                "/vulnerability-scanner/sql-injection/",
+                "/Default.asp",
+                "/Login.asp",
+                "/Templatize.asp",
+                "/Register.asp",
+                "/styles.css",
+                "/vulnerability-scanner/",
+                "/websitesecurity/sql-injection/",
+                "/"
+              ],
+              "linked_from": []
+            },
+            "/showthread.asp": {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=2",
+              "links": [
+                "/Search.asp",
+                "/Login.asp",
+                "/vulnerability-scanner/sql-injection/",
+                "/Register.asp",
+                "/Default.asp",
+                "/Templatize.asp",
+                "/showforum.asp",
+                "/styles.css",
+                "/vulnerability-scanner/",
+                "/websitesecurity/sql-injection/"
+              ],
+              "linked_from": []
+            }
+          },
+          "sensitive_info": [
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FDefault.asp%3F",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault.asp%3F",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FSearch.asp%3F",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FSearch.asp%3F",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D6",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D5",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D7",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D6",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "tool": "crawler",
+            "target": "http://testasp.vulnweb.com"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T16:46:05.357080"
+      },
+      "web_weight_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {
+            "result": "获取数据失败,请稍后再试",
+            "raw_data": {}
+          },
+          "error": "域名格式非法:testasp.vulnweb.com → 提取纯域名:testasp.vulnweb.com",
+          "metadata": {
+            "tool": "web_weight",
+            "domain": "testasp.vulnweb.com",
+            "result": "获取数据失败,请稍后再试"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T16:46:16.072689"
+      },
+      "ip_locate_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {
+            "location": "输入IP testasp.vulnweb.com 格式非法,请输入合法IPv4地址",
+            "ip": "testasp.vulnweb.com"
+          },
+          "error": "输入IP testasp.vulnweb.com 格式非法,请输入合法IPv4地址",
+          "metadata": {
+            "tool": "ip_locate",
+            "ip": "testasp.vulnweb.com",
+            "location": null
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T16:46:18.290284"
+      }
+    },
+    "vulnerabilities": []
+  },
+  "f7406fb4": {
+    "report_id": "scan_report_f7406fb4_20260811_190553",
+    "session_id": "f7406fb4",
+    "report_file": "scan_report_f7406fb4_20260811_190553.html",
+    "target": "http://testasp.vulnweb.com",
+    "created_at": "2026-08-11 19:05:53",
+    "download_url": "/api/reports/download/scan_report_f7406fb4_20260811_190553.html",
+    "format": "html",
+    "report_type": "info_collection",
+    "vulnerabilities_count": 0,
+    "tool_results": {
+      "baseinfo_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "code": 200,
+            "msg": "查询成功",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "language": "ASP.NET",
+            "ip": [
+              "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+            ],
+            "os": "Windows Server",
+            "register": "http://whois.chinaz.com/testasp.vulnweb.com"
+          },
+          "error": null,
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T19:05:07.659233"
+      },
+      "port_scan": {
+        "success": true,
+        "data": {
+          "open_ports": [
+            "http:80"
+          ],
+          "total_count": 1,
+          "portspoof_detected": false
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T19:05:08.694738"
+      },
+      "subdomain_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {
+            "subdomains": [],
+            "total_count": 0
+          },
+          "error": "未找到 testasp.vulnweb.com 的子域名",
+          "metadata": {
+            "tool": "subdomain",
+            "domain": "testasp.vulnweb.com",
+            "subdomain_count": 0
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T19:05:08.698537"
+      },
+      "dir_brute": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "results": [
+              {
+                "url": "http://testasp.vulnweb.com/db.asp",
+                "path": "/db.asp",
+                "status_code": 200,
+                "content_length": 0,
+                "redirect": "",
+                "content_type": "text/html",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/robots.txt",
+                "path": "/robots.txt",
+                "status_code": 200,
+                "content_length": 13,
+                "redirect": "",
+                "content_type": "text/plain",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/search.asp",
+                "path": "/search.asp",
+                "status_code": 200,
+                "content_length": 2809,
+                "redirect": "",
+                "content_type": "text/html",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/login.asp",
+                "path": "/login.asp",
+                "status_code": 200,
+                "content_length": 3194,
+                "redirect": "",
+                "content_type": "text/html",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/cgi-bin",
+                "path": "/cgi-bin",
+                "status_code": 301,
+                "content_length": 158,
+                "redirect": "http://testasp.vulnweb.com/cgi-bin/",
+                "content_type": "text/html; charset=UTF-8",
+                "server": "Microsoft-IIS/8.5"
+              },
+              {
+                "url": "http://testasp.vulnweb.com/images",
+                "path": "/images",
+                "status_code": 301,
+                "content_length": 157,
+                "redirect": "http://testasp.vulnweb.com/images/",
+                "content_type": "text/html; charset=UTF-8",
+                "server": "Microsoft-IIS/8.5"
+              }
+            ],
+            "total_scanned": 1305,
+            "found_count": 6
+          },
+          "error": null,
+          "metadata": {
+            "tool": "dirscan",
+            "target": "testasp.vulnweb.com",
+            "dict_path": null,
+            "found_count": 6
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T19:05:21.333807"
+      },
+      "waf_detect_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {
+            "has_waf": "unknown",
+            "waf_name": "未知",
+            "message": "URL格式非法:testasp.vulnweb.com(需以http/https开头且包含有效域名)"
+          },
+          "error": "URL格式非法:testasp.vulnweb.com(需以http/https开头且包含有效域名)",
+          "metadata": {
+            "tool": "waf_detect",
+            "target": "testasp.vulnweb.com",
+            "has_waf": "unknown",
+            "waf_name": "未知"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T19:05:21.336133"
+      },
+      "cdn_detect_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "has_cdn": false,
+            "message": "目标未使用CDN"
+          },
+          "error": null,
+          "metadata": {
+            "tool": "cdn_detect",
+            "target": "testasp.vulnweb.com",
+            "has_cdn": false
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T19:05:21.383856"
+      },
+      "cms_detect_scan": {
+        "success": true,
+        "data": {
+          "apps": [
+            "IIS",
+            "jenkins",
+            "outlook",
+            "Windows Server",
+            "DreamWeaver",
+            "IlohaMail",
+            "asp",
+            "drupal",
+            "Microsoft ASP.NET"
+          ],
+          "title": "acuforum forums",
+          "server": "Microsoft-IIS/8.5",
+          "security": [],
+          "url": "http://testasp.vulnweb.com/"
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T19:05:22.370445"
+      },
+      "infoleak_scan": {
+        "success": true,
+        "data": {
+          "success": true,
+          "data": {
+            "risk_links": [],
+            "grouped_results": {},
+            "total_count": 0
+          },
+          "error": null,
+          "metadata": {
+            "tool": "infoleak_scan",
+            "target": "testasp.vulnweb.com",
+            "risk_count": 0,
+            "risk_types": []
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T19:05:39.219764"
+      },
+      "ip_locate_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {
+            "location": "输入IP testasp.vulnweb.com 格式非法,请输入合法IPv4地址",
+            "ip": "testasp.vulnweb.com"
+          },
+          "error": "输入IP testasp.vulnweb.com 格式非法,请输入合法IPv4地址",
+          "metadata": {
+            "tool": "ip_locate",
+            "ip": "testasp.vulnweb.com",
+            "location": null
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T19:05:39.226553"
+      },
+      "webside_query_scan": {
+        "success": false,
+        "data": {
+          "has_data": false,
+          "side_sites": [],
+          "total_count": 0
+        },
+        "error": "IP 44.238.29.244 请求失败 | 状态码:530 | 原因:530 Server Error: <none> for url: http://api.webscan.cc/?action=query&ip=44.238.29.244",
+        "auth_info": null,
+        "timestamp": "2026-08-11T19:05:41.670244"
+      },
+      "web_weight_scan": {
+        "success": true,
+        "data": {
+          "success": false,
+          "data": {
+            "result": "获取数据失败,请稍后再试",
+            "raw_data": {}
+          },
+          "error": "域名格式非法:testasp.vulnweb.com → 提取纯域名:testasp.vulnweb.com",
+          "metadata": {
+            "tool": "web_weight",
+            "domain": "testasp.vulnweb.com",
+            "result": "获取数据失败,请稍后再试"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T19:05:41.673532"
+      },
+      "crawler_scan": {
+        "success": true,
+        "data": {
+          "target": "http://testasp.vulnweb.com",
+          "total_pages": 31,
+          "total_links": 32,
+          "total_forms": 21,
+          "duration": 7.582043409347534,
+          "pages": [
+            {
+              "url": "http://testasp.vulnweb.com",
+              "depth": 0,
+              "status_code": 200,
+              "title": "acuforum forums",
+              "content_type": "text/html",
+              "links_count": 13,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {}
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showforum.asp?id=0",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum Acunetix Web Vulnerability Scanner",
+              "content_type": "text/html",
+              "links_count": 14,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "0"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showforum.asp?id=1",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum Weather",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "1"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Default.asp",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum forums",
+              "content_type": "text/html",
+              "links_count": 13,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {}
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FDefault.asp%3F",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/Default.asp?"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showforum.asp?id=2",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum Miscellaneous",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "2"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Search.asp",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum search",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {}
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault.asp%3F",
+              "depth": 1,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/Default.asp?"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Templatize.asp?item=html%2Fabout.html",
+              "depth": 1,
+              "status_code": 200,
+              "title": "Untitled Document",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "item": "html/about.html"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showforum.asp?id=0"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showforum.asp?id=1"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=1",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\n2",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "1"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showforum.asp?id=2"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showforum.asp?id=0"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=0",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\n1",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "0"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=3",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\naaa",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "3"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=2",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum\r\n3",
+              "content_type": "text/html",
+              "links_count": 11,
+              "forms_count": 0,
+              "scripts_count": 0,
+              "params": {
+                "id": "2"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showforum.asp?id=1"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showforum.asp?id=2"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/Templatize.asp?item=html%2Fabout.html"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=0"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=0"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/Templatize.asp?item=html%2Fabout.html"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=1"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FSearch.asp%3F",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/Search.asp?"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FSearch.asp%3F",
+              "depth": 2,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/Search.asp?"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=1"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=3"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum login",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=2"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=2"
+              }
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "depth": 3,
+              "status_code": 200,
+              "title": "acuforum register",
+              "content_type": "text/html",
+              "links_count": 10,
+              "forms_count": 1,
+              "scripts_count": 0,
+              "params": {
+                "RetURL": "/showthread.asp?id=3"
+              }
+            }
+          ],
+          "forms": [
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FDefault.asp%3F",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FDefault.asp%3F",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Search.asp",
+              "action": "http://testasp.vulnweb.com/Search.asp",
+              "method": "GET",
+              "has_file_upload": false,
+              "has_password": false,
+              "inputs_count": 2
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault.asp%3F",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault.asp%3F",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FSearch.asp%3F",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FSearch.asp%3F",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FSearch.asp%3F",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FSearch.asp%3F",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "action": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 3
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "action": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "method": "POST",
+              "has_file_upload": false,
+              "has_password": true,
+              "inputs_count": 5
+            }
+          ],
+          "urls": [
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+            "http://testasp.vulnweb.com/Default.asp",
+            "http://testasp.vulnweb.com/showthread.asp?id=1",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+            "http://testasp.vulnweb.com/showthread.asp?id=0",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+            "http://testasp.vulnweb.com/showthread.asp?id=3",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2FSearch.asp%3F",
+            "http://testasp.vulnweb.com",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+            "http://testasp.vulnweb.com/showforum.asp?id=2",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2FSearch.asp%3F",
+            "http://testasp.vulnweb.com/Templatize.asp?item=html%2Fabout.html",
+            "http://testasp.vulnweb.com/showthread.asp?id=2",
+            "http://testasp.vulnweb.com/showforum.asp?id=0",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+            "http://testasp.vulnweb.com/Search.asp",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+            "http://testasp.vulnweb.com/Register.asp?RetURL=%2FDefault.asp%3F",
+            "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault.asp%3F",
+            "http://testasp.vulnweb.com/showforum.asp?id=1"
+          ],
+          "site_map": {
+            "/": {
+              "url": "http://testasp.vulnweb.com",
+              "links": [
+                "/",
+                "/showforum.asp",
+                "/Search.asp",
+                "/vulnerability-scanner/",
+                "/Register.asp",
+                "/styles.css",
+                "/websitesecurity/sql-injection/",
+                "/Templatize.asp"
+              ],
+              "linked_from": []
+            },
+            "/showforum.asp": {
+              "url": "http://testasp.vulnweb.com/showforum.asp?id=0",
+              "links": [
+                "/Login.asp",
+                "/",
+                "/showthread.asp",
+                "/Search.asp",
+                "/vulnerability-scanner/",
+                "/styles.css",
+                "/Register.asp",
+                "/websitesecurity/sql-injection/",
+                "/Templatize.asp",
+                "/Default.asp",
+                "/vulnerability-scanner/sql-injection/"
+              ],
+              "linked_from": []
+            },
+            "/Default.asp": {
+              "url": "http://testasp.vulnweb.com/Default.asp",
+              "links": [
+                "/",
+                "/showforum.asp",
+                "/Search.asp",
+                "/vulnerability-scanner/",
+                "/Register.asp",
+                "/styles.css",
+                "/websitesecurity/sql-injection/",
+                "/Templatize.asp"
+              ],
+              "linked_from": []
+            },
+            "/Register.asp": {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FDefault.asp%3F",
+              "links": [
+                "/",
+                "/Search.asp",
+                "/vulnerability-scanner/",
+                "/Register.asp",
+                "/styles.css",
+                "/websitesecurity/sql-injection/",
+                "/Templatize.asp",
+                "/Default.asp",
+                "/Login.asp",
+                "/vulnerability-scanner/sql-injection/"
+              ],
+              "linked_from": []
+            },
+            "/Search.asp": {
+              "url": "http://testasp.vulnweb.com/Search.asp",
+              "links": [
+                "/",
+                "/Search.asp",
+                "/vulnerability-scanner/",
+                "/styles.css",
+                "/websitesecurity/sql-injection/",
+                "/Templatize.asp",
+                "/Default.asp",
+                "/Register.asp",
+                "/Login.asp",
+                "/vulnerability-scanner/sql-injection/"
+              ],
+              "linked_from": []
+            },
+            "/Login.asp": {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault.asp%3F",
+              "links": [
+                "/",
+                "/Search.asp",
+                "/vulnerability-scanner/",
+                "/Register.asp",
+                "/styles.css",
+                "/websitesecurity/sql-injection/",
+                "/Templatize.asp",
+                "/Default.asp",
+                "/Login.asp",
+                "/vulnerability-scanner/sql-injection/"
+              ],
+              "linked_from": []
+            },
+            "/Templatize.asp": {
+              "url": "http://testasp.vulnweb.com/Templatize.asp?item=html%2Fabout.html",
+              "links": [
+                "/",
+                "/Login.asp",
+                "/Search.asp",
+                "/vulnerability-scanner/",
+                "/styles.css",
+                "/websitesecurity/sql-injection/",
+                "/Templatize.asp",
+                "/Register.asp",
+                "/company/contact.htm",
+                "/Default.asp"
+              ],
+              "linked_from": []
+            },
+            "/showthread.asp": {
+              "url": "http://testasp.vulnweb.com/showthread.asp?id=1",
+              "links": [
+                "/",
+                "/showforum.asp",
+                "/Search.asp",
+                "/vulnerability-scanner/",
+                "/Login.asp",
+                "/styles.css",
+                "/websitesecurity/sql-injection/",
+                "/Templatize.asp",
+                "/Default.asp",
+                "/Register.asp"
+              ],
+              "linked_from": []
+            }
+          },
+          "sensitive_info": [
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FDefault.asp%3F",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault.asp%3F",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D0",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowforum.asp%3Fid%3D1",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowforum.asp%3Fid%3D2",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D0",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FTemplatize.asp%3Fitem%3Dhtml%252Fabout.html",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2FSearch.asp%3F",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2FSearch.asp%3F",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D1",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Login.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D2",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            },
+            {
+              "url": "http://testasp.vulnweb.com/Register.asp?RetURL=%2Fshowthread.asp%3Fid%3D3",
+              "type": "sensitive_data",
+              "pattern": "password\\s*[=:]\\s*['\\\"]?([^'\\\"\\s]+)",
+              "match": "</td>"
+            }
+          ],
+          "errors": [],
+          "metadata": {
+            "tool": "crawler",
+            "target": "http://testasp.vulnweb.com"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-11T19:05:49.285463"
+      }
+    },
+    "vulnerabilities": []
   }
 }

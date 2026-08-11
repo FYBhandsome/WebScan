@@ -41,6 +41,13 @@ from .tools import get_tool_by_name, get_tool_sequence, is_auth_expired, get_aut
 from .llm_client import get_llm, invoke_llm, is_llm_available
 from .log_collector import log_collector
 from .progress_events import scanner_progress_context
+from TOSKill.tools.tool_categories import (
+    information_items,
+    information_summary_text,
+    is_information_tool,
+    is_vulnerability_tool,
+    tool_category,
+)
 from ..config import settings
 from ..RAG.retriever import get_scan_strategy
 from ..utils.log_writer import log_info, log_warn, log_error, log_success, log_debug
@@ -82,6 +89,73 @@ FALLBACK_TOOL_MAP = {
 }
 
 DEFAULT_FALLBACK_TOOLS = ["xss_scan", "sqli_scan"]
+
+FULL_SCAN_PHASES = ("info_collection", "vuln_scan")
+
+
+def _infer_full_scan_phase(state: ScanState) -> str:
+    """Return the durable phase for new and legacy full-scan sessions."""
+    phase = str(state.get("current_phase") or "")
+    if phase in FULL_SCAN_PHASES:
+        return phase
+    # Older checkpoints used mode as a temporary phase marker.
+    legacy_mode = str(state.get("mode") or "")
+    return legacy_mode if legacy_mode in FULL_SCAN_PHASES else "info_collection"
+
+
+def _active_tool_sequence(state: ScanState) -> List[str]:
+    """Return only the tools eligible for the current scan phase."""
+    if state.get("workflow_mode") == "full_scan":
+        phase_tasks = state.get("phase_tasks")
+        if isinstance(phase_tasks, list) and phase_tasks:
+            return list(phase_tasks)
+        return list(get_tool_sequence(_infer_full_scan_phase(state)))
+    return list(get_tool_sequence(state.get("mode", "info_collection")))
+
+
+def scan_total_tasks(state: ScanState) -> int:
+    """Return the authoritative dynamic denominator used by all clients."""
+    planned = state.get("planned_tasks")
+    if state.get("workflow_mode") == "full_scan" or state.get("mode") == "full_scan":
+        # Old paused sessions stored only the active 12/8-task phase queue.
+        # Treat an uninitialized full state as the 20 built-ins plus any
+        # non-built-in script tools already present in that legacy queue.
+        if not state.get("full_scan_initialized"):
+            base_plan = set(get_tool_sequence("full_scan"))
+            custom_count = len({task for task in planned or [] if task not in base_plan})
+            return len(base_plan) + custom_count
+        if isinstance(planned, list) and planned:
+            return len(planned)
+        return len(get_tool_sequence("full_scan"))
+    if isinstance(planned, list) and planned:
+        return len(planned)
+    return len(_active_tool_sequence(state))
+
+
+def _base_task_metadata(plan: List[str]) -> Dict[str, Dict[str, str]]:
+    return {
+        task: {
+            "source": "built_in",
+            "category": "info_collection" if task in get_tool_sequence("info_collection") else "vuln_scan",
+            "phase": "info_collection" if task in get_tool_sequence("info_collection") else "vuln_scan",
+            "status": "pending",
+        }
+        for task in plan
+    }
+
+
+def _phase_tasks_from_plan(state: ScanState, phase: str) -> List[str]:
+    """Build a phase queue from the full dynamic plan and task metadata."""
+    base_tasks = list(get_tool_sequence(phase))
+    metadata = state.get("task_metadata") if isinstance(state.get("task_metadata"), dict) else {}
+    planned = list(state.get("planned_tasks") or [])
+    extra_tasks = [
+        task for task in planned
+        if task not in base_tasks
+        and isinstance(metadata.get(task), dict)
+        and metadata[task].get("phase") == phase
+    ]
+    return _unique_tasks(base_tasks + extra_tasks)
 
 
 def get_tools_by_context(port_results: dict) -> list:
@@ -319,6 +393,10 @@ def safe_llm_invoke(llm, prompt, timeout=None, system_prompt=None):
 
 def summarize_tool_result(tool_name: str, result: Any) -> str:
     """不依赖外部模型的即时工具摘要。"""
+    if is_information_tool(tool_name):
+        return information_summary_text(tool_name, result)
+    if not is_vulnerability_tool(tool_name):
+        return f"{tool_name} 执行完成，原始结果已保留。"
     if not isinstance(result, dict):
         return f"{tool_name} 执行完成，原始结果已保留。"
 
@@ -354,6 +432,8 @@ async def _enhance_tool_result_analysis(
     result: Dict[str, Any],
     ws_callback: Callable,
 ) -> None:
+    if not is_vulnerability_tool(tool_name):
+        return
     try:
         data = result.get("data") if isinstance(result.get("data"), dict) else {}
         vulnerabilities = data.get("vulnerabilities") if isinstance(data.get("vulnerabilities"), list) else []
@@ -1514,6 +1594,8 @@ async def send_thinking_token(session_id: str, token: str):
 
 def format_tool_result(tool_name: str, target: str, result: Any) -> str:
     """格式化工具结果 - 生成友好易读的反馈"""
+    if is_information_tool(tool_name):
+        return f"【信息收集结果】\n目标: {target}\n{information_summary_text(tool_name, result)}"
     
     if "port" in tool_name or "nmap" in tool_name:
         ports = []
@@ -1986,11 +2068,14 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
                     "type": "direct_tool_completed",
                     "payload": {
                         "tool": tool_name,
+                        "tool_category": tool_category(tool_name),
                         "target": target,
                         "formatted_result": formatted_result,
                         "raw_result": result if isinstance(result, dict) else {"data": str(result)},
-                        "analysis": formatted_result,
-                        "vulnerable": isinstance(result, dict) and result.get("vulnerable", False),
+                        "result_summary": formatted_result if is_information_tool(tool_name) else "",
+                        "analysis": "" if is_information_tool(tool_name) else formatted_result,
+                        "vulnerable": is_vulnerability_tool(tool_name) and isinstance(result, dict) and result.get("vulnerable", False),
+                        "information_summary": information_items(tool_name, result),
                         "auth_obtained": bool(auth_info),
                         "timestamp": datetime.now().isoformat()
                     }
@@ -2046,7 +2131,10 @@ async def start_scan_node(state: ScanState) -> ScanState:
              details={"target": state.get("target", ""), "mode": "full_scan"})
     
     mode = "full_scan"
-    planned_tasks = get_tool_sequence(mode)
+    planned_tasks = list(get_tool_sequence(mode))
+    current_phase = "info_collection"
+    phase_tasks = list(get_tool_sequence(current_phase))
+    task_metadata = _base_task_metadata(planned_tasks)
     
     if ws_callback:
         try:
@@ -2056,16 +2144,26 @@ async def start_scan_node(state: ScanState) -> ScanState:
                     "target": state.get("target", ""),
                     "mode": mode,
                     "planned_tasks": planned_tasks,
-                    "total_tasks": len(planned_tasks)
+                    "total_tasks": len(planned_tasks),
+                    "current_phase": current_phase,
+                    "phase_total_tasks": len(phase_tasks),
                 }
             })
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
     
     return update_state(state, 
-        mode=mode, 
+        mode=mode,
+        workflow_mode="full_scan",
+        report_type="full_scan",
         next_action="run_full_scan",
         planned_tasks=planned_tasks,
+        current_phase=current_phase,
+        phase_tasks=phase_tasks,
+        task_metadata=task_metadata,
+        full_scan_initialized=True,
+        full_scan_complete=False,
+        scan_flow_announced=True,
         last_activity_time=datetime.now().isoformat()
     )
 
@@ -2096,10 +2194,12 @@ def _restore_after_script_failure(state: ScanState, error: str) -> ScanState:
 
 
 def _queue_registered_script(state: ScanState, tool_name: str, script_content: str,
-                            description: str) -> ScanState:
+                            description: str, category: str = "custom") -> ScanState:
     """Insert a registered custom tool before the original pending task."""
     origin = state.get("script_origin", {}) or {}
     planned_tasks = list(origin.get("planned_tasks") or state.get("planned_tasks", []))
+    is_full_scan = state.get("workflow_mode") == "full_scan" or state.get("mode") == "full_scan"
+    phase = category if category in FULL_SCAN_PHASES else _infer_full_scan_phase(state)
     if tool_name and tool_name not in planned_tasks:
         original_task = origin.get("next_task") or state.get("next_task", "")
         try:
@@ -2108,11 +2208,44 @@ def _queue_registered_script(state: ScanState, tool_name: str, script_content: s
             insert_at = len(planned_tasks)
         planned_tasks.insert(insert_at, tool_name)
 
+    task_metadata = dict(state.get("task_metadata") or {})
+    if tool_name:
+        task_metadata[tool_name] = {
+            "source": "custom_script",
+            "category": category or "custom",
+            "phase": phase,
+            "status": "pending",
+            "description": description,
+        }
+
+    phase_tasks = list(state.get("phase_tasks") or [])
+    if is_full_scan:
+        if not phase_tasks:
+            phase_tasks = _phase_tasks_from_plan(
+                update_state(state, planned_tasks=planned_tasks, task_metadata=task_metadata),
+                _infer_full_scan_phase(state),
+            )
+        if phase == _infer_full_scan_phase(state) and tool_name and tool_name not in phase_tasks:
+            original_task = origin.get("next_task") or state.get("next_task", "")
+            try:
+                insert_at = phase_tasks.index(original_task)
+            except ValueError:
+                insert_at = len(phase_tasks)
+            phase_tasks.insert(insert_at, tool_name)
+
+    execute_next = tool_name or origin.get("next_task") or state.get("next_task", "")
+    if is_full_scan and phase != _infer_full_scan_phase(state):
+        # A vulnerability script requested during collection belongs to the
+        # later phase; keep the currently confirmed task active for now.
+        execute_next = origin.get("next_task") or state.get("next_task", "")
+
     return update_state(
         state,
         planned_tasks=planned_tasks,
-        next_task=tool_name or origin.get("next_task") or state.get("next_task", ""),
-        current_task=tool_name or origin.get("next_task") or state.get("current_task", ""),
+        phase_tasks=phase_tasks,
+        task_metadata=task_metadata,
+        next_task=execute_next,
+        current_task=execute_next or state.get("current_task", ""),
         registered_tool_name=tool_name,
         script_content=script_content,
         script_description=description,
@@ -2255,6 +2388,7 @@ async def script_upload_process(state: ScanState) -> ScanState:
         result.get("tool_name", ""),
         script_content,
         analysis.get("description", ""),
+        analysis.get("category", "custom"),
     )
 
 
@@ -2402,6 +2536,7 @@ async def script_generate_process(state: ScanState) -> ScanState:
         result.get("tool_name", ""),
         script_code,
         analysis.get("description", description),
+        analysis.get("category", "custom"),
     )
 
 
@@ -2475,9 +2610,10 @@ def build_react_prompt(state: dict, rag_strategy: str) -> str:
     """构建 ReACT 格式的提示词"""
     target = state.get("target", "")
     mode = state.get("mode", "full_scan")
+    current_phase = _infer_full_scan_phase(state) if state.get("workflow_mode") == "full_scan" else mode
     done = list(state.get("tool_results", {}).keys())
     failed = state.get("failed_tasks", [])
-    tool_sequence = get_tool_sequence(mode)
+    tool_sequence = _active_tool_sequence(state)
     decision_plan = _build_decision_plan(state, tool_sequence, done, failed)
     remaining = decision_plan["eligible"]
     decision_candidates = decision_plan["ordered_candidates"]
@@ -2524,6 +2660,7 @@ def build_react_prompt(state: dict, rag_strategy: str) -> str:
 ## 当前状态
 - 目标: {target}
 - 扫描模式: {mode}
+- 当前阶段: {current_phase}
 - 已完成任务: {done if done else '无'}
 - 已失败任务: {failed if failed else '无'}
 - 可执行剩余任务: {remaining[:10]}
@@ -2593,14 +2730,14 @@ async def ai_decision(state: ScanState) -> ScanState:
     done = list(state.get("tool_results", {}).keys())
     failed = state.get("failed_tasks", [])
     mode = state.get("mode", "full_scan")
-    tool_sequence = get_tool_sequence(mode)
+    tool_sequence = _active_tool_sequence(state)
     # Interactive info/vulnerability scans do not pass through start_scan_node,
     # so persist their base queue before a custom script is inserted. This
     # keeps the progress denominator at 11/8 plus any custom tools.
     planned_tasks = list(state.get("planned_tasks") or tool_sequence)
     if list(state.get("planned_tasks") or []) != planned_tasks:
         state = update_state(state, planned_tasks=planned_tasks)
-    progress_total = len(planned_tasks)
+    progress_total = scan_total_tasks(update_state(state, planned_tasks=planned_tasks))
     ws_callback = memory_store.get_websocket_callback(session_id)
     decision_plan = _build_decision_plan(state, tool_sequence, done, failed)
     remaining_tasks = decision_plan["eligible"]
@@ -2656,6 +2793,7 @@ async def ai_decision(state: ScanState) -> ScanState:
                 "type": "workflow_progress",
                 "payload": {
                     "stage": mode,
+                    "current_phase": _infer_full_scan_phase(state) if state.get("workflow_mode") == "full_scan" else mode,
                     "status": "running",
                     "completed": len(done),
                     "total": progress_total,
@@ -2858,7 +2996,7 @@ async def user_interact(state: ScanState) -> ScanState:
             # planned_tasks includes custom scripts inserted by the upload or
             # generate flow, so the client can update the progress denominator
             # before the next tool starts.
-            "total_tasks": len(state.get("planned_tasks", [])),
+            "total_tasks": scan_total_tasks(state),
             "options": [
                 {"key": "1", "label": "执行", "description": f"执行任务: {next_task}"},
                 {"key": "2", "label": "停止", "description": "停止扫描并生成报告"},
@@ -3193,9 +3331,11 @@ async def execute_task(state: ScanState) -> ScanState:
                     logger.error(f"WebSocket推送认证通知失败: {e}")
         
         analysis = summarize_tool_result(task, res)
+        category = tool_category(task)
+        result_summary = analysis if category == "info_collection" else ""
 
         result_data = res.get("data", {}) if isinstance(res, dict) else {}
-        is_vulnerable = bool(
+        is_vulnerable = category == "vuln_scan" and bool(
             isinstance(res, dict) and (
                 res.get("vulnerable") or
                 (isinstance(result_data, dict) and result_data.get("vulnerabilities"))
@@ -3208,10 +3348,14 @@ async def execute_task(state: ScanState) -> ScanState:
                     "type": "task_completed",
                     "payload": {
                         "tool": task,
+                        "tool_category": category,
                         "target": target,
                         "raw_result": res if isinstance(res, dict) else {"data": str(res)},
-                        "analysis": analysis,
+                        # 信息收集摘要属于工具结果，不作为第二段“分析”展示。
+                        "result_summary": result_summary,
+                        "analysis": "" if category == "info_collection" else analysis,
                         "vulnerable": is_vulnerable,
+                        "information_summary": information_items(task, res),
                         "auth_obtained": bool(auth_info),
                         "timestamp": datetime.now().isoformat()
                     }
@@ -3228,12 +3372,16 @@ async def execute_task(state: ScanState) -> ScanState:
         tool_results[task] = res
         
         completed_tasks = state.get("completed_tasks", []).copy()
-        completed_tasks.append(task)
+        if task not in completed_tasks:
+            completed_tasks.append(task)
+
+        task_metadata = dict(state.get("task_metadata") or {})
+        if task in task_metadata:
+            task_metadata[task] = {**task_metadata[task], "status": "completed"}
         
         all_vulns = state.get("vulnerabilities", []).copy()
         current_vulns = []
-        current_mode = state.get("mode", "")
-        if current_mode in ("vuln_scan", "full_scan") and isinstance(res, dict):
+        if is_vulnerability_tool(task) and isinstance(res, dict):
             result_data = res.get("data", {})
             vuln_data = result_data.get("vulnerabilities", []) if isinstance(result_data, dict) else []
             current_vulns = vuln_data if isinstance(vuln_data, list) else []
@@ -3252,9 +3400,9 @@ async def execute_task(state: ScanState) -> ScanState:
         stage_status["tool_execution"] = {
             "status": "running",
             "current_task": task,
-            "progress": round(len(completed_tasks) / max(len(planned_tasks), 1) * 100, 1),
+            "progress": round(len(completed_tasks) / max(scan_total_tasks(state), 1) * 100, 1),
             "completed": len(completed_tasks),
-            "total": len(planned_tasks) if planned_tasks else 1
+            "total": scan_total_tasks(state)
         }
         
         update_kwargs = dict(
@@ -3263,6 +3411,7 @@ async def execute_task(state: ScanState) -> ScanState:
             vulnerabilities=all_vulns,
             current_task_vulnerabilities=current_vulns,
             task_history=task_history,
+            task_metadata=task_metadata,
             stage_status=stage_status,
             task_result={"tool": task, "result": res},
             current_tool="",
@@ -3306,11 +3455,15 @@ async def execute_task(state: ScanState) -> ScanState:
         failed_tasks = state.get("failed_tasks", []).copy()
         if task not in failed_tasks:
             failed_tasks.append(task)
+        task_metadata = dict(state.get("task_metadata") or {})
+        if task in task_metadata:
+            task_metadata[task] = {**task_metadata[task], "status": "failed"}
 
         return update_state(
             state,
             errors=state.get("errors", []) + [f"{task}: {str(e)}"],
             failed_tasks=failed_tasks,
+            task_metadata=task_metadata,
             current_task_vulnerabilities=[],
             authorized_task="",
             next_task="continue",
@@ -3502,6 +3655,12 @@ async def report_generation(state: ScanState) -> ScanState:
     vulnerabilities = state.get("vulnerabilities", [])
     target = state.get("target", "")
     session_id = state.get("websocket_session_id") or state.get("task_id", "unknown")
+    report_type = str(state.get("report_type") or "").lower()
+    if report_type not in {"info_collection", "vuln_scan", "full_scan"}:
+        # 兼容旧会话：完整扫描的临时 mode 会在阶段间切换，优先看 workflow_mode。
+        report_type = "full_scan" if state.get("workflow_mode") == "full_scan" else str(state.get("mode") or "vuln_scan")
+    if report_type not in {"info_collection", "vuln_scan", "full_scan"}:
+        report_type = "vuln_scan"
     log_collector.add_log(session_id, "report_generation", "info", "报告生成开始")
     ws_callback = memory_store.get_websocket_callback(session_id)
     
@@ -3527,7 +3686,8 @@ async def report_generation(state: ScanState) -> ScanState:
                 "payload": {
                     "session_id": session_id,
                     "tool_count": len(tool_results),
-                    "vulnerability_count": len(vulnerabilities)
+                    "vulnerability_count": len(vulnerabilities),
+                    "report_type": report_type,
                 }
             })
         except Exception as e:
@@ -3571,33 +3731,38 @@ async def report_generation(state: ScanState) -> ScanState:
         
         log_collector.add_log(session_id, "report_generation", "info", "报告摘要已完成，正在生成HTML报告")
 
-        ai_analysis = report_manager.generate_html_analysis(
-            vulnerabilities=vulnerabilities,
-            target=target,
-            report_content=report,
-        )
-        logger.info(f"HTML分析数据已生成: 风险等级={ai_analysis.get('risk_assessment', {}).get('overall_risk', 'unknown')}")
+        ai_analysis = None
+        if report_type in {"vuln_scan", "full_scan"}:
+            ai_analysis = report_manager.generate_html_analysis(
+                vulnerabilities=vulnerabilities,
+                target=target,
+                report_content=report,
+            )
+            logger.info(f"HTML分析数据已生成: 风险等级={ai_analysis.get('risk_assessment', {}).get('overall_risk', 'unknown')}")
 
         # AI等保评估置信度（独立try/except，失败不中断报告生成）
         confidence = None
-        try:
-            scan_mode = state.get("scan_mode", "人机交互")
-            logger.info(f"[置信度诊断] 开始评估: vulns={len(vulnerabilities)}, tools={len(tool_results)}, mode={scan_mode}")
-            if vulnerabilities:
-                logger.info(f"[置信度诊断] 首个漏洞: {vulnerabilities[0]}")
-            confidence = await report_manager.generate_confidence_async(
-                vulnerabilities=vulnerabilities,
-                tool_results=tool_results,
-                target=target,
-                scan_mode=scan_mode
-            )
-            if confidence:
-                logger.info(f"置信度评估完成: {confidence.get('overall_score', 0):.0f}% ({confidence.get('level', 'info')})")
-            else:
-                logger.info("置信度评估未生成数据，报告将显示占位")
-        except Exception as e:
-            logger.warning(f"置信度评估失败，降级为占位: {e}")
-            confidence = None
+        if report_type == "info_collection":
+            logger.info("信息收集报告跳过漏洞置信度评估")
+        else:
+            try:
+                scan_mode = state.get("scan_mode", "人机交互")
+                logger.info(f"[置信度诊断] 开始评估: vulns={len(vulnerabilities)}, tools={len(tool_results)}, mode={scan_mode}")
+                if vulnerabilities:
+                    logger.info(f"[置信度诊断] 首个漏洞: {vulnerabilities[0]}")
+                confidence = await report_manager.generate_confidence_async(
+                    vulnerabilities=vulnerabilities,
+                    tool_results=tool_results,
+                    target=target,
+                    scan_mode=scan_mode
+                )
+                if confidence:
+                    logger.info(f"置信度评估完成: {confidence.get('overall_score', 0):.0f}% ({confidence.get('level', 'info')})")
+                else:
+                    logger.info("置信度评估未生成数据，报告将显示占位")
+            except Exception as e:
+                logger.warning(f"置信度评估失败，降级为占位: {e}")
+                confidence = None
 
         html_report_info = report_manager.save_html_report(
             session_id=session_id,
@@ -3606,7 +3771,8 @@ async def report_generation(state: ScanState) -> ScanState:
             vulnerabilities=vulnerabilities,
             tool_results=tool_results,
             ai_analysis=ai_analysis,
-            confidence=confidence
+            confidence=confidence,
+            report_type=report_type,
         )
         
         html_download_url = html_report_info.get("download_url", "")
@@ -3621,7 +3787,8 @@ async def report_generation(state: ScanState) -> ScanState:
                         "report_id": report_info.get("report_id", ""),
                         "report_preview": report[:500] if report else "",
                         "html_report_url": html_download_url,
-                        "html_report_id": html_report_info.get("report_id", "")
+                        "html_report_id": html_report_info.get("report_id", ""),
+                        "report_type": report_type,
                     }
                 })
             except Exception as e:
@@ -3633,6 +3800,7 @@ async def report_generation(state: ScanState) -> ScanState:
             state, 
             is_complete=True, 
             report=report, 
+            report_type=report_type,
             scan_summary=scan_summary,
             report_url=report_info.get("download_url", ""),
             report_id=report_info.get("report_id", ""),
@@ -3696,7 +3864,7 @@ async def rejection_handler(state: ScanState) -> ScanState:
     done = state.get("completed_tasks", [])
     skipped = state.get("skipped_tasks", [])
     mode = state.get("mode", "full_scan")
-    tool_sequence = get_tool_sequence(mode)
+    tool_sequence = _active_tool_sequence(state)
     remaining = [t for t in tool_sequence if t not in done and t not in skipped]
     
     chat_context = memory_store.get_chat_history(session_id)
@@ -3836,10 +4004,7 @@ def router(state: ScanState) -> str:
     user_choice = state.get("user_choice", "")
     
     if next_task == "end":
-        if (
-            state.get("workflow_mode") == "full_scan"
-            and state.get("mode") in {"info_collection", "vuln_scan"}
-        ):
+        if state.get("workflow_mode") == "full_scan" and _infer_full_scan_phase(state) in FULL_SCAN_PHASES:
             return "phase_complete"
         return "report_generation"
     
@@ -3870,7 +4035,60 @@ def router(state: ScanState) -> str:
 
 
 async def phase_complete(state: ScanState) -> ScanState:
-    """Finish one stage of a multi-stage scan without generating a report."""
+    """Advance a full scan to its next phase without replacing its state."""
+    if state.get("workflow_mode") == "full_scan":
+        current_phase = _infer_full_scan_phase(state)
+        if current_phase == "info_collection":
+            next_phase = "vuln_scan"
+            next_state = update_state(
+                state,
+                current_phase=next_phase,
+                phase_tasks=_phase_tasks_from_plan(state, next_phase),
+                full_scan_complete=False,
+                is_complete=False,
+                should_continue=True,
+                user_choice="",
+                next_task="",
+                current_tool="",
+                current_task="",
+                scan_status="running",
+                last_activity_time=datetime.now().isoformat(),
+            )
+            session_id = next_state.get("websocket_session_id") or next_state.get("task_id")
+            memory_store.save_session(session_id, next_state)
+            ws_callback = memory_store.get_websocket_callback(session_id)
+            if ws_callback:
+                try:
+                    await ws_callback({
+                        "type": "workflow_progress",
+                        "payload": {
+                            "stage": "vuln_scan",
+                            "current_phase": next_phase,
+                            "status": "running",
+                            "completed": len(next_state.get("completed_tasks", [])),
+                            "total": scan_total_tasks(next_state),
+                            "phase_total_tasks": len(next_state.get("phase_tasks", [])),
+                            "progress_percent": round(
+                                len(next_state.get("completed_tasks", []))
+                                / max(scan_total_tasks(next_state), 1) * 100,
+                                1,
+                            ),
+                        },
+                    })
+                except Exception as exc:
+                    logger.warning(f"[{session_id}] 阶段切换进度推送失败: {exc}")
+            return next_state
+
+        return update_state(
+            state,
+            full_scan_complete=True,
+            is_complete=False,
+            should_continue=True,
+            user_choice="",
+            next_task="end",
+            scan_status="reporting",
+        )
+
     return update_state(
         state,
         is_complete=False,
@@ -3878,6 +4096,63 @@ async def phase_complete(state: ScanState) -> ScanState:
         user_choice="",
         next_task="",
     )
+
+
+def full_phase_router(state: ScanState) -> str:
+    """Route a single full-scan graph across phases or into report generation."""
+    return "report_generation" if state.get("full_scan_complete") else "ai_decision"
+
+
+async def full_scan_initialize(state: ScanState) -> ScanState:
+    """Initialize the complete dynamic plan once for the single full-scan graph."""
+    plan = list(state.get("planned_tasks") or get_tool_sequence("full_scan"))
+    base_plan = list(get_tool_sequence("full_scan"))
+    for task in base_plan:
+        if task not in plan:
+            plan.append(task)
+
+    task_metadata = dict(state.get("task_metadata") or {})
+    for task, metadata in _base_task_metadata(base_plan).items():
+        task_metadata.setdefault(task, metadata)
+
+    current_phase = _infer_full_scan_phase(state)
+    staged_state = update_state(state, planned_tasks=plan, task_metadata=task_metadata)
+    phase_tasks = list(state.get("phase_tasks") or _phase_tasks_from_plan(staged_state, current_phase))
+    initialized = update_state(
+        staged_state,
+        mode="full_scan",
+        workflow_mode="full_scan",
+        report_type="full_scan",
+        current_phase=current_phase,
+        phase_tasks=phase_tasks,
+        full_scan_initialized=True,
+        full_scan_complete=False,
+        is_complete=False,
+        scan_status="running",
+        last_activity_time=datetime.now().isoformat(),
+    )
+
+    session_id = initialized.get("websocket_session_id") or initialized.get("task_id")
+    memory_store.save_session(session_id, initialized)
+    if not initialized.get("scan_flow_announced"):
+        ws_callback = memory_store.get_websocket_callback(session_id)
+        if ws_callback:
+            try:
+                await ws_callback({
+                    "type": "scan_flow_started",
+                    "payload": {
+                        "target": initialized.get("target", ""),
+                        "mode": "full_scan",
+                        "planned_tasks": plan,
+                        "total_tasks": scan_total_tasks(initialized),
+                        "current_phase": current_phase,
+                        "phase_total_tasks": len(phase_tasks),
+                    },
+                })
+            except Exception as exc:
+                logger.warning(f"[{session_id}] 完整扫描启动事件推送失败: {exc}")
+        initialized = update_state(initialized, scan_flow_announced=True)
+    return initialized
 
 
 def create_checkpointer(db_path: str = None):
@@ -4045,6 +4320,45 @@ class VulnScanGraph:
         return workflow.compile(checkpointer=checkpointer)
 
 
+class FullScanGraph:
+    """One durable graph for both phases of a complete scan."""
+
+    @staticmethod
+    def build(checkpointer: MemorySaver = None) -> StateGraph:
+        workflow = StateGraph(ScanState)
+
+        workflow.add_node("full_scan_initialize", full_scan_initialize)
+        workflow.add_node("ai_decision", ai_decision)
+        workflow.add_node("user_interact", user_interact)
+        workflow.add_node("execute_task", execute_task)
+        workflow.add_node("vulnerability_check", vulnerability_check)
+        workflow.add_node("rejection_handler", rejection_handler)
+        workflow.add_node("chat", chat)
+        workflow.add_node("script_manager", script_manager)
+        workflow.add_node("script_upload_process", script_upload_process)
+        workflow.add_node("script_generate_process", script_generate_process)
+        workflow.add_node("phase_complete", phase_complete)
+        workflow.add_node("report_generation", report_generation)
+
+        workflow.set_entry_point("full_scan_initialize")
+        workflow.add_edge("full_scan_initialize", "ai_decision")
+        workflow.add_edge("ai_decision", "user_interact")
+        workflow.add_conditional_edges("user_interact", router)
+        workflow.add_conditional_edges("execute_task", execute_task_router)
+        workflow.add_edge("vulnerability_check", "ai_decision")
+        workflow.add_edge("rejection_handler", "user_interact")
+        workflow.add_edge("chat", "ai_decision")
+        workflow.add_edge("script_manager", "ai_decision")
+        workflow.add_edge("script_upload_process", "user_interact")
+        workflow.add_edge("script_generate_process", "user_interact")
+        workflow.add_conditional_edges("phase_complete", full_phase_router)
+        workflow.add_edge("report_generation", END)
+
+        if checkpointer is None:
+            checkpointer = MemorySaver()
+        return workflow.compile(checkpointer=checkpointer)
+
+
 class ReportGraph:
     """报告生成子图"""
     
@@ -4069,6 +4383,7 @@ class AgentOrchestrator:
         self.intent_graph = None
         self.info_graph = None
         self.vuln_graph = None
+        self.full_graph = None
         self.report_graph = None
         self._running_tasks: Dict[str, asyncio.Task] = {}
         self._initialized = False
@@ -4087,6 +4402,7 @@ class AgentOrchestrator:
                 self.intent_graph = IntentRecognitionGraph.build(checkpointer=self._checkpointer)
                 self.info_graph = InfoCollectionGraph.build(checkpointer=self._checkpointer)
                 self.vuln_graph = VulnScanGraph.build(checkpointer=self._checkpointer)
+                self.full_graph = FullScanGraph.build(checkpointer=self._checkpointer)
                 self.report_graph = ReportGraph.build(checkpointer=self._checkpointer)
                 self._initialized = True
             except Exception:
@@ -4114,6 +4430,7 @@ class AgentOrchestrator:
         self.intent_graph = None
         self.info_graph = None
         self.vuln_graph = None
+        self.full_graph = None
         self.report_graph = None
         self._initialized = False
 
@@ -4199,13 +4516,20 @@ class AgentOrchestrator:
         try:
             stored_state = memory_store.get_session(session_id) or {}
             mode = stored_state.get("mode", "full_scan")
-            if mode == "vuln_scan":
+            workflow_mode = stored_state.get("workflow_mode", mode)
+            using_full_graph = False
+            if workflow_mode == "full_scan" and self.full_graph is not None:
+                checkpoint = await self.full_graph.aget_state(config)
+                using_full_graph = bool(checkpoint and checkpoint.values)
+            elif mode == "vuln_scan":
                 checkpoint = await self.vuln_graph.aget_state(config)
             elif mode == "info_collection":
                 checkpoint = await self.info_graph.aget_state(config)
             else:
                 checkpoint = await self.intent_graph.aget_state(config)
 
+            # Sessions created before FullScanGraph existed have their interrupt
+            # in the old stage graph. Keep a read-only fallback so they can finish.
             if not checkpoint or not checkpoint.values:
                 checkpoint = await self.info_graph.aget_state(config)
             if not checkpoint or not checkpoint.values:
@@ -4215,6 +4539,7 @@ class AgentOrchestrator:
             if checkpoint and checkpoint.values:
                 state_data = checkpoint.values
                 mode = state_data.get("mode", "full_scan")
+                workflow_mode = state_data.get("workflow_mode", workflow_mode)
                 
                 updated_at = state_data.get("updated_at")
                 if updated_at:
@@ -4248,7 +4573,12 @@ class AgentOrchestrator:
         logger.info(f"[{session_id}] 恢复工作流，用户选择: {user_choice}, 模式: {mode}")
         
         try:
-            if mode == "info_collection":
+            if workflow_mode == "full_scan" and using_full_graph:
+                result = await self.full_graph.ainvoke(
+                    Command(resume=resume_value),
+                    config=config,
+                )
+            elif mode == "info_collection":
                 result = await self.info_graph.ainvoke(
                     Command(resume=resume_value),
                     config=config
@@ -4272,6 +4602,7 @@ class AgentOrchestrator:
                 and not result.get("__interrupt__")
                 and not result.get("is_complete")
                 and result.get("workflow_mode") == "full_scan"
+                and not using_full_graph
             ):
                 result = await self._continue_full_scan(session_id, result)
 
@@ -4363,8 +4694,10 @@ class AgentOrchestrator:
                         "type": "direct_tool_completed",
                         "payload": {
                             "tool": tool_name,
+                            "tool_category": tool_category(tool_name),
                             "target": target,
-                            "formatted_result": formatted
+                            "formatted_result": formatted,
+                            "information_summary": information_items(tool_name, result),
                         }
                     })
                 except Exception as e:
@@ -4388,7 +4721,7 @@ class AgentOrchestrator:
             raise
     
     async def run_full_scan(self, state: ScanState, websocket_callback: Callable = None) -> ScanState:
-        """运行完整扫描流程"""
+        """Run both phases in one compiled graph and one durable state chain."""
         await self._ensure_initialized()
         logger.info(f"[{state.get('task_id')}] 开始完整扫描流程")
         
@@ -4398,25 +4731,18 @@ class AgentOrchestrator:
             memory_store.set_websocket_callback(session_id, websocket_callback)
         
         try:
-            state = update_state(state, mode="info_collection", workflow_mode="full_scan")
-            state = await self.info_graph.ainvoke(
+            state = update_state(
                 state,
-                config={"configurable": {"thread_id": session_id}}
+                mode="full_scan",
+                workflow_mode="full_scan",
+                report_type="full_scan",
+                current_phase=_infer_full_scan_phase(state),
+                is_complete=False,
+                full_scan_complete=False,
             )
-            if state.get("__interrupt__"):
-                return state
-            
-            state = update_state(state, mode="vuln_scan")
-            state = await self.vuln_graph.ainvoke(
+            state = await self.full_graph.ainvoke(
                 state,
-                config={"configurable": {"thread_id": session_id}}
-            )
-            if state.get("__interrupt__"):
-                return state
-            
-            state = await self.report_graph.ainvoke(
-                state,
-                config={"configurable": {"thread_id": session_id}}
+                config={"configurable": {"thread_id": session_id}},
             )
             memory_store.save_session(session_id, state)
             

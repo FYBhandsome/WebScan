@@ -19,6 +19,12 @@ from TOSKill.AI.tools import (
     get_tool_by_name,
     invoke_tool_with_auth,
 )
+from TOSKill.tools.tool_categories import (
+    information_items,
+    information_summary_text,
+    is_vulnerability_tool,
+    tool_category,
+)
 
 
 EventCallback = Callable[[Dict[str, Any]], Awaitable[None]]
@@ -71,6 +77,8 @@ class AutoScanRunner:
 
     @staticmethod
     def _extract_vulnerabilities(tool_name: str, result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not is_vulnerability_tool(tool_name):
+            return []
         data = result.get("data") if isinstance(result.get("data"), dict) else {}
         raw_items = result.get("vulnerabilities")
         if not isinstance(raw_items, list):
@@ -207,12 +215,19 @@ class AutoScanRunner:
                 memory_store.save_session(self.session_id, state)
 
                 event_type = "task_completed" if success else "task_error"
+                is_information_collection = tool_category(tool_name) == "info_collection"
                 await self._send(event_type, {
                     "tool": tool_name,
+                    "tool_category": tool_category(tool_name),
                     "target": self.target,
                     "success": success,
                     "raw_result": result,
                     "vulnerabilities": current_vulnerabilities,
+                    "information_summary": information_items(tool_name, result),
+                    # 信息收集结果是执行结果而非 AI 分析；使用独立字段，避免前端重复渲染。
+                    "result_summary": information_summary_text(tool_name, result)
+                    if is_information_collection else "",
+                    "analysis": "",
                     "error": result.get("error") if not success else "",
                 })
             except asyncio.CancelledError:
@@ -270,4 +285,3 @@ class AutoScanRunner:
         )
         memory_store.save_session(self.session_id, state)
         return state
-

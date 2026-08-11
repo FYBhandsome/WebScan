@@ -234,6 +234,7 @@ async def test_console_interactive_mode_regression(scan_mode, expected_mode):
             )
         state = memory_store.get_session(session_id)
         assert state["mode"] == expected_mode
+        assert state["report_type"] == expected_mode
         assert state["run_type"] == "interactive"
         assert manager.run_types[session_id] == "interactive"
     finally:
@@ -259,6 +260,7 @@ async def test_scan_view_automatic_mode_regression(scan_mode, expected_mode):
             )
         state = memory_store.get_session(session_id)
         assert state["mode"] == expected_mode
+        assert state["report_type"] == expected_mode
         assert state["run_type"] == "automatic"
         assert state["scan_status"] == "queued"
     finally:
@@ -278,6 +280,7 @@ def test_full_scan_info_stage_finishes_without_early_report():
         next_task="end",
     )
 
+    assert state["report_type"] == "full_scan"
     assert router(state) == "phase_complete"
     assert router(update_state(state, workflow_mode="info_collection")) == "report_generation"
 

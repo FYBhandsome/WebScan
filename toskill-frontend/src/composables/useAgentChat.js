@@ -1579,7 +1579,16 @@ export function useAgentChat() {
         showScanConfirm.value = false
         const tasks = data.payload?.completed_tasks || []
         const vulnCount = data.payload?.vulnerabilities_count ?? 0
-        let summary = `扫描完成\n目标: ${data.payload?.target || '-'}\n已完成工具: ${tasks.length} 个\n发现漏洞: ${vulnCount} 个`
+        const infoCount = data.payload?.information_results?.length || 0
+        const reportType = data.payload?.report_type || data.payload?.mode || ''
+        let summary = `扫描完成\n目标: ${data.payload?.target || '-'}\n已完成工具: ${tasks.length} 个`
+        if (reportType === 'info_collection') {
+          summary += `\n已收集信息: ${infoCount} 类`
+        } else if (reportType === 'full_scan') {
+          summary += `\n已收集信息: ${infoCount} 类\n确认漏洞: ${vulnCount} 个`
+        } else {
+          summary += `\n确认漏洞: ${vulnCount} 个`
+        }
         if (data.payload?.report) summary += `\n报告: ${data.payload.report}`
         const completedRun = updateRun(data.payload || {}, { status: 'completed', completed: tasks.length, summary })
         completedRun.steps.forEach(step => {
@@ -1649,13 +1658,17 @@ export function useAgentChat() {
         if (!acceptRunEvent(data.payload || {})) break
         isTyping.value = false
         const analysis = data.payload?.analysis || ''
-        const vuln = data.payload?.vulnerable ? '发现漏洞' : '未发现漏洞'
+        const resultSummary = data.payload?.result_summary || ''
+        const infoItems = data.payload?.information_summary || []
+        const message = data.payload?.tool_category === 'info_collection'
+          ? (resultSummary || `已收集信息${infoItems.length ? `：${infoItems.map(item => item.label).join('、')}` : ''}`)
+          : (data.payload?.vulnerable ? '发现漏洞' : '未确认漏洞')
         const auth = data.payload?.auth_obtained ? ' | 已获取认证' : ''
         upsertRunStep(data.payload || {}, {
           title: data.payload?.tool || '扫描工具',
           status: 'completed',
-          message: `${vuln}${auth}`,
-          analysis,
+          message: `${message}${auth}`,
+          analysis: data.payload?.tool_category === 'info_collection' ? '' : analysis,
           rawResult: data.payload?.raw_result || {},
           completedAt: data.payload?.timestamp || new Date().toISOString()
         })
@@ -1841,7 +1854,7 @@ export function useAgentChat() {
           title: data.payload?.tool || '直接工具',
           status: 'completed',
           message: data.payload?.formatted_result || '执行完成',
-          analysis: data.payload?.analysis || '',
+          analysis: data.payload?.tool_category === 'info_collection' ? '' : (data.payload?.analysis || ''),
           rawResult: data.payload?.raw_result || null
         })
         break
@@ -1906,6 +1919,13 @@ export function useAgentChat() {
         const completedTasks = snapshot.completed_tasks || []
         const failedTasks = snapshot.failed_tasks || []
         if (!snapshot.target && !completedTasks.length && !failedTasks.length && !snapshot.total_tasks) break
+        if (Number(snapshot.total_tasks) > 0) {
+          scanProgress.value = {
+            current: completedTasks.length,
+            total: Number(snapshot.total_tasks),
+            activeTool: snapshot.current_tool || snapshot.current_task || ''
+          }
+        }
         if (snapshot.scan_status === 'paused_for_chat' && scanPause.pauseId) {
           applyPausedScan({ ...snapshot, pause_id: scanPause.pauseId }, { announce: false })
         }

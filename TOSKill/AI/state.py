@@ -14,7 +14,18 @@ class ScanState(TypedDict, total=False):
     task_id: str
     run_id: str
     mode: str
+    # 用户最初选择的报告类型。完整扫描运行时 mode 会切换为阶段模式，
+    # 该字段必须保持不变以保证最终报告格式正确。
+    report_type: NotRequired[str]
     workflow_mode: NotRequired[str]
+    # 完整扫描在单一工作流中按阶段执行：planned_tasks 保存全量动态计划，
+    # phase_tasks 仅保存当前允许执行的阶段队列。
+    current_phase: NotRequired[str]
+    phase_tasks: NotRequired[List[str]]
+    task_metadata: NotRequired[Dict[str, Dict[str, Any]]]
+    full_scan_initialized: NotRequired[bool]
+    full_scan_complete: NotRequired[bool]
+    scan_flow_announced: NotRequired[bool]
     planned_tasks: List[str]
     completed_tasks: List[str]
     failed_tasks: List[str]
@@ -134,7 +145,14 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         task_id=task_id or str(uuid.uuid4())[:8],
         run_id="",
         mode=mode,
+        report_type=mode,
         workflow_mode=mode,
+        current_phase="",
+        phase_tasks=[],
+        task_metadata={},
+        full_scan_initialized=False,
+        full_scan_complete=False,
+        scan_flow_announced=False,
         scan_mode="人机交互",
         run_type="interactive",
         scan_status="idle",

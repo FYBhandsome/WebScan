@@ -14,11 +14,12 @@ from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 from openai import AsyncOpenAI
 
 from TOSKill.AI.state import create_initial_state, append_chat, update_state
-from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm as _get_llm
+from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm as _get_llm, scan_total_tasks
 from TOSKill.AI.auto_scan import AutoScanRunner
 from TOSKill.AI.core import CHAT_SYSTEM_PROMPT
 from TOSKill.AI.decision_context import build_decision_context
 from TOSKill.AI.tools import get_tool_by_name, get_all_tool_names
+from TOSKill.tools.tool_categories import collect_information_results
 from TOSKill.AI.log_collector import log_collector
 from TOSKill.utils.error_handler import create_error_response, format_tool_error, ErrorSource, ErrorCategory
 from TOSKill.utils.log_writer import log_info, log_warn, log_error, log_success, log_debug
@@ -279,7 +280,7 @@ class AIChatManager:
                 "failed_tasks": state.get("failed_tasks", []),
                 "tool_results": state.get("tool_results", {}),
                 "is_complete": state.get("is_complete", False),
-                "total_tasks": len(state.get("planned_tasks", [])),
+                "total_tasks": scan_total_tasks(state),
                 "progress": state.get("progress", 0),
                 "current_tool": state.get("current_tool", ""),
                 "current_task": state.get("current_task", ""),
@@ -515,7 +516,7 @@ class AIChatManager:
                         "payload": {
                             "choice": choice,
                             "completed_tasks": result.get("completed_tasks", []),
-                            "total_tasks": len(result.get("planned_tasks", [])),
+                            "total_tasks": scan_total_tasks(result),
                             "is_complete": result.get("is_complete", False)
                         }
                     })
@@ -899,6 +900,7 @@ class AIChatManager:
         logger.info(f"[{session_id}] 映射后模式: {mode}")
         
         state = create_initial_state(target=target, task_id=session_id, mode=mode)
+        state["report_type"] = mode
         state["websocket_session_id"] = session_id
         state["run_id"] = f"{session_id}:{uuid4().hex[:8]}"
         state["run_type"] = "interactive"
@@ -946,6 +948,7 @@ class AIChatManager:
 
         mode = SCAN_MODE_MAP[scan_mode]
         state = create_initial_state(target=target, task_id=session_id, mode=mode)
+        state["report_type"] = mode
         state["websocket_session_id"] = session_id
         state["run_id"] = f"{session_id}:{uuid4().hex[:8]}"
         state["run_type"] = "automatic"
@@ -1030,11 +1033,13 @@ class AIChatManager:
             "session_id": state.get("task_id", ""),
             "target": target,
             "mode": state.get("mode", ""),
+            "report_type": state.get("report_type", state.get("mode", "")),
             "scan_mode": state.get("scan_mode", "全自动"),
             "run_type": run_type,
             "completed_tasks": state.get("completed_tasks", []),
             "failed_tasks": state.get("failed_tasks", []),
             "tool_results": state.get("tool_results", {}),
+            "information_results": collect_information_results(state.get("tool_results", {})),
             "vulnerabilities": state.get("vulnerabilities", []),
             "vulnerabilities_count": len(state.get("vulnerabilities", [])),
             "errors": state.get("errors", []),
@@ -1115,11 +1120,13 @@ class AIChatManager:
                         "task_id": state.get("task_id", ""),
                         "target": state.get("target", ""),
                         "mode": state.get("mode", ""),
+                        "report_type": state.get("report_type", state.get("mode", "")),
                         "planned_tasks": state.get("planned_tasks", []),
-                        "total_tasks": len(state.get("planned_tasks", [])),
+                        "total_tasks": scan_total_tasks(state),
                         "completed_tasks": state.get("completed_tasks", []),
                         "failed_tasks": state.get("failed_tasks", []),
                         "tool_results": state.get("tool_results", {}),
+                        "information_results": collect_information_results(state.get("tool_results", {})),
                         "vulnerabilities": state.get("vulnerabilities", []),
                         "errors": state.get("errors", []),
                         "report": state.get("report", ""),
@@ -1279,7 +1286,7 @@ class AIChatManager:
                         "type": "workflow_resumed",
                         "payload": {
                             "completed_tasks": result.get("completed_tasks", []),
-                            "total_tasks": len(result.get("planned_tasks", [])),
+                            "total_tasks": scan_total_tasks(result),
                             "is_complete": result.get("is_complete", False),
                             "scan_status": result.get("scan_status", "running"),
                         },
@@ -1402,7 +1409,7 @@ class AIChatManager:
                         "type": "workflow_resumed",
                         "payload": {
                             "completed_tasks": result.get("completed_tasks", []),
-                            "total_tasks": len(result.get("planned_tasks", [])),
+                            "total_tasks": scan_total_tasks(result),
                             "is_complete": result.get("is_complete", False),
                             "scan_status": result.get("scan_status", "running"),
                         },
@@ -1544,6 +1551,7 @@ class AIChatManager:
                     "reason": "用户手动停止",
                     "completed_tasks": state.get("completed_tasks", []) if state else [],
                     "tool_results": state.get("tool_results", {}) if state else {},
+                    "information_results": collect_information_results(state.get("tool_results", {})) if state else [],
                     "vulnerabilities": state.get("vulnerabilities", []) if state else [],
                     "errors": state.get("errors", []) if state else [],
                     "progress": state.get("progress", 0) if state else 0,
@@ -1641,7 +1649,7 @@ class AIChatManager:
                     "mode": state.get("mode", ""),
                     "run_id": state.get("run_id", ""),
                     "planned_tasks": state.get("planned_tasks", []),
-                    "total_tasks": len(state.get("planned_tasks", [])),
+                    "total_tasks": scan_total_tasks(state),
                     "completed_tasks": state.get("completed_tasks", []),
                     "failed_tasks": state.get("failed_tasks", []),
                     "is_complete": state.get("is_complete", False),

@@ -125,9 +125,13 @@
               <span class="stat-number">{{ resultsData.completed_tasks?.length || 0 }}</span>
               <span class="stat-label">完成任务</span>
             </div>
-            <div class="summary-stat" :class="{ warning: (resultsData.vulnerabilities?.length || 0) > 0 }">
+            <div class="summary-stat info" v-if="informationResults.length > 0">
+              <span class="stat-number">{{ informationResults.length }}</span>
+              <span class="stat-label">已收集信息</span>
+            </div>
+            <div class="summary-stat" v-if="showVulnerabilityResults" :class="{ warning: (resultsData.vulnerabilities?.length || 0) > 0 }">
               <span class="stat-number">{{ resultsData.vulnerabilities?.length || 0 }}</span>
-              <span class="stat-label">发现漏洞</span>
+              <span class="stat-label">确认漏洞</span>
             </div>
             <div class="summary-stat">
               <span class="stat-number">{{ resultsData.errors?.length || 0 }}</span>
@@ -148,6 +152,24 @@
                 :key="i"
                 @click="openTaskResultModal(t)"
               >{{ t }}</button>
+            </div>
+
+            <div class="result-section" v-if="informationResults.length > 0">
+              <h4>收集到的信息 ({{ informationResults.length }} 类)</h4>
+              <div class="information-result-grid">
+                <article class="information-result-card" v-for="item in informationResults" :key="item.tool">
+                  <div class="information-result-head">
+                    <strong>{{ item.title || formatTaskName(item.tool) }}</strong>
+                    <span>{{ item.tool }}</span>
+                  </div>
+                  <dl>
+                    <div v-for="field in item.items || []" :key="field.label">
+                      <dt>{{ field.label }}</dt>
+                      <dd>{{ field.value }}</dd>
+                    </div>
+                  </dl>
+                </article>
+              </div>
             </div>
 
             <div class="result-section" v-if="resultsData.vulnerabilities?.length > 0">
@@ -202,7 +224,7 @@
             </div>
 
             <div class="result-section" v-if="isResultEmpty()">
-              <p>扫描完成，未发现异常</p>
+              <p>{{ emptyResultMessage }}</p>
             </div>
           </div>
         </div>
@@ -261,6 +283,21 @@ const htmlReportError = ref('')
 const activeRunId = ref('')
 const cancelRequested = ref(false)
 let persistTimer = null
+
+const selectedReportType = computed(() => {
+  if (resultsData.value.report_type) return resultsData.value.report_type
+  return { info: 'info_collection', vuln: 'vuln_scan', full: 'full_scan' }[form.mode] || 'info_collection'
+})
+
+const informationResults = computed(() => Array.isArray(resultsData.value.information_results)
+  ? resultsData.value.information_results
+  : [])
+
+const showVulnerabilityResults = computed(() => selectedReportType.value !== 'info_collection')
+
+const emptyResultMessage = computed(() => selectedReportType.value === 'info_collection'
+  ? '信息收集已完成，工具未返回可展示的信息。'
+  : '扫描完成，未确认漏洞。')
 
 const taskModal = reactive({
   show: false,
@@ -354,7 +391,23 @@ const formatResult = (result) => {
 
 const isResultEmpty = () => {
   const d = resultsData.value
-  return !(d.completed_tasks?.length || d.vulnerabilities?.length || d.report || d.html_report_url || d.errors?.length)
+  return !(d.completed_tasks?.length || d.information_results?.length || d.vulnerabilities?.length || d.report || d.html_report_url || d.errors?.length)
+}
+
+const upsertInformationResult = (tool, items = []) => {
+  if (!tool || !Array.isArray(items) || items.length === 0) return
+  const current = Array.isArray(resultsData.value.information_results)
+    ? [...resultsData.value.information_results]
+    : []
+  const next = {
+    tool,
+    title: formatTaskName(tool),
+    items
+  }
+  const index = current.findIndex(item => item.tool === tool)
+  if (index >= 0) current.splice(index, 1, next)
+  else current.push(next)
+  resultsData.value.information_results = current
 }
 
 const openTaskResultModal = (taskName) => {
@@ -540,7 +593,9 @@ const applyRunState = (state) => {
     completed_tasks: state.completed_tasks || [],
     failed_tasks: state.failed_tasks || [],
     tool_results: state.tool_results || {},
+    information_results: state.information_results || resultsData.value.information_results || [],
     vulnerabilities: state.vulnerabilities || [],
+    report_type: state.report_type || resultsData.value.report_type || '',
     errors: state.errors || [],
     report: state.report || resultsData.value.report || '',
     report_url: state.report_url || resultsData.value.report_url || '',
@@ -638,6 +693,9 @@ const handleWSMessage = (data) => {
       updateTaskStatus(payload.tool_name || payload.tool, 'completed')
       if (payload.raw_result !== undefined) {
         resultsData.value.tool_results = { ...(resultsData.value.tool_results || {}), [payload.tool]: payload.raw_result }
+      }
+      if (payload.tool_category === 'info_collection') {
+        upsertInformationResult(payload.tool, payload.information_summary)
       }
       break
 
@@ -1173,6 +1231,14 @@ select:focus {
   color: var(--warning-color);
 }
 
+.summary-stat.info {
+  border-color: rgba(22, 93, 255, 0.28);
+}
+
+.summary-stat.info .stat-number {
+  color: var(--primary-color, #165dff);
+}
+
 .stat-number {
   display: block;
   font-size: 28px;
@@ -1198,6 +1264,66 @@ select:focus {
 .result-section:nth-child(4) { animation-delay: 0.15s; }
 .result-section:nth-child(5) { animation-delay: 0.2s; }
 .result-section:nth-child(6) { animation-delay: 0.25s; }
+
+.information-result-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.information-result-card {
+  border: 1px solid rgba(22, 93, 255, 0.22);
+  background: #f8faff;
+  padding: 16px;
+}
+
+.information-result-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.information-result-head strong {
+  color: var(--text-primary);
+}
+
+.information-result-head span {
+  color: var(--primary-color, #165dff);
+  font: 12px Consolas, monospace;
+  white-space: nowrap;
+}
+
+.information-result-card dl {
+  margin: 0;
+}
+
+.information-result-card dl > div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px dashed var(--border-light);
+}
+
+.information-result-card dl > div:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.information-result-card dt {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.information-result-card dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
 
 .vulnerability-card {
   border: 1px solid rgba(255, 149, 0, 0.2);
