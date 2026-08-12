@@ -51,6 +51,7 @@
           :is-thinking="isThinking"
           @action="handleBlockAction"
           @submit-input="handleInputResponse"
+          @open-report="filename => emit('open-report', filename)"
         />
         <CommandInput
           v-show="!inputCollapsed || isScanPausedForChat"
@@ -96,6 +97,8 @@ import ChatArea from '../../components/AgentWorkspace/ChatArea.vue'
 import CommandInput from '../../components/AgentWorkspace/CommandInput.vue'
 import HistoryRail from '../../components/AgentWorkspace/HistoryRail.vue'
 import ConversationSidebar from '../../components/AgentWorkspace/ConversationSidebar.vue'
+
+const emit = defineEmits(['open-report'])
 
 // UI 偏好：从 localStorage 恢复
 const UI_PREFS_KEY = 'toskill_ui_prefs'

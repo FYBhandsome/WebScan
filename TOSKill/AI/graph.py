@@ -4418,6 +4418,18 @@ class AgentOrchestrator:
         """设置 WebSocket 回调"""
         memory_store.set_websocket_callback(session_id, callback)
 
+    @staticmethod
+    def _workflow_thread_id(state: Optional[ScanState], session_id: str) -> str:
+        """Return the checkpoint thread for one scan run.
+
+        A WebSocket session represents a conversation and can contain multiple
+        scans.  LangGraph checkpoints, however, must be isolated per scan run;
+        otherwise a second scan in the same conversation resumes the completed
+        graph from the previous target.  Older persisted sessions do not have a
+        run_id, so keep the session id as a backwards-compatible fallback.
+        """
+        return (state or {}).get("run_id") or session_id
+
     async def aclose(self):
         """关闭持久化检查点连接。"""
         if self._checkpointer is not None:
@@ -4445,7 +4457,7 @@ class AgentOrchestrator:
 
     async def _continue_full_scan(self, session_id: str, state: ScanState) -> ScanState:
         """Advance a completed full-scan stage until the next interrupt or report."""
-        config = {"configurable": {"thread_id": session_id}}
+        config = {"configurable": {"thread_id": self._workflow_thread_id(state, session_id)}}
         current = state
 
         while current and not current.get("__interrupt__") and not current.get("is_complete"):
@@ -4501,7 +4513,12 @@ class AgentOrchestrator:
         添加状态校验和超时保护：超过30分钟未响应自动结束
         """
         await self._ensure_initialized()
-        config = {"configurable": {"thread_id": session_id}}
+        stored_state = memory_store.get_session(session_id) or {}
+        config = {
+            "configurable": {
+                "thread_id": self._workflow_thread_id(stored_state, session_id)
+            }
+        }
         
         if isinstance(user_choice, dict):
             resume_value = dict(user_choice)
@@ -4515,7 +4532,6 @@ class AgentOrchestrator:
                     resume_value.setdefault(key, stored_state[key])
         
         try:
-            stored_state = memory_store.get_session(session_id) or {}
             mode = stored_state.get("mode", "full_scan")
             workflow_mode = stored_state.get("workflow_mode", mode)
             using_full_graph = False
@@ -4657,7 +4673,7 @@ class AgentOrchestrator:
         
         result = await self.intent_graph.ainvoke(
             state,
-            config={"configurable": {"thread_id": session_id}}
+            config={"configurable": {"thread_id": self._workflow_thread_id(state, session_id)}}
         )
         
         if result.get("next_action") == "run_full_scan":
@@ -4743,7 +4759,7 @@ class AgentOrchestrator:
             )
             state = await self.full_graph.ainvoke(
                 state,
-                config={"configurable": {"thread_id": session_id}},
+                config={"configurable": {"thread_id": self._workflow_thread_id(state, session_id)}},
             )
             memory_store.save_session(session_id, state)
             
@@ -4765,7 +4781,7 @@ class AgentOrchestrator:
         state = update_state(state, mode="info_collection", workflow_mode="info_collection")
         return await self.info_graph.ainvoke(
             state,
-            config={"configurable": {"thread_id": session_id}}
+            config={"configurable": {"thread_id": self._workflow_thread_id(state, session_id)}}
         )
     
     async def run_vuln_scan(self, state: ScanState, websocket_callback: Callable = None) -> ScanState:
@@ -4779,7 +4795,7 @@ class AgentOrchestrator:
         state = update_state(state, mode="vuln_scan", workflow_mode="vuln_scan")
         return await self.vuln_graph.ainvoke(
             state,
-            config={"configurable": {"thread_id": session_id}}
+            config={"configurable": {"thread_id": self._workflow_thread_id(state, session_id)}}
         )
     
     async def run_report(self, state: ScanState) -> ScanState:
@@ -4788,7 +4804,7 @@ class AgentOrchestrator:
         session_id = state.get("websocket_session_id") or state.get("task_id")
         return await self.report_graph.ainvoke(
             state,
-            config={"configurable": {"thread_id": session_id}}
+            config={"configurable": {"thread_id": self._workflow_thread_id(state, session_id)}}
         )
 
 

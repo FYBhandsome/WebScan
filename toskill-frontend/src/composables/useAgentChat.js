@@ -8,6 +8,7 @@ import { showToast, globalState, scanProgressState, scanStatusState,
 import { API } from '../services/api.js'
 import { storageService } from '../services/storageService.js'
 import { addLog } from './useLogBus.js'
+import { createScanConfirmationIdentity, shouldRouteWaitingInputToInteraction } from './scanRequestState.js'
 
 export function useAgentChat() {
   const inputText = ref('')
@@ -192,12 +193,16 @@ export function useAgentChat() {
             // 导致后端重新发送的 interaction_required（相同 interactionId）被跳过
             if (step.interaction && !step.interaction.resolved) {
               step.interaction.resolved = true
-              step.interaction.selectedChoice = step.interaction.selectedChoice || '页面刷新，已失效'
+              step.interaction.resolutionMessage = '页面刷新，交互已失效'
+            } else if (step.interaction?.selectedChoice === '页面刷新，已失效') {
+              // 兼容旧版本已经写入 localStorage 的错误展示数据。
+              step.interaction.selectedChoice = ''
+              step.interaction.resolutionMessage = '页面刷新，交互已失效'
             }
           }
         }
       }
-      workspaceBlocks.value = data.blocks
+      workspaceBlocks.value = normalizePersistedReportSteps(data.blocks)
       inputText.value = data.inputText || ''
     } else {
       // localStorage 无数据，依赖后端 get_history 恢复简单聊天
@@ -447,7 +452,7 @@ export function useAgentChat() {
         if (!interaction || interaction.resolved || interaction.interactionId === activeInteractionId) continue
         if (!['interaction_required', 'input_request'].includes(interaction.actionSource)) continue
         interaction.resolved = true
-        interaction.selectedChoice = interaction.selectedChoice || '已过期'
+        interaction.resolutionMessage = '该交互已过期'
         step.status = 'completed'
         if (pendingInputRequest.value === interaction) pendingInputRequest.value = null
         closed += 1
@@ -474,6 +479,7 @@ export function useAgentChat() {
 
   const getRunId = (payload = {}) => {
     if (payload.run_id) return payload.run_id
+    if (payload.local_run_id) return payload.local_run_id
     const activeRun = [...workspaceBlocks.value].reverse().find(
       block => block.type === 'agent_run' && !['completed', 'failed', 'cancelled'].includes(block.status)
     )
@@ -509,7 +515,7 @@ export function useAgentChat() {
         timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
         type: 'agent_run',
         runId,
-        provisional: !payload.run_id,
+        provisional: Boolean(payload.local_run_id) || !payload.run_id,
         title: '智能体扫描',
         target: payload.target || globalState.currentTarget || '',
         mode: payload.mode || '',
@@ -815,7 +821,10 @@ export function useAgentChat() {
       return
     }
 
-    if (waitingForChoice.value) {
+    // A completed/failed run may leave a stale local waiting flag when the
+    // final completion event was interrupted.  A new scan command must still
+    // go through intent parsing instead of being sent as a choice/chat reply.
+    if (shouldRouteWaitingInputToInteraction(waitingForChoice.value, scanStatus.value)) {
       if (text.toLowerCase() === 'stop' || text.toLowerCase() === '停止') {
         ws.sendConfirm('2')
         waitingForChoice.value = false
@@ -838,12 +847,26 @@ export function useAgentChat() {
           const confidence = intentData.confidence || 0.8
           const explanation = intentData.explanation || ''
           
-          pendingScanConfirm.value = { target, mode, confidence, explanation }
+          const scanRequestId = ws.createRequestId()
+          const scanIdentity = createScanConfirmationIdentity(scanRequestId)
+          pendingScanConfirm.value = {
+            target,
+            mode,
+            confidence,
+            explanation,
+            requestId: scanIdentity.requestId,
+          }
           showScanConfirm.value = true
           
-          attachRunInteraction({ target, step_id: 'scan-setup' }, {
+          attachRunInteraction({
+            target,
+            local_run_id: scanIdentity.localRunId,
+            step_id: scanIdentity.stepId,
+          }, {
             type: 'actions',
             actionSource: 'scan_confirm',
+            interactionId: scanIdentity.interactionId,
+            stepId: scanIdentity.stepId,
             stepTitle: '确认扫描方案',
             title: 'AI 解析结果',
             description: explanation || `已识别目标 ${target}，请选择扫描模式。`,
@@ -908,6 +931,36 @@ export function useAgentChat() {
       addBlock('agent_text', { content: '实时连接未就绪，无法发送指令。请检查网络或后端状态。' })
     }
   }
+
+  // Older console history stored the raw Markdown preview and both download
+  // URLs in the report step. Convert those records to the same compact link
+  // presentation used for newly generated reports.
+  const normalizePersistedReportSteps = (blocks = []) => blocks.map(block => {
+    if (block?.type !== 'agent_run') return block
+    return {
+      ...block,
+      steps: (block.steps || []).map(step => {
+        if (step?.title !== '生成扫描报告' || step.reportLink) return step
+        const urls = String(step.message || '').match(/\/api\/reports\/download\/[^\s)]+/g) || []
+        const htmlUrl = urls.find(url => url.toLowerCase().endsWith('.html'))
+        const reportUrl = htmlUrl || urls[0] || ''
+        const filename = reportUrl.split('/').pop() || ''
+        if (!filename) return step
+        return {
+          ...step,
+          message: '报告已生成，HTML 和 Markdown 文件已保存到报告页面。',
+          analysis: '',
+          reportLink: { label: '查看扫描报告', filename: decodeURIComponent(filename) }
+        }
+      })
+    }
+  })
+
+  const resetScanDisplayForNewRun = () => {
+    scanStatus.value = 'scanning'
+    scanProgress.value = { current: 0, total: 0, activeTool: '' }
+    globalState.currentTarget = ''
+  }
   
   const handleScanConfirm = async (block, selectedMode) => {
     console.log('[handleScanConfirm] 开始执行', { block, selectedMode })
@@ -937,10 +990,13 @@ export function useAgentChat() {
         console.error('[handleScanConfirm] WebSocket 连接失败:', connError)
         addErrorBlock('无法建立连接，请刷新页面重试', { source: 'websocket' })
         isTyping.value = false
+        scanStatus.value = 'idle'
         return
       }
     }
     
+    resetScanDisplayForNewRun()
+    globalState.currentTarget = target
     scanActive.value = true
     isTyping.value = true
     currentThinking.value = ''
@@ -957,6 +1013,7 @@ export function useAgentChat() {
       addErrorBlock('发送扫描请求失败，请重试', { source: 'websocket' })
       isTyping.value = false
       scanActive.value = false
+      scanStatus.value = 'idle'
       return
     }
     
@@ -983,11 +1040,16 @@ export function useAgentChat() {
       return
     }
     addBlock('user_command', { content: `[执行参数]: mode=${mode}, target=${target}` })
+    resetScanDisplayForNewRun()
+    globalState.currentTarget = target
+    scanActive.value = true
     isTyping.value = true
     
     if (ws.isConnected()) {
       ws.startScan(target, mode)
     } else {
+      scanStatus.value = 'idle'
+      scanActive.value = false
       isTyping.value = false
       addBlock('agent_text', { content: `实时连接未就绪，无法执行任务。` })
     }
@@ -1884,22 +1946,18 @@ export function useAgentChat() {
         isTyping.value = false
         const reportUrl = data.payload?.report_url || ''
         const htmlReportUrl = data.payload?.html_report_url || ''
-        const preview = data.payload?.report_preview || ''
-        let reportContent = `报告已生成\n报告ID: ${data.payload?.report_id || '-'}`
-        if (htmlReportUrl) {
-          reportContent += `\n📄 HTML报告: ${htmlReportUrl}`
-        }
-        if (reportUrl) {
-          reportContent += `\n📝 Markdown报告: ${reportUrl}`
-        }
-        if (preview) {
-          reportContent += `\n\n${preview}`
-        }
+        const reportFilename = decodeURIComponent(
+          (htmlReportUrl || reportUrl).split('/').filter(Boolean).pop() || ''
+        )
         upsertRunStep(data.payload || {}, {
           title: '生成扫描报告',
           status: 'completed',
-          message: reportContent,
-          analysis: preview
+          message: '报告已生成，HTML 和 Markdown 文件已保存到报告页面。',
+          analysis: '',
+          reportLink: {
+            label: '查看扫描报告',
+            filename: reportFilename
+          }
         })
         break
 

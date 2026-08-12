@@ -66,6 +66,10 @@ import { Download, X } from 'lucide-vue-next'
 import { API } from '../../services/api.js'
 import { showToast } from '../../store.js'
 
+const props = defineProps({
+  initialReportFilename: { type: String, default: '' }
+})
+
 const reports = ref([])
 const isLoading = ref(false)
 const errorMsg = ref('')
@@ -104,7 +108,9 @@ const fetchReports = async () => {
 }
 
 onMounted(() => {
-  fetchReports()
+  fetchReports().then(() => {
+    if (props.initialReportFilename) openViewer(props.initialReportFilename)
+  })
 })
 
 const openViewer = async (filename) => {

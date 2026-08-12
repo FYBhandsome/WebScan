@@ -108,12 +108,22 @@
             <span>{{ currentToolProgress || '执行中...' }}</span>
           </div>
           <div class="task-list" id="taskList">
-            <div class="task-item" v-for="(task, index) in tasks" :key="index">
+            <button
+              type="button"
+              class="task-item"
+              v-for="task in tasks"
+              :key="task.name"
+              :class="{ clickable: canOpenTaskResult(task) }"
+              :disabled="!canOpenTaskResult(task)"
+              :title="canOpenTaskResult(task) ? '查看扫描结果' : ''"
+              @click="openTaskResultModal(task.name)"
+            >
               <span class="task-dot" :class="task.status"></span>
               <span class="task-name">{{ task.name }}</span>
               <span class="task-elapsed">{{ task.elapsed || 'N/A' }}</span>
               <span class="task-badge" :class="task.status">{{ badgeText(task.status) }}</span>
-            </div>
+              <span v-if="canOpenTaskResult(task)" class="task-result-action">查看结果</span>
+            </button>
           </div>
         </div>
 
@@ -144,16 +154,6 @@
           </div>
 
           <div class="results-content" id="resultsContent">
-            <div class="result-section" v-if="resultsData.completed_tasks?.length > 0">
-              <h4>完成的任务</h4>
-              <button
-                class="task-result-btn"
-                v-for="(t, i) in resultsData.completed_tasks"
-                :key="i"
-                @click="openTaskResultModal(t)"
-              >{{ t }}</button>
-            </div>
-
             <div class="result-section" v-if="informationResults.length > 0">
               <h4>收集到的信息 ({{ informationResults.length }} 类)</h4>
               <div class="information-result-grid">
@@ -391,7 +391,7 @@ const formatResult = (result) => {
 
 const isResultEmpty = () => {
   const d = resultsData.value
-  return !(d.completed_tasks?.length || d.information_results?.length || d.vulnerabilities?.length || d.report || d.html_report_url || d.errors?.length)
+  return !(Object.keys(d.tool_results || {}).length || d.information_results?.length || d.vulnerabilities?.length || d.report || d.html_report_url || d.errors?.length)
 }
 
 const upsertInformationResult = (tool, items = []) => {
@@ -425,6 +425,11 @@ const openTaskResultModal = (taskName) => {
   taskModal.show = true
 }
 
+const canOpenTaskResult = (task) => {
+  if (!showResults.value || task?.status !== 'completed' || !task?.name) return false
+  return Object.prototype.hasOwnProperty.call(resultsData.value.tool_results || {}, task.name)
+}
+
 const closeTaskResultModal = () => {
   taskModal.show = false
   taskModal.taskName = ''
@@ -442,8 +447,12 @@ const renderedTaskResult = computed(() => {
 })
 
 const formatElapsed = (ms) => {
-  if (ms < 1000) return Math.round(ms) + 'ms'
-  return (ms / 1000).toFixed(1) + 's'
+  // Date.now() has millisecond resolution, so very fast tools can otherwise
+  // be rounded down to the misleading value "0ms".  A completed tool always
+  // took at least one measurable millisecond from the UI's perspective.
+  const elapsed = Math.max(1, Math.round(Number(ms) || 0))
+  if (elapsed < 1000) return elapsed + 'ms'
+  return (elapsed / 1000).toFixed(1) + 's'
 }
 
 const initProgress = () => {
@@ -480,12 +489,17 @@ const addTask = (taskName, status = 'pending') => {
   return task
 }
 
-const updateTaskStatus = (taskName, status) => {
+const updateTaskStatus = (taskName, status, durationMs = null) => {
   const task = tasks.value.find(t => t.name === taskName) || addTask(taskName, status)
   if (task && task.status !== status) {
     task.status = status
     if (status === 'completed' || status === 'error') {
-      task.elapsed = formatElapsed(Date.now() - task.startTime)
+      const measuredDuration = Number(durationMs)
+      task.elapsed = formatElapsed(
+        Number.isFinite(measuredDuration) && measuredDuration >= 0
+          ? measuredDuration
+          : Date.now() - task.startTime
+      )
       if (!task.counted) {
         task.counted = true
         completedTasksCount.value++
@@ -495,6 +509,20 @@ const updateTaskStatus = (taskName, status) => {
     progress.value = Math.max(progress.value, pct)
     statusText.value = `已完成 ${completedTasksCount.value}/${totalTasksCount.value} 任务`
   }
+}
+
+const payloadDurationMs = (payload) => {
+  if (!payload || typeof payload !== 'object') return null
+  if (payload.duration_ms !== undefined) return Number(payload.duration_ms)
+  if (payload.execution_time !== undefined) return Number(payload.execution_time) * 1000
+  // Task executor completion events expose `duration` in seconds.
+  if (payload.duration !== undefined) return Number(payload.duration) * 1000
+  // Some tool events put the measured execution time inside the raw result.
+  const result = payload.raw_result || payload.result
+  if (result && typeof result === 'object' && result.execution_time !== undefined) {
+    return Number(result.execution_time) * 1000
+  }
+  return null
 }
 
 const payloadOf = (data) => data?.payload || {}
@@ -542,6 +570,7 @@ const mergeResultPayload = (data) => {
 
 const handleScanResult = (data) => {
   const payload = mergeResultPayload(data)
+  ;(payload.completed_tasks || []).forEach(task => updateTaskStatus(task, 'completed'))
   isScanning.value = false
   cancelRequested.value = false
   progress.value = 100
@@ -690,12 +719,16 @@ const handleWSMessage = (data) => {
 
     case 'task_completed':
     case 'tool_execution_completed':
-      updateTaskStatus(payload.tool_name || payload.tool, 'completed')
-      if (payload.raw_result !== undefined) {
-        resultsData.value.tool_results = { ...(resultsData.value.tool_results || {}), [payload.tool]: payload.raw_result }
-      }
-      if (payload.tool_category === 'info_collection') {
-        upsertInformationResult(payload.tool, payload.information_summary)
+      {
+        const toolName = payload.tool_name || payload.tool
+        const toolResult = payload.raw_result ?? payload.result
+        updateTaskStatus(toolName, 'completed', payloadDurationMs(payload))
+        if (toolName && toolResult !== undefined) {
+          resultsData.value.tool_results = { ...(resultsData.value.tool_results || {}), [toolName]: toolResult }
+        }
+        if (payload.tool_category === 'info_collection') {
+          upsertInformationResult(toolName, payload.information_summary)
+        }
       }
       break
 
@@ -1108,16 +1141,37 @@ select:focus {
 }
 
 .task-item {
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
+  border: 0;
   border-radius: 0px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   transition: background 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
-.task-item:hover {
+.task-item.clickable {
+  cursor: pointer;
+}
+
+.task-item.clickable:hover,
+.task-item.clickable:focus-visible {
   background: var(--bg-secondary);
+}
+
+.task-item.clickable:focus-visible {
+  outline: 1px solid var(--text-primary);
+  outline-offset: -1px;
+}
+
+.task-item:disabled {
+  cursor: default;
+  opacity: 1;
 }
 
 .task-dot {
@@ -1192,6 +1246,12 @@ select:focus {
 .task-badge.error {
   color: var(--error-color);
   border: 1px solid var(--error-color);
+}
+
+.task-result-action {
+  color: var(--primary-color, #165dff);
+  font-size: 12px;
+  flex-shrink: 0;
 }
 
 .scan-results {
@@ -1397,31 +1457,6 @@ select:focus {
   border-radius: 0px;
   color: var(--text-secondary);
   font-family: 'SF Mono', 'Consolas', monospace;
-}
-
-.task-result-btn {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 10px 12px;
-  border: 1px solid var(--border-light);
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-  transition: all 0.2s ease;
-  font-family: inherit;
-}
-
-.task-result-btn:hover {
-  border-color: var(--text-primary);
-  background: var(--bg-secondary, #f5f5f5);
-}
-
-.task-result-btn:active {
-  transform: scale(0.98);
 }
 
 .task-modal-overlay {
@@ -1668,4 +1703,5 @@ select:focus {
     padding: 16px;
   }
 }
+
 </style>

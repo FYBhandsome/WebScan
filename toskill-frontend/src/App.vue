@@ -12,10 +12,25 @@
 
       <main class="main-content">
         <!-- 页面路由 -->
-        <ConsoleView v-if="currentPage === 'console'" />
+        <!--
+          Keep the console mounted while navigating between pages.  The
+          console owns the live WebSocket interaction state; unmounting it
+          during a sidebar navigation runs its "page refresh" recovery path,
+          which marks pending interactions as expired and removes their
+          buttons.  v-show preserves the component/listeners and only toggles
+          visibility, while a real browser refresh still uses the normal
+          restore logic.
+        -->
+        <ConsoleView
+          v-show="currentPage === 'console'"
+          @open-report="openReportPage"
+        />
         <ScanView v-if="currentPage === 'scan'" />
         <ToolsView v-if="currentPage === 'tools'" />
-        <ReportsView v-if="currentPage === 'reports'" />
+        <ReportsView
+          v-if="currentPage === 'reports'"
+          :initial-report-filename="selectedReportFilename"
+        />
         <SettingsView v-if="currentPage === 'settings'" />
       </main>
     </div>
@@ -79,9 +94,16 @@ import FloatingLogPanel from './components/FloatingLogPanel.vue'
 
 const connectionStatus = ref('未连接')
 const currentPage = ref('console')
+const selectedReportFilename = ref('')
 
 const handleNavigation = (page) => {
+  if (page !== 'reports') selectedReportFilename.value = ''
   currentPage.value = page
+}
+
+const openReportPage = (filename = '') => {
+  selectedReportFilename.value = filename
+  currentPage.value = 'reports'
 }
 
 const getToastIcon = (type) => {

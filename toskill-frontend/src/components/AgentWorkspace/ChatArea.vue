@@ -21,6 +21,7 @@
         :run="block"
         @action="(...args) => $emit('action', ...args)"
         @submit-input="(...args) => $emit('submit-input', ...args)"
+        @open-report="filename => $emit('open-report', filename)"
       />
 
       <div
@@ -59,7 +60,7 @@ const props = defineProps({
   isThinking: Boolean
 })
 
-defineEmits(['action', 'submit-input'])
+defineEmits(['action', 'submit-input', 'open-report'])
 
 const scrollContainer = ref(null)
 const isNearBottom = ref(true)

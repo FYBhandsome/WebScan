@@ -28,6 +28,14 @@
             <span class="step-status">{{ statusLabel(step.status) }}</span>
           </div>
           <div v-if="step.message" class="step-message">{{ step.message }}</div>
+          <a
+            v-if="step.reportLink"
+            href="#"
+            class="report-link"
+            @click.prevent="$emit('open-report', step.reportLink.filename || '')"
+          >
+            {{ step.reportLink.label || '查看扫描报告' }}
+          </a>
           <div v-if="step.analysis && step.analysis !== step.message" class="step-analysis">{{ step.analysis }}</div>
 
           <div v-if="step.interaction" class="step-interaction">
@@ -81,7 +89,10 @@
                 </button>
               </div>
             </div>
-            <div v-else class="interaction-resolved">用户选择：{{ step.interaction.selectedChoice || '已处理' }}</div>
+            <div v-else class="interaction-resolved">
+              <template v-if="step.interaction.resolutionMessage">{{ step.interaction.resolutionMessage }}</template>
+              <template v-else>用户选择：{{ step.interaction.selectedChoice || '已处理' }}</template>
+            </div>
           </div>
 
           <details v-if="step.logs?.length" class="step-details" :open="step.status === 'running'">
@@ -113,7 +124,7 @@
 
 <script setup>
 defineProps({ run: { type: Object, required: true } })
-defineEmits(['action', 'submit-input'])
+defineEmits(['action', 'submit-input', 'open-report'])
 
 const statusLabel = (status) => ({
   pending: '等待', running: '运行中', completed: '已完成', failed: '失败',
@@ -171,6 +182,19 @@ const formatTime = (timestamp) => {
 .step-heading strong { font: 600 14px/1.4 var(--font-family); }
 .step-message, .step-analysis { margin-top: 4px; color: #52525b; white-space: pre-wrap; word-break: break-word; }
 .step-analysis { padding-left: 10px; border-left: 2px solid #d1fae5; }
+.report-link {
+  display: inline-flex;
+  margin-top: 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #047857;
+  font: 600 14px/1.5 var(--font-family);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.report-link:hover { color: #059669; }
 
 .step-interaction { margin-top: 11px; }
 .interaction-active { padding-left: 12px; border-left: 2px solid #10b981; }
