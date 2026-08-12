@@ -40,8 +40,10 @@ class ApiService {
             return `字段 [${field}] 错误: ${err.msg}`;
           }).join(' | ');
         } else if (data.detail) {
-          // 处理常规错误字符串
-          errorMsg = data.detail;
+          // 处理常规错误字符串以及后端统一业务错误对象
+          errorMsg = typeof data.detail === 'object'
+            ? (data.detail.message || data.detail.error || JSON.stringify(data.detail))
+            : data.detail;
         } else if (data.message) {
           errorMsg = data.message;
         }
@@ -100,8 +102,11 @@ class ApiService {
 
   // --- Tools ---
   // 修正：移除多余的 /toskill 前缀
-  async getTools() {
-    return this.get('/tools');
+  async getTools(filters = {}) {
+    const query = new URLSearchParams(
+      Object.entries(filters).filter(([, value]) => value)
+    ).toString();
+    return this.get(`/tools${query ? `?${query}` : ''}`);
   }
 
   async getToolsByCategory() {
@@ -114,6 +119,18 @@ class ApiService {
 
   async executeToolsBatch(toolNames, target) {
     return this.post('/tools/execute/batch', { tool_names: toolNames, target });
+  }
+
+  async registerCustomTool(tool) {
+    return this.post('/tools/custom', tool);
+  }
+
+  async deleteCustomTool(toolName) {
+    return this.delete(`/tools/${encodeURIComponent(toolName)}`);
+  }
+
+  async getCustomToolSource(toolName) {
+    return this.get(`/scripts/${encodeURIComponent(toolName)}/source`);
   }
 
   // --- Reports ---

@@ -419,6 +419,37 @@ class TestMessageHandlers:
         mock_send.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_standalone_script_generation_returns_preview_without_registration(
+        self, manager, clean_memory_store
+    ):
+        """工具页生成脚本只返回预览，确认前不能写入工具库。"""
+        generated = "def run(target):\n    return {'success': True, 'data': {}}"
+        fake_script_manager = MagicMock()
+        fake_script_manager.generate_script_with_ai = AsyncMock(return_value=generated)
+        fake_script_manager.analyze_script_with_ai = AsyncMock(return_value={
+            "tool_name": "ai_preview_tool",
+            "description": "预览工具",
+            "category": "info_collection",
+        })
+
+        with patch('TOSKill.AI.tools.script_manager', fake_script_manager), \
+             patch('TOSKill.AI.script_safety.validate_script_full', return_value=(True, "ok", {})), \
+             patch.object(manager, '_send', new_callable=AsyncMock) as mock_send:
+            await manager._handle_script_description("standalone-preview", {
+                "description": "收集页面标题",
+                "preview_only": True,
+            })
+
+        fake_script_manager.register_script_as_tool.assert_not_called()
+        generated_events = [
+            call.args[1] for call in mock_send.await_args_list
+            if call.args[1].get("type") == "script_generated"
+        ]
+        assert len(generated_events) == 1
+        assert generated_events[0]["payload"]["registered"] is False
+        assert generated_events[0]["payload"]["script_code"] == generated
+
+    @pytest.mark.asyncio
     async def test_script_content_with_wrong_interaction_id_does_not_resume(self, manager, clean_memory_store):
         """错误交互 ID 不能劫持另一条扫描工作流。"""
         from TOSKill.AI.graph import memory_store

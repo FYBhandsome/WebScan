@@ -1460,45 +1460,31 @@ class AIChatManager:
                 await self._send_error(session_id, f"AI生成脚本安全审查未通过: {msg}", error_code="VALIDATION_FAILED")
                 return
             
-            await self._send(session_id, {
-                "type": "script_generation_progress",
-                "payload": {"stage": "registering", "progress": 80, "message": "正在注册工具..."}
-            })
-            
             analysis = await script_manager.analyze_script_with_ai(script_code)
             default_name = f"ai_gen_{datetime.now().strftime('%Y%m%d%H%M%S')}"
             tool_name = analysis.get("tool_name", default_name)
             safe_name, name_err = sanitize_script_name(tool_name)
             tool_name = safe_name or default_name
             
-            result = script_manager.register_script_as_tool(
-                script_content=script_code,
-                script_name=tool_name,
-                description=analysis.get("description", description),
-                category=analysis.get("category", "custom"),
-                creation_method="ai_generate",
-            )
-            
-            if result.get("success"):
-                await self._send(session_id, {
-                    "type": "script_generation_progress",
-                    "payload": {"stage": "completed", "progress": 100, "message": "脚本生成并注册成功"}
-                })
-                await self._send(session_id, {
-                    "type": "script_generated",
-                    "payload": {
-                        "tool_name": result["tool_name"],
-                        "description": analysis.get("description"),
-                        "script_code": script_code,
-                        "message": f"AI生成的脚本已注册为工具: {result['tool_name']}"
-                    }
-                })
-            else:
-                await self._send(session_id, {
-                    "type": "script_generation_progress",
-                    "payload": {"stage": "failed", "progress": 100, "message": result.get("error", "注册失败")}
-                })
-                await self._send_error(session_id, result.get("error", "注册失败"), error_code="REGISTER_FAILED")
+            # Standalone generation (Tools view) returns a preview only. The
+            # final, possibly edited code is persisted exactly once through
+            # POST /tools/custom after the user confirms it. Console workflow
+            # generation is handled by the pending-interaction branch above.
+            await self._send(session_id, {
+                "type": "script_generation_progress",
+                "payload": {"stage": "completed", "progress": 100, "message": "脚本生成完成，等待确认"}
+            })
+            await self._send(session_id, {
+                "type": "script_generated",
+                "payload": {
+                    "tool_name": tool_name,
+                    "description": analysis.get("description", description),
+                    "script_code": script_code,
+                    "suggested_category": analysis.get("category", "other"),
+                    "registered": False,
+                    "message": "AI脚本已生成，请预览并确认注册"
+                }
+            })
         except Exception as e:
             logger.error(f"脚本生成处理失败: {e}")
             await self._send(session_id, {

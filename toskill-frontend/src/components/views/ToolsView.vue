@@ -1,93 +1,66 @@
 <template>
   <div id="page-tools" class="page active">
     <div class="page-header">
-      <h2>安全工具</h2>
-    </div>
-
-    <div class="tools-filter">
-      <button 
-        class="filter-btn" 
-        :class="{ active: currentCategory === 'all' }" 
-        @click="filterTools('all')"
-      >全部</button>
-      <button 
-        class="filter-btn" 
-        :class="{ active: currentCategory === 'info' }" 
-        @click="filterTools('info')"
-      >信息收集</button>
-      <button 
-        class="filter-btn" 
-        :class="{ active: currentCategory === 'vuln' }" 
-        @click="filterTools('vuln')"
-      >漏洞扫描</button>
-      <button 
-        class="filter-btn" 
-        :class="{ active: currentCategory === 'custom' }" 
-        @click="filterTools('custom')"
-      >自定义工具</button>
-    </div>
-
-    <!-- 默认分类：普通工具列表 -->
-    <template v-if="currentCategory !== 'custom'">
-      <div class="tools-grid" id="toolsGrid">
-        <div v-if="isLoading" class="loading" style="grid-column: 1 / -1;">加载工具列表...</div>
-        <div v-else-if="errorMsg" class="error" style="grid-column: 1 / -1; color: var(--error-color);">{{ errorMsg }}</div>
-        <div v-else-if="filteredTools.length === 0" class="loading" style="grid-column: 1 / -1;">暂无工具</div>
-        
-        <div 
-          v-else 
-          v-for="tool in filteredTools" 
-          :key="tool.name" 
-          class="tool-card" 
-          :class="{ 'custom-tool': tool.name.startsWith('custom_') || tool.name.startsWith('ai_gen_') }"
-          @click="openExecution(tool)"
-        >
-          <h4>{{ formatToolName(tool.name) }}</h4>
-          <p>
-            <template v-if="tool.description">
-              名称：{{ parsedDescription(tool.description).name }}<br>
-              简介：{{ parsedDescription(tool.description).brief || '无简介' }}
-            </template>
-            <template v-else>安全扫描工具</template>
-          </p>
-          <span class="tool-category" :class="tool.category">{{ getToolCategoryLabel(tool) }}</span>
-        </div>
+      <div>
+        <h2>安全工具</h2>
+        <p class="page-subtitle">按用途和来源管理扫描能力</p>
       </div>
-    </template>
+      <button class="primary-btn create-tool-btn" @click="openNewToolModal">+ 新建工具</button>
+    </div>
 
-    <!-- 自定义工具分类：专用渲染，列表 + 新建卡片 -->
-    <template v-if="currentCategory === 'custom'">
-      <div v-if="isLoading" class="loading">加载工具列表...</div>
-      <div v-else-if="errorMsg" class="error" style="color: var(--error-color);">{{ errorMsg }}</div>
-      <template v-else>
-        <div v-if="customTools.length > 0" class="tools-grid">
-          <div v-for="tool in customTools" :key="tool.name"
-            class="tool-card custom-tool" @click="openExecution(tool)">
-            <h4>{{ formatToolName(tool.name) }}</h4>
-            <p>
-              <template v-if="tool.description">
-                名称：{{ parsedDescription(tool.description).name }}<br>
-                简介：{{ parsedDescription(tool.description).brief || '无简介' }}
-              </template>
-              <template v-else>自定义扫描工具</template>
-            </p>
-            <span class="tool-category custom">自定义</span>
-          </div>
-          <div class="tool-card new-custom-tool-card" @click="openNewToolModal">
-            <div class="new-tool-icon">+</div>
-            <h4>新建自定义工具</h4>
-            <p>上传脚本或通过 AI 生成扫描工具</p>
-          </div>
+    <div class="tools-filter primary-filter" aria-label="工具类型">
+      <button 
+        class="filter-btn" 
+        :class="{ active: currentCategory === 'info_collection' }"
+        @click="filterTools('info_collection')"
+      >信息收集 <span>{{ categoryCounts.info_collection }}</span></button>
+      <button 
+        class="filter-btn" 
+        :class="{ active: currentCategory === 'vuln_scan' }"
+        @click="filterTools('vuln_scan')"
+      >漏洞扫描 <span>{{ categoryCounts.vuln_scan }}</span></button>
+    </div>
+
+    <div class="tools-filter source-filter" aria-label="工具来源">
+      <button 
+        class="filter-btn" 
+        :class="{ active: currentSource === 'system' }"
+        @click="currentSource = 'system'"
+      >系统工具 <span>{{ sourceCounts.system }}</span></button>
+      <button 
+        class="filter-btn" 
+        :class="{ active: currentSource === 'custom' }"
+        @click="currentSource = 'custom'"
+      >自定义工具 <span>{{ sourceCounts.custom }}</span></button>
+    </div>
+
+    <div class="tools-grid" id="toolsGrid">
+      <div v-if="isLoading" class="loading empty-state">加载工具列表...</div>
+      <div v-else-if="errorMsg" class="error empty-state">{{ errorMsg }}</div>
+      <div v-else-if="filteredTools.length === 0" class="empty-state">
+        <strong>暂无{{ currentSource === 'system' ? '系统' : '自定义' }}工具</strong>
+        <span v-if="currentSource === 'custom'">点击右上角“新建工具”添加到当前分类</span>
+      </div>
+      <article
+        v-for="tool in filteredTools"
+        :key="tool.name"
+        class="tool-card"
+        :class="{ 'custom-tool': tool.source === 'custom', highlighted: highlightedTool === tool.name }"
+        @click="openExecution(tool)"
+      >
+        <div class="tool-card-header">
+          <h4>{{ formatToolName(tool.name) }}</h4>
+          <button v-if="tool.source === 'custom'" class="tool-delete-btn"
+            title="删除自定义工具" @click.stop="deleteCustomTool(tool)">删除</button>
         </div>
-        <div v-else class="tools-grid">
-          <div class="tool-card new-custom-tool-card" @click="openNewToolModal">
-            <div class="new-tool-icon">+</div>
-            <h4>新建自定义工具</h4>
-            <p>上传脚本或通过 AI 生成扫描工具</p>
-          </div>
+        <p>{{ parsedDescription(tool.description).brief || parsedDescription(tool.description).name || '安全扫描工具' }}</p>
+        <div class="tool-card-meta">
+          <span class="tool-category" :class="tool.category">{{ getToolCategoryLabel(tool) }}</span>
+          <span class="tool-source" :class="tool.source">{{ getToolSourceLabel(tool) }}</span>
+          <span v-if="tool.created_at" class="tool-created">{{ formatDate(tool.created_at) }}</span>
         </div>
-      </template>
-    </template>
+      </article>
+    </div>
 
     <Transition name="overlay-fade">
       <div v-if="execution.show" class="tool-execution-overlay" @click.self="closeExecution"></div>
@@ -162,7 +135,14 @@
           <button class="close-btn" @click="closeNewToolModal">×</button>
         </div>
 
-        <!-- 步骤 1：选择操作类型 -->
+        <div class="tool-type-picker">
+          <span>工具类型</span>
+          <button v-for="option in toolTypeOptions" :key="option.value"
+            :class="{ active: newToolModal.category === option.value }"
+            @click="newToolModal.category = option.value">{{ option.label }}</button>
+        </div>
+
+        <!-- 步骤 1：选择创建方式 -->
         <div v-if="newToolModal.step === 'select'" class="new-tool-options">
           <div class="option-card" @click="newToolModal.step = 'upload'">
             <h4>上传脚本</h4>
@@ -252,15 +232,17 @@ import { ws } from '../../services/websocket.js'
 marked.setOptions({ breaks: true, gfm: true })
 
 // === 状态管理 ===
-const currentCategory = ref('all')
+const currentCategory = ref('info_collection')
+const currentSource = ref('system')
+const highlightedTool = ref('')
 const isLoading = ref(false)
 const errorMsg = ref('')
 
 const toolsList = ref([])
-const categoriesDict = reactive({
-  info: [],
-  vuln: []
-})
+const toolTypeOptions = [
+  { value: 'info_collection', label: '信息收集脚本' },
+  { value: 'vuln_scan', label: '漏洞扫描脚本' }
+]
 
 const execution = reactive({
   show: false,
@@ -275,7 +257,8 @@ const execution = reactive({
 // === 新建自定义工具弹窗状态 ===
 const newToolModal = reactive({
   show: false,
-  step: 'select' // 'select' | 'upload' | 'generate'
+  step: 'select', // 'select' | 'upload' | 'generate'
+  category: 'info_collection'
 })
 
 // === 上传脚本表单 ===
@@ -313,40 +296,13 @@ const ensureWsConnected = async () => {
   }
 }
 
-// 保存 handler 引用用于清理
+// AI 生成仍通过 WebSocket 获取实时进度与预览；正式注册统一走 REST。
 const wsHandlers = {
-  scriptRegistered: null,
   scriptGenerated: null,
   scriptError: null
 }
 
 const setupWsHandlers = () => {
-  wsHandlers.scriptRegistered = (payload) => {
-    if (uploadForm.submitting) {
-      uploadForm.submitting = false
-      uploadForm.statusMsg = `脚本 "${payload.tool_name}" 注册成功！`
-      uploadForm.statusType = 'success'
-      showToast('脚本上传成功', 'success')
-      loadTools()
-      setTimeout(() => {
-        resetUploadForm()
-        newToolModal.step = 'select'
-      }, 1500)
-    }
-    if (generateForm.confirming) {
-      generateForm.confirming = false
-      generateForm.statusMsg = `脚本 "${payload.tool_name}" 确认注册成功！`
-      generateForm.statusType = 'success'
-      showToast('脚本注册成功', 'success')
-      loadTools()
-      setTimeout(() => {
-        resetGenerateForm()
-        newToolModal.step = 'select'
-      }, 1500)
-    }
-  }
-  ws.on('script_registered', wsHandlers.scriptRegistered)
-
   wsHandlers.scriptGenerated = (payload) => {
     if (!generateForm.submitting) return
     generateForm.submitting = false
@@ -383,10 +339,6 @@ const setupWsHandlers = () => {
 }
 
 const teardownWsHandlers = () => {
-  if (wsHandlers.scriptRegistered) {
-    ws.off('script_registered', wsHandlers.scriptRegistered)
-    wsHandlers.scriptRegistered = null
-  }
   if (wsHandlers.scriptGenerated) {
     ws.off('script_generated', wsHandlers.scriptGenerated)
     wsHandlers.scriptGenerated = null
@@ -401,6 +353,7 @@ const teardownWsHandlers = () => {
 const openNewToolModal = () => {
   newToolModal.show = true
   newToolModal.step = 'select'
+  newToolModal.category = currentCategory.value
   resetUploadForm()
   resetGenerateForm()
 }
@@ -445,21 +398,26 @@ const validateUploadForm = () => {
 
 const submitUploadScript = async () => {
   if (!validateUploadForm()) return
-  if (!await ensureWsConnected()) return
 
   uploadForm.submitting = true
-  uploadForm.statusMsg = '正在上传脚本...'
+  uploadForm.statusMsg = '正在校验并注册脚本...'
   uploadForm.statusType = 'info'
 
-  const sent = ws.send('script_content', {
-    script_content: uploadForm.scriptContent,
-    script_name: uploadForm.scriptName.trim()
-  })
-
-  if (!sent) {
+  try {
+    const result = await API.registerCustomTool({
+      tool_name: uploadForm.scriptName.trim(),
+      script_content: uploadForm.scriptContent,
+      description: `${getCategoryLabel(newToolModal.category)}自定义工具`,
+      category: newToolModal.category,
+      creation_method: 'upload',
+      include_in_default_scan: false
+    })
+    await handleRegisteredTool(result.data?.tool)
+  } catch (error) {
     uploadForm.submitting = false
-    uploadForm.statusMsg = '发送失败，WebSocket 未连接'
+    uploadForm.statusMsg = `注册失败：${error.message}`
     uploadForm.statusType = 'error'
+    showToast('脚本注册失败', 'error')
   }
 }
 
@@ -501,7 +459,9 @@ const submitGenerateScript = async () => {
   generateForm.generatedToolName = ''
 
   const sent = ws.send('script_description', {
-    description: generateForm.description.trim()
+    description: generateForm.description.trim(),
+    tool_category: newToolModal.category,
+    preview_only: true
   })
 
   if (!sent) {
@@ -512,23 +472,41 @@ const submitGenerateScript = async () => {
 }
 
 const confirmGeneratedScript = async () => {
-  if (!await ensureWsConnected()) return
-
   generateForm.confirming = true
   generateForm.statusMsg = '正在注册脚本...'
   generateForm.statusType = 'info'
 
-  const sent = ws.send('script_content', {
-    script_content: generateForm.generatedCode,
-    script_name: generateForm.generatedToolName
-  })
-
-  if (!sent) {
+  try {
+    const result = await API.registerCustomTool({
+      tool_name: generateForm.generatedToolName,
+      script_content: generateForm.generatedCode,
+      description: generateForm.generatedDesc || generateForm.description.trim(),
+      category: newToolModal.category,
+      creation_method: 'ai_generate',
+      include_in_default_scan: false
+    })
+    await handleRegisteredTool(result.data?.tool)
+  } catch (error) {
     generateForm.confirming = false
-    generateForm.statusMsg = '注册失败，WebSocket 未连接'
+    generateForm.statusMsg = `注册失败：${error.message}`
     generateForm.statusType = 'error'
-    showToast('注册失败，WebSocket 未连接', 'error')
+    showToast('脚本注册失败', 'error')
   }
+}
+
+const handleRegisteredTool = async (tool) => {
+  const toolName = tool?.name || uploadForm.scriptName || generateForm.generatedToolName
+  currentCategory.value = tool?.category || newToolModal.category
+  currentSource.value = 'custom'
+  highlightedTool.value = toolName
+  await loadTools()
+  uploadForm.submitting = false
+  generateForm.confirming = false
+  showToast(`工具“${formatToolName(toolName)}”已添加到自定义工具`, 'success')
+  closeNewToolModal()
+  setTimeout(() => {
+    if (highlightedTool.value === toolName) highlightedTool.value = ''
+  }, 4000)
 }
 
 const resetGenerateForm = () => {
@@ -548,15 +526,8 @@ const loadTools = async () => {
   isLoading.value = true
   errorMsg.value = ''
   try {
-    const [toolsResult, categoriesResult] = await Promise.all([
-      API.getTools(),
-      API.getToolsByCategory()
-    ])
-
-    // 根据后端实际数据结构进行赋值
+    const toolsResult = await API.getTools()
     toolsList.value = toolsResult.data?.tools || []
-    categoriesDict.info = categoriesResult.data?.info_collection || []
-    categoriesDict.vuln = categoriesResult.data?.vuln_scan || []
 
   } catch (error) {
     errorMsg.value = `加载失败: ${error.message}`
@@ -579,27 +550,35 @@ onBeforeUnmount(() => {
 
 // === 计算属性：动态过滤工具列表 ===
 const filteredTools = computed(() => {
-  const tools = toolsList.value
-  if (currentCategory.value === 'all') return tools
-  
-  if (currentCategory.value === 'info') {
-    return tools.filter(t => t.category === 'info_collection' || categoriesDict.info.includes(t.name))
-  } 
-  if (currentCategory.value === 'vuln') {
-    return tools.filter(t => t.category === 'vuln_scan' || categoriesDict.vuln.includes(t.name))
-  } 
-  if (currentCategory.value === 'custom') {
-    return tools.filter(t => t.name.startsWith('custom_') || t.name.startsWith('ai_gen_'))
-  }
-  return tools
-})
-
-// 自定义工具列表（用于专用渲染）
-const customTools = computed(() => {
-  return toolsList.value.filter(t =>
-    t.name.startsWith('custom_') || t.name.startsWith('ai_gen_')
+  return toolsList.value.filter(tool =>
+    tool.category === currentCategory.value && tool.source === currentSource.value
   )
 })
+
+const categoryCounts = computed(() => ({
+  info_collection: toolsList.value.filter(tool => tool.category === 'info_collection').length,
+  vuln_scan: toolsList.value.filter(tool => tool.category === 'vuln_scan').length
+}))
+
+const sourceCounts = computed(() => ({
+  system: toolsList.value.filter(tool =>
+    tool.category === currentCategory.value && tool.source === 'system'
+  ).length,
+  custom: toolsList.value.filter(tool =>
+    tool.category === currentCategory.value && tool.source === 'custom'
+  ).length
+}))
+
+const deleteCustomTool = async (tool) => {
+  if (!window.confirm(`确定删除自定义工具“${formatToolName(tool.name)}”吗？`)) return
+  try {
+    await API.deleteCustomTool(tool.name)
+    await loadTools()
+    showToast('自定义工具已删除', 'success')
+  } catch (error) {
+    showToast(`删除失败：${error.message}`, 'error')
+  }
+}
 
 // === 过滤器切换 ===
 const filterTools = (cat) => {
@@ -613,11 +592,22 @@ const formatToolName = (name) => {
 }
 
 const getToolCategoryLabel = (tool) => {
-  if (tool.name?.startsWith('custom_') || tool.name?.startsWith('ai_gen_')) return '自定义'
   if (tool.category === 'info_collection') return '信息收集'
   if (tool.category === 'vuln_scan') return '漏洞扫描'
   if (tool.category === 'poc') return 'POC验证'
   return '其他'
+}
+
+const getCategoryLabel = (category) => category === 'vuln_scan' ? '漏洞扫描' : '信息收集'
+
+const getToolSourceLabel = (tool) => {
+  if (tool.source !== 'custom') return '系统工具'
+  return tool.creation_method === 'ai_generate' ? 'AI 生成' : '上传脚本'
+}
+
+const formatDate = (ts) => {
+  if (!ts) return ''
+  return new Date(ts).toLocaleDateString('zh-CN')
 }
 
 const parseDescription = (desc) => {
@@ -731,8 +721,106 @@ const runTool = async () => {
 </script>
 
 <style scoped>
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.page-subtitle {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.create-tool-btn {
+  flex-shrink: 0;
+  padding-inline: 18px;
+}
+
+.primary-filter {
+  margin-bottom: 10px;
+}
+
+.source-filter {
+  margin-top: 0;
+  margin-bottom: 26px;
+}
+
+.source-filter .filter-btn {
+  border-radius: 8px;
+}
+
+.filter-btn span {
+  margin-left: 5px;
+  opacity: 0.72;
+  font-size: 12px;
+}
+
+.empty-state {
+  grid-column: 1 / -1;
+  min-height: 190px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  border: 1px dashed var(--border-color);
+  border-radius: 12px;
+}
+
 .custom-tool {
   border-left: 4px solid var(--warning-color);
+}
+
+.tool-card.highlighted {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.14), 0 10px 28px rgba(22, 119, 255, 0.12);
+}
+
+.tool-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tool-delete-btn {
+  border: 0;
+  background: transparent;
+  color: var(--error-color, #ff4d4f);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.tool-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.tool-source {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.tool-source.custom {
+  color: #9a6700;
+  background: #fff7d6;
+}
+
+.tool-created {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .tool-execution-overlay {
@@ -1003,6 +1091,39 @@ const runTool = async () => {
   justify-content: center;
 }
 
+.tool-type-picker {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 18px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.tool-type-picker > span {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tool-type-picker button {
+  padding: 9px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.tool-type-picker button.active {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+  background: #eef6ff;
+}
+
 .option-card {
   flex: 0 1 240px;
   padding: 24px;
@@ -1171,6 +1292,19 @@ const runTool = async () => {
 
 /* 响应式 */
 @media (max-width: 768px) {
+  .page-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .create-tool-btn {
+    align-self: flex-start;
+  }
+
+  .tool-type-picker {
+    grid-template-columns: 1fr;
+  }
+
   .new-tool-options {
     flex-direction: column;
   }
