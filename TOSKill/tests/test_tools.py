@@ -67,7 +67,11 @@ class TestToolRegistry:
         result = clean_target("")
         assert result == ""
 
-    @pytest.mark.parametrize("tool_name", ["sqli_scan", "xss_scan"])
+    @pytest.mark.parametrize("tool_name", [
+        "sqli_scan", "xss_scan", "tls_certificate_scan", "http_methods_scan",
+        "public_metadata_scan", "http_security_headers_scan", "cookie_security_scan",
+        "cors_misconfiguration_scan",
+    ])
     def test_clean_target_for_url_preserving_tool(self, tool_name):
         from TOSKill.AI.tools import clean_target_for_tool
 

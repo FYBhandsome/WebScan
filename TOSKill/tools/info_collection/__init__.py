@@ -18,6 +18,9 @@ from .randheader import random_headers
 from .webside import webside_query
 from .webweight import web_weight
 from .crawler import crawler
+from .tls_certificate import tls_certificate_scan
+from .http_methods import http_methods_scan
+from .public_metadata import public_metadata_scan
 
 __all__ = [
     "baseinfo",
@@ -34,6 +37,9 @@ __all__ = [
     "webside_query",
     "web_weight",
     "crawler",
+    "tls_certificate_scan",
+    "http_methods_scan",
+    "public_metadata_scan",
 ]
 
 INFO_COLLECTION_TOOLS = [
@@ -51,4 +57,7 @@ INFO_COLLECTION_TOOLS = [
     webside_query,
     web_weight,
     crawler,
+    tls_certificate_scan,
+    http_methods_scan,
+    public_metadata_scan,
 ]

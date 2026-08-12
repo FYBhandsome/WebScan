@@ -117,8 +117,8 @@ def scan_total_tasks(state: ScanState) -> int:
     """Return the authoritative dynamic denominator used by all clients."""
     planned = state.get("planned_tasks")
     if state.get("workflow_mode") == "full_scan" or state.get("mode") == "full_scan":
-        # Old paused sessions stored only the active 12/8-task phase queue.
-        # Treat an uninitialized full state as the 20 built-ins plus any
+        # Old paused sessions stored only the active phase queue.
+        # Treat an uninitialized full state as all current built-ins plus any
         # non-built-in script tools already present in that legacy queue.
         if not state.get("full_scan_initialized"):
             base_plan = set(get_tool_sequence("full_scan"))
@@ -2733,7 +2733,8 @@ async def ai_decision(state: ScanState) -> ScanState:
     tool_sequence = _active_tool_sequence(state)
     # Interactive info/vulnerability scans do not pass through start_scan_node,
     # so persist their base queue before a custom script is inserted. This
-    # keeps the progress denominator at 11/8 plus any custom tools.
+    # keeps the progress denominator aligned with the active built-in queue
+    # plus any custom tools.
     planned_tasks = list(state.get("planned_tasks") or tool_sequence)
     if list(state.get("planned_tasks") or []) != planned_tasks:
         state = update_state(state, planned_tasks=planned_tasks)

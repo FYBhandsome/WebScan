@@ -45,6 +45,9 @@ from TOSKill.tools.info_collection.iplocating import ip_locate
 from TOSKill.tools.info_collection.webside import webside_query
 from TOSKill.tools.info_collection.webweight import web_weight
 from TOSKill.tools.info_collection.crawler import crawler
+from TOSKill.tools.info_collection.tls_certificate import tls_certificate_scan as tls_certificate
+from TOSKill.tools.info_collection.http_methods import http_methods_scan as http_methods
+from TOSKill.tools.info_collection.public_metadata import public_metadata_scan as public_metadata
 from TOSKill.tools.vuln_scan.sqli import sqli_scan as sqli
 from TOSKill.tools.vuln_scan.xss import xss_scan as xss
 from TOSKill.tools.vuln_scan.csrf import csrf_scan as csrf
@@ -53,6 +56,9 @@ from TOSKill.tools.vuln_scan.cmdi import cmdi_scan as cmdi
 from TOSKill.tools.vuln_scan.ssrf import ssrf_scan as ssrf
 from TOSKill.tools.vuln_scan.lfi import lfi_scan as lfi
 from TOSKill.tools.vuln_scan.weakpass import weakpass_scan as weakpass
+from TOSKill.tools.vuln_scan.http_security_headers import http_security_headers_scan as http_security_headers
+from TOSKill.tools.vuln_scan.cookie_security import cookie_security_scan as cookie_security
+from TOSKill.tools.vuln_scan.cors_misconfiguration import cors_misconfiguration_scan as cors_misconfiguration
 from TOSKill.tools.poc.thinkphp import thinkphp_rce
 from TOSKill.tools.poc.struts2 import struts2_s2_032
 from TOSKill.tools.poc.weblogic import weblogic_cve_2020_2551
@@ -331,7 +337,18 @@ def clean_target(target: str) -> str:
     return target
 
 
-URL_PRESERVING_TOOLS = frozenset({"sqli_scan", "xss_scan"})
+# Tools that perform HTTP(S) requests need the user-supplied scheme, port and
+# path intact. Host-only discovery tools continue to receive a cleaned host.
+URL_PRESERVING_TOOLS = frozenset({
+    "sqli_scan",
+    "xss_scan",
+    "tls_certificate_scan",
+    "http_methods_scan",
+    "public_metadata_scan",
+    "http_security_headers_scan",
+    "cookie_security_scan",
+    "cors_misconfiguration_scan",
+})
 
 
 def clean_target_for_tool(tool_name: str, target: str) -> str:
@@ -897,6 +914,39 @@ def crawler_scan(target: str) -> ToolResult:
         return wrap_tool_result(success=False, data={}, error=str(e))
 
 
+@tool
+def tls_certificate_scan(target: str) -> ToolResult:
+    """收集 HTTPS 服务的 TLS 协议、证书主体、签发者、有效期与 SAN 信息。"""
+    logger.info(f"[+] 执行 TLS 证书分析：{target}")
+    try:
+        return normalize_scanner_result(tls_certificate(target))
+    except Exception as e:
+        logger.error(f"TLS 证书分析失败: {e}")
+        return wrap_tool_result(success=False, data={}, error=str(e))
+
+
+@tool
+def http_methods_scan(target: str) -> ToolResult:
+    """收集目标支持的 HTTP 方法、状态码、重定向与服务标识。"""
+    logger.info(f"[+] 执行 HTTP 方法探测：{target}")
+    try:
+        return normalize_scanner_result(http_methods(target))
+    except Exception as e:
+        logger.error(f"HTTP 方法探测失败: {e}")
+        return wrap_tool_result(success=False, data={}, error=str(e))
+
+
+@tool
+def public_metadata_scan(target: str) -> ToolResult:
+    """收集 robots.txt、sitemap.xml 与 security.txt 等公开站点元数据。"""
+    logger.info(f"[+] 执行公开元数据发现：{target}")
+    try:
+        return normalize_scanner_result(public_metadata(target))
+    except Exception as e:
+        logger.error(f"公开元数据发现失败: {e}")
+        return wrap_tool_result(success=False, data={}, error=str(e))
+
+
 # ==================== 漏洞扫描工具 ====================
 
 @tool
@@ -1300,6 +1350,39 @@ def weakpass_scan(
         return wrap_tool_result(success=False, data={}, error=str(e))
 
 
+@tool
+def http_security_headers_scan(target: str) -> ToolResult:
+    """检测 HTTP 安全响应头缺失或不安全配置。"""
+    logger.info(f"[+] 执行 HTTP 安全响应头检测：{target}")
+    try:
+        return normalize_scanner_result(http_security_headers(target))
+    except Exception as e:
+        logger.error(f"HTTP 安全响应头检测失败: {e}")
+        return wrap_tool_result(success=False, data={}, error=str(e))
+
+
+@tool
+def cookie_security_scan(target: str) -> ToolResult:
+    """检测响应中会话 Cookie 的 Secure、HttpOnly、SameSite 安全属性。"""
+    logger.info(f"[+] 执行 Cookie 安全属性检测：{target}")
+    try:
+        return normalize_scanner_result(cookie_security(target))
+    except Exception as e:
+        logger.error(f"Cookie 安全属性检测失败: {e}")
+        return wrap_tool_result(success=False, data={}, error=str(e))
+
+
+@tool
+def cors_misconfiguration_scan(target: str) -> ToolResult:
+    """检测高置信度的凭证型 CORS 任意 Origin 反射配置。"""
+    logger.info(f"[+] 执行 CORS 配置检测：{target}")
+    try:
+        return normalize_scanner_result(cors_misconfiguration(target))
+    except Exception as e:
+        logger.error(f"CORS 配置检测失败: {e}")
+        return wrap_tool_result(success=False, data={}, error=str(e))
+
+
 # ==================== POC工具 ====================
 
 @tool
@@ -1416,6 +1499,9 @@ INFO_COLLECTION_TOOLS = [
     webside_query_scan,
     web_weight_scan,
     crawler_scan,
+    tls_certificate_scan,
+    http_methods_scan,
+    public_metadata_scan,
 ]
 
 VULN_SCAN_TOOLS = [
@@ -1427,6 +1513,9 @@ VULN_SCAN_TOOLS = [
     ssrf_scan,
     lfi_scan,
     weakpass_scan,
+    http_security_headers_scan,
+    cookie_security_scan,
+    cors_misconfiguration_scan,
 ]
 
 POC_TOOLS = [
@@ -1452,6 +1541,9 @@ TOOL_SEQUENCE_INFO = [
     "webside_query_scan",
     "web_weight_scan",
     "crawler_scan",
+    "tls_certificate_scan",
+    "http_methods_scan",
+    "public_metadata_scan",
 ]
 
 TOOL_SEQUENCE_VULN = [
@@ -1463,6 +1555,9 @@ TOOL_SEQUENCE_VULN = [
     "ssrf_scan",
     "lfi_scan",
     "weakpass_scan",
+    "http_security_headers_scan",
+    "cookie_security_scan",
+    "cors_misconfiguration_scan",
 ]
 
 

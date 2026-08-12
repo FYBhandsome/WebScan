@@ -9,11 +9,13 @@ INFO_COLLECTION_TOOL_NAMES = frozenset({
     "baseinfo_scan", "port_scan", "subdomain_scan", "dir_brute",
     "waf_detect_scan", "cdn_detect_scan", "cms_detect_scan", "infoleak_scan",
     "ip_locate_scan", "webside_query_scan", "web_weight_scan", "crawler_scan",
+    "tls_certificate_scan", "http_methods_scan", "public_metadata_scan",
 })
 
 VULN_SCAN_TOOL_NAMES = frozenset({
     "sqli_scan", "xss_scan", "csrf_scan", "fileupload_scan",
     "cmdi_scan", "ssrf_scan", "lfi_scan", "weakpass_scan",
+    "http_security_headers_scan", "cookie_security_scan", "cors_misconfiguration_scan",
 })
 
 TOOL_LABELS = {
@@ -23,6 +25,8 @@ TOOL_LABELS = {
     "cms_detect_scan": "技术指纹", "infoleak_scan": "敏感信息线索",
     "ip_locate_scan": "网络归属", "webside_query_scan": "站点关联信息",
     "web_weight_scan": "站点权重", "crawler_scan": "站点结构",
+    "tls_certificate_scan": "TLS 与证书", "http_methods_scan": "HTTP 方法与服务行为",
+    "public_metadata_scan": "公开站点元数据",
 }
 
 FIELD_LABELS = {
@@ -40,6 +44,12 @@ FIELD_LABELS = {
     "isp": "运营商", "provider": "运营商", "domain": "域名",
     "weight": "站点权重", "website_name": "站点名称", "record": "备案信息",
     "leaks_found": "扫描结果", "leak_details": "线索详情",
+    "tls_version": "TLS 版本", "cipher": "加密套件", "certificate_subject": "证书主体",
+    "certificate_issuer": "证书签发者", "certificate_expires_at": "证书到期时间",
+    "subject_alt_names": "证书备用名称", "allowed_methods": "允许的 HTTP 方法",
+    "options_status_code": "OPTIONS 状态", "head_status_code": "HEAD 状态",
+    "redirect_location": "重定向地址", "public_resources": "公开资源",
+    "discovered_paths": "发现路径", "target_url": "目标地址",
 }
 
 PREFERRED_FIELDS = {
@@ -55,6 +65,9 @@ PREFERRED_FIELDS = {
     "webside_query_scan": ("website_name", "record", "domain", "provider"),
     "web_weight_scan": ("weight", "domain"),
     "infoleak_scan": ("leaks_found", "leak_details"),
+    "tls_certificate_scan": ("host", "port", "tls_version", "cipher", "certificate_subject", "certificate_issuer", "certificate_expires_at", "subject_alt_names"),
+    "http_methods_scan": ("allowed_methods", "options_status_code", "head_status_code", "redirect_location", "server"),
+    "public_metadata_scan": ("discovered_paths", "total_count", "public_resources"),
 }
 
 
