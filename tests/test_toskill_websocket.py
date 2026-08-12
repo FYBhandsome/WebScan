@@ -380,12 +380,14 @@ class TestMessageHandlers:
             await manager._handle_script_content(session_id, {
                 "script_content": "def run(target):\n    return {}",
                 "script_name": "custom_scan",
+                "tool_category": "vuln_scan",
                 "interaction_id": interaction_id,
             })
 
         orchestrator.resume_workflow.assert_awaited_once_with(session_id, {
             "script_content": "def run(target):\n    return {}",
             "script_name": "custom_scan",
+            "tool_category": "vuln_scan",
         })
         mock_send.assert_awaited_once()
 
@@ -410,11 +412,13 @@ class TestMessageHandlers:
              patch.object(manager, '_send', new_callable=AsyncMock) as mock_send:
             await manager._handle_script_description(session_id, {
                 "description": "检测敏感文件泄露",
+                "tool_category": "info_collection",
                 "interaction_id": interaction_id,
             })
 
         orchestrator.resume_workflow.assert_awaited_once_with(session_id, {
             "description": "检测敏感文件泄露",
+            "tool_category": "info_collection",
         })
         mock_send.assert_awaited_once()
 

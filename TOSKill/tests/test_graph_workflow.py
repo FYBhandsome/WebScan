@@ -249,6 +249,55 @@ class TestScriptWorkflowState:
         assert queued["scan_status"] == "waiting_user"
         assert queued["is_complete"] is False
 
+    def test_full_scan_script_keeps_selected_category_in_same_state(self):
+        from TOSKill.AI.graph import _queue_registered_script
+
+        state = {
+            "workflow_mode": "full_scan",
+            "mode": "full_scan",
+            "current_phase": "info_collection",
+            "next_task": "baseinfo_scan",
+            "planned_tasks": ["baseinfo_scan", "xss_scan"],
+            "phase_tasks": ["baseinfo_scan"],
+            "task_metadata": {
+                "baseinfo_scan": {"category": "info_collection", "phase": "info_collection"},
+                "xss_scan": {"category": "vuln_scan", "phase": "vuln_scan"},
+            },
+        }
+
+        queued = _queue_registered_script(
+            state, "custom_vuln", "def run(target):\n    return {}", "自定义漏洞检测", "vuln_scan"
+        )
+
+        assert queued["script_category"] == "vuln_scan"
+        assert queued["script_creation_method"] == "upload"
+        assert queued["task_metadata"]["custom_vuln"]["category"] == "vuln_scan"
+        assert queued["task_metadata"]["custom_vuln"]["phase"] == "vuln_scan"
+        assert "custom_vuln" not in queued["phase_tasks"]
+        assert queued["next_task"] == "baseinfo_scan"
+
+    def test_late_information_script_executes_without_losing_category(self):
+        from TOSKill.AI.graph import _queue_registered_script
+
+        state = {
+            "workflow_mode": "full_scan",
+            "mode": "full_scan",
+            "current_phase": "vuln_scan",
+            "next_task": "xss_scan",
+            "planned_tasks": ["xss_scan"],
+            "phase_tasks": ["xss_scan"],
+            "task_metadata": {"xss_scan": {"category": "vuln_scan", "phase": "vuln_scan"}},
+        }
+
+        queued = _queue_registered_script(
+            state, "late_info", "def run(target):\n    return {}", "补充信息收集", "info_collection"
+        )
+
+        assert queued["task_metadata"]["late_info"]["category"] == "info_collection"
+        assert queued["task_metadata"]["late_info"]["phase"] == "vuln_scan"
+        assert queued["phase_tasks"][0] == "late_info"
+        assert queued["next_task"] == "late_info"
+
     def test_script_registration_works_with_current_langchain(self, tmp_path):
         from TOSKill.AI.tools import ALL_TOOLS, TOOL_MAP, script_manager
 

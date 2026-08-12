@@ -1137,6 +1137,9 @@ export function useAgentChat() {
   const showUploadScriptForm = (block = {}) => {
     const request = block.payload || block
     const interactionId = request.interaction_id || block.interactionId || block.interaction_id || `upload-script:${Date.now()}`
+    const defaultCategory = ['info_collection', 'vuln_scan'].includes(request.default_category)
+      ? request.default_category
+      : 'info_collection'
     return attachRunInteraction({ ...request, step_id: `upload-script:${Date.now()}` }, {
       type: 'input',
       actionSource: 'input_request',
@@ -1145,6 +1148,17 @@ export function useAgentChat() {
       title: '上传自定义脚本',
       description: '请粘贴你的 Python 脚本代码。脚本必须包含 `run(target: str)` 函数并返回 `Dict` 类型结果。系统将自动进行安全审查。',
       fields: [{
+        field: 'tool_category',
+        label: '脚本类型',
+        description: '已根据当前扫描阶段预选，你可以在提交前修改',
+        required: true,
+        validation: 'choice',
+        options: [
+          { value: 'info_collection', label: '信息收集工具' },
+          { value: 'vuln_scan', label: '漏洞扫描工具' }
+        ],
+        value: defaultCategory
+      }, {
         field: 'script_name',
         label: '脚本名称',
         description: '为脚本起一个名字（可选，不填则自动生成）',
@@ -1174,6 +1188,9 @@ export function useAgentChat() {
   const showGenerateScriptForm = (block = {}) => {
     const request = block.payload || block
     const interactionId = request.interaction_id || block.interactionId || block.interaction_id || `generate-script:${Date.now()}`
+    const defaultCategory = ['info_collection', 'vuln_scan'].includes(request.default_category)
+      ? request.default_category
+      : 'info_collection'
     return attachRunInteraction({ ...request, step_id: `generate-script:${Date.now()}` }, {
       type: 'input',
       actionSource: 'input_request',
@@ -1182,6 +1199,17 @@ export function useAgentChat() {
       title: 'AI 生成扫描脚本',
       description: '请描述你需要的脚本功能，AI 将自动生成对应的 Python 扫描脚本。',
       fields: [{
+        field: 'tool_category',
+        label: '脚本类型',
+        description: '已根据当前扫描阶段预选，你可以在提交前修改',
+        required: true,
+        validation: 'choice',
+        options: [
+          { value: 'info_collection', label: '信息收集工具' },
+          { value: 'vuln_scan', label: '漏洞扫描工具' }
+        ],
+        value: defaultCategory
+      }, {
         field: 'script_description',
         label: '脚本功能描述',
         description: '详细描述脚本需要检测的内容，例如"检测目标网站是否存在敏感文件泄露"',
@@ -1377,11 +1405,13 @@ export function useAgentChat() {
         waitingForChoice.value = false
         const scriptName = fields.find(f => f.field === 'script_name')?.value || null
         const scriptContent = fields.find(f => f.field === 'script_content')?.value || ''
+        const toolCategory = fields.find(f => f.field === 'tool_category')?.value || ''
         const name = scriptName || `custom_${Date.now().toString(36)}`
         isTyping.value = true
         ws.send('script_content', {
           script_content: scriptContent,
           script_name: name,
+          tool_category: toolCategory,
           interaction_id: block.interactionId
         })
         return
@@ -1389,12 +1419,14 @@ export function useAgentChat() {
         pendingGenerateScript.value = false
         waitingForChoice.value = false
         const description = fields.find(f => f.field === 'script_description')?.value || ''
+        const toolCategory = fields.find(f => f.field === 'tool_category')?.value || ''
         isTyping.value = true
         isThinking.value = true
         currentThinking.value = 'AI 正在生成扫描脚本，请稍候…'
         addInfoBlock('AI 正在生成扫描脚本…')
         ws.send('script_description', {
           description: description,
+          tool_category: toolCategory,
           interaction_id: block.interactionId
         })
         return
@@ -2087,12 +2119,14 @@ export function useAgentChat() {
 
       case 'script_registered':
         const regToolName = data.payload?.tool_name || ''
+        const regCategoryLabel = data.payload?.category === 'vuln_scan' ? '漏洞扫描' : '信息收集'
         scriptUploadProgress.value = { stage: 'completed', progress: 100, message: '脚本注册成功' }
-        addInfoBlock(`脚本已注册: ${regToolName} | ${data.payload?.message || ''}`)
+        addInfoBlock(`脚本已注册: ${regToolName}；已保存至“工具 → ${regCategoryLabel} → 自定义工具”`)
         saveScriptHistory({
           tool_name: regToolName,
           description: data.payload?.description || '',
           source: 'upload',
+          category: data.payload?.category || '',
           script_content: data.payload?.script_content || ''
         })
         if (pendingUploadScript.value) {
@@ -2153,12 +2187,14 @@ export function useAgentChat() {
 
       case 'script_generated':
         const genToolName = data.payload?.tool_name || ''
+        const genCategoryLabel = data.payload?.category === 'vuln_scan' ? '漏洞扫描' : '信息收集'
         scriptGenerationProgress.value = { stage: 'completed', progress: 100, message: '脚本生成成功' }
-        addInfoBlock(`脚本生成完成: ${genToolName} | ${data.payload?.message || ''}`)
+        addInfoBlock(`脚本生成完成: ${genToolName}；已保存至“工具 → ${genCategoryLabel} → 自定义工具”`)
         saveScriptHistory({
           tool_name: genToolName,
           description: data.payload?.description || '',
           source: 'generate',
+          category: data.payload?.category || '',
           script_content: data.payload?.script_code || ''
         })
         upsertRunStep(

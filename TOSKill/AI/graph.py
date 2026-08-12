@@ -91,6 +91,7 @@ FALLBACK_TOOL_MAP = {
 DEFAULT_FALLBACK_TOOLS = ["xss_scan", "sqli_scan"]
 
 FULL_SCAN_PHASES = ("info_collection", "vuln_scan")
+SCRIPT_TOOL_CATEGORIES = frozenset(FULL_SCAN_PHASES)
 
 
 def _infer_full_scan_phase(state: ScanState) -> str:
@@ -101,6 +102,33 @@ def _infer_full_scan_phase(state: ScanState) -> str:
     # Older checkpoints used mode as a temporary phase marker.
     legacy_mode = str(state.get("mode") or "")
     return legacy_mode if legacy_mode in FULL_SCAN_PHASES else "info_collection"
+
+
+def _default_script_category(state: ScanState) -> str:
+    """Choose a UI default without preventing the user from changing it."""
+    if state.get("workflow_mode") == "full_scan" or state.get("mode") == "full_scan":
+        return _infer_full_scan_phase(state)
+    mode = str(state.get("mode") or "")
+    return mode if mode in SCRIPT_TOOL_CATEGORIES else "info_collection"
+
+
+def _resolve_script_category(value: Any, state: ScanState) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in SCRIPT_TOOL_CATEGORIES else _default_script_category(state)
+
+
+def _script_execution_phase(state: ScanState, category: str) -> str:
+    """Return the phase in which a newly created script can still execute.
+
+    In a full scan, vulnerability scripts created during collection wait for
+    the later vulnerability phase. An information script created after that
+    transition executes in the current phase instead of being stranded in a
+    phase that has already completed. Its result category remains unchanged.
+    """
+    current_phase = _infer_full_scan_phase(state)
+    if current_phase == "vuln_scan" and category == "info_collection":
+        return current_phase
+    return category
 
 
 def _active_tool_sequence(state: ScanState) -> List[str]:
@@ -2194,12 +2222,14 @@ def _restore_after_script_failure(state: ScanState, error: str) -> ScanState:
 
 
 def _queue_registered_script(state: ScanState, tool_name: str, script_content: str,
-                            description: str, category: str = "custom") -> ScanState:
+                            description: str, category: str = "custom",
+                            creation_method: str = "upload") -> ScanState:
     """Insert a registered custom tool before the original pending task."""
     origin = state.get("script_origin", {}) or {}
     planned_tasks = list(origin.get("planned_tasks") or state.get("planned_tasks", []))
     is_full_scan = state.get("workflow_mode") == "full_scan" or state.get("mode") == "full_scan"
-    phase = category if category in FULL_SCAN_PHASES else _infer_full_scan_phase(state)
+    category = _resolve_script_category(category, state)
+    phase = _script_execution_phase(state, category) if is_full_scan else category
     if tool_name and tool_name not in planned_tasks:
         original_task = origin.get("next_task") or state.get("next_task", "")
         try:
@@ -2249,6 +2279,8 @@ def _queue_registered_script(state: ScanState, tool_name: str, script_content: s
         registered_tool_name=tool_name,
         script_content=script_content,
         script_description=description,
+        script_category=category,
+        script_creation_method=creation_method,
         user_choice="",
         authorized_task="",
         pending_action_type="",
@@ -2276,6 +2308,7 @@ async def script_upload_process(state: ScanState) -> ScanState:
         "payload": {
             "interaction_id": interaction_id,
             "message": "请上传您的脚本文件或粘贴脚本内容",
+            "default_category": _default_script_category(state),
         },
     }
     
@@ -2307,6 +2340,7 @@ async def script_upload_process(state: ScanState) -> ScanState:
     
     script_content = upload_data.get("script_content", "")
     script_name = upload_data.get("script_name", f"custom_{datetime.now().strftime('%Y%m%d%H%M%S')}")
+    selected_category = _resolve_script_category(upload_data.get("tool_category"), state)
     
     safe_name, name_err = sanitize_script_name(script_name)
     if name_err:
@@ -2354,7 +2388,7 @@ async def script_upload_process(state: ScanState) -> ScanState:
         script_content=script_content,
         script_name=registered_name,
         description=analysis.get("description", "自定义扫描脚本"),
-        category=analysis.get("category", "custom"),
+        category=selected_category,
         creation_method="upload",
     )
     
@@ -2378,6 +2412,8 @@ async def script_upload_process(state: ScanState) -> ScanState:
                     "tool_name": result["tool_name"],
                     "description": analysis.get("description"),
                     "script_content": script_content,
+                    "category": selected_category,
+                    "creation_method": "upload",
                     "message": f"脚本已注册为工具: {result['tool_name']}"
                 }
             })
@@ -2389,7 +2425,8 @@ async def script_upload_process(state: ScanState) -> ScanState:
         result.get("tool_name", ""),
         script_content,
         analysis.get("description", ""),
-        analysis.get("category", "custom"),
+        selected_category,
+        "upload",
     )
 
 
@@ -2408,6 +2445,7 @@ async def script_generate_process(state: ScanState) -> ScanState:
         "payload": {
             "interaction_id": interaction_id,
             "message": "请描述您需要的扫描脚本功能",
+            "default_category": _default_script_category(state),
         },
     }
     
@@ -2434,6 +2472,7 @@ async def script_generate_process(state: ScanState) -> ScanState:
     })
     memory_store.clear_pending_interaction(session_id)
     description = desc_data.get("description", "")
+    selected_category = _resolve_script_category(desc_data.get("tool_category"), state)
     
     if not description:
         if ws_callback:
@@ -2503,7 +2542,7 @@ async def script_generate_process(state: ScanState) -> ScanState:
         script_content=script_code,
         script_name=tool_name,
         description=analysis.get("description", description),
-        category=analysis.get("category", "custom"),
+        category=selected_category,
         creation_method="ai_generate",
     )
     
@@ -2527,6 +2566,8 @@ async def script_generate_process(state: ScanState) -> ScanState:
                     "tool_name": result["tool_name"],
                     "script_code": script_code,
                     "description": analysis.get("description"),
+                    "category": selected_category,
+                    "creation_method": "ai_generate",
                     "message": f"AI脚本已生成并注册: {result['tool_name']}"
                 }
             })
@@ -2538,7 +2579,8 @@ async def script_generate_process(state: ScanState) -> ScanState:
         result.get("tool_name", ""),
         script_code,
         analysis.get("description", description),
-        analysis.get("category", "custom"),
+        selected_category,
+        "ai_generate",
     )
 
 

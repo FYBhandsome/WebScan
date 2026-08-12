@@ -40,6 +40,12 @@ logger = logging.getLogger(__name__)
 
 
 SCAN_MODE_MAP = {"info": "info_collection", "vuln": "vuln_scan", "full": "full_scan"}
+SCRIPT_TOOL_CATEGORIES = {"info_collection", "vuln_scan"}
+
+
+def _requested_script_category(payload: Dict[str, Any]) -> str:
+    category = str(payload.get("tool_category") or "").strip().lower()
+    return category if category in SCRIPT_TOOL_CATEGORIES else ""
 
 
 def _truncate_chat_text(value: Any, limit: int) -> str:
@@ -1278,6 +1284,7 @@ class AIChatManager:
                 result = await orchestrator.resume_workflow(session_id, {
                     "script_content": script_content,
                     "script_name": payload.get("script_name", ""),
+                    "tool_category": _requested_script_category(payload),
                 })
                 if result is None:
                     await self._send_error(session_id, "恢复脚本上传工作流失败")
@@ -1330,6 +1337,7 @@ class AIChatManager:
             script_name = safe_name or f"custom_{datetime.now().strftime('%Y%m%d%H%M%S')}"
             
             analysis = await script_manager.analyze_script_with_ai(script_content)
+            selected_category = _requested_script_category(payload) or analysis.get("category", "other")
             
             await self._send(session_id, {
                 "type": "script_upload_progress",
@@ -1342,7 +1350,7 @@ class AIChatManager:
                 script_content=script_content,
                 script_name=registered_name,
                 description=analysis.get("description", "自定义扫描脚本"),
-                category=analysis.get("category", "custom"),
+                category=selected_category,
                 creation_method="upload",
             )
             
@@ -1357,6 +1365,8 @@ class AIChatManager:
                         "tool_name": result["tool_name"],
                         "description": analysis.get("description"),
                         "script_content": script_content,
+                        "category": selected_category,
+                        "creation_method": "upload",
                         "message": f"脚本已注册为工具: {result['tool_name']}"
                     }
                 })
@@ -1402,6 +1412,7 @@ class AIChatManager:
                 await orchestrator._ensure_initialized()
                 result = await orchestrator.resume_workflow(session_id, {
                     "description": description,
+                    "tool_category": _requested_script_category(payload),
                 })
                 if result is None:
                     await self._send_error(session_id, "恢复脚本生成工作流失败")
@@ -1461,6 +1472,7 @@ class AIChatManager:
                 return
             
             analysis = await script_manager.analyze_script_with_ai(script_code)
+            selected_category = _requested_script_category(payload) or analysis.get("category", "other")
             default_name = f"ai_gen_{datetime.now().strftime('%Y%m%d%H%M%S')}"
             tool_name = analysis.get("tool_name", default_name)
             safe_name, name_err = sanitize_script_name(tool_name)
@@ -1480,7 +1492,7 @@ class AIChatManager:
                     "tool_name": tool_name,
                     "description": analysis.get("description", description),
                     "script_code": script_code,
-                    "suggested_category": analysis.get("category", "other"),
+                    "suggested_category": selected_category,
                     "registered": False,
                     "message": "AI脚本已生成，请预览并确认注册"
                 }

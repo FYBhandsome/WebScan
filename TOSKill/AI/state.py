@@ -64,6 +64,8 @@ class ScanState(TypedDict, total=False):
     script_path: str
     script_name: str
     script_description: str
+    script_category: str
+    script_creation_method: str
     registered_tool_name: str
     validation_status: str
     missing_fields: List[str]
@@ -219,6 +221,8 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
         script_path="",
         script_name="",
         script_description="",
+        script_category="",
+        script_creation_method="",
         registered_tool_name="",
         validation_status="",
         missing_fields=[],

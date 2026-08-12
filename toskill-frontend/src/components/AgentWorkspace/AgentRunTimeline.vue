@@ -56,7 +56,11 @@
                   <span>{{ field.label }}<em v-if="field.required"> *</em></span>
                   <select v-if="field.options?.length" v-model="field.value">
                     <option value="" disabled>请选择...</option>
-                    <option v-for="option in field.options" :key="option" :value="option">{{ option }}</option>
+                    <option
+                      v-for="option in field.options"
+                      :key="typeof option === 'object' ? option.value : option"
+                      :value="typeof option === 'object' ? option.value : option"
+                    >{{ typeof option === 'object' ? option.label : option }}</option>
                   </select>
                   <textarea
                     v-else-if="field.validation === 'python_code'"
