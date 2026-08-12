@@ -40,6 +40,7 @@ describe('ToolsView', () => {
     apiMock.getTools.mockReset().mockResolvedValue({ data: { tools } })
     apiMock.registerCustomTool.mockReset()
     apiMock.deleteCustomTool.mockReset().mockResolvedValue({ data: {} })
+    apiMock.executeTool.mockReset()
     wsMock.handlers.clear()
     wsMock.send.mockClear()
     vi.spyOn(window, 'confirm').mockReturnValue(true)
@@ -112,6 +113,30 @@ describe('ToolsView', () => {
     expect(apiMock.registerCustomTool).toHaveBeenCalledWith(expect.objectContaining({
       creation_method: 'ai_generate',
     }))
+    wrapper.unmount()
+  })
+
+  it('shows collected fields instead of vulnerability analysis for information tools', async () => {
+    apiMock.executeTool.mockResolvedValue({
+      data: {
+        tool_name: 'port_scan',
+        tool_category: 'info_collection',
+        target: 'example.test',
+        timestamp: '2026-08-13T00:00:00',
+        information_summary: [{ label: '开放端口', value: '80、443' }],
+        analysis: { summary: '未发现任何漏洞', analysis: '未发现漏洞' }
+      }
+    })
+    const wrapper = await mountView()
+    await wrapper.get('.tool-card').trigger('click')
+    await wrapper.get('#toolTarget').setValue('example.test')
+    await wrapper.get('#executeToolBtn').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('收集到的信息')
+    expect(wrapper.text()).toContain('开放端口')
+    expect(wrapper.text()).toContain('80、443')
+    expect(wrapper.text()).not.toContain('未发现漏洞')
     wrapper.unmount()
   })
 })

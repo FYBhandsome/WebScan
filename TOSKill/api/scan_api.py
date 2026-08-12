@@ -22,6 +22,7 @@ from TOSKill.AI.tools import (
     get_tool_metadata, list_tool_metadata, script_manager
 )
 from TOSKill.analysis.result_analyzer import get_analyzer
+from TOSKill.tools.tool_categories import information_items, tool_category
 from TOSKill.utils.target import normalize_scan_target
 
 logger = logging.getLogger(__name__)
@@ -439,11 +440,14 @@ async def api_execute_tool(request: ToolExecuteRequest):
         result = tool.invoke(target)
         response_data = {
             "tool_name": request.tool_name,
+            "tool_category": tool_category(request.tool_name),
             "target": target,
             "success": True,
             "result": result,
             "timestamp": datetime.now().isoformat()
         }
+        if response_data["tool_category"] == "info_collection":
+            response_data["information_summary"] = information_items(request.tool_name, result)
 
         if request.analyze:
             try:
@@ -471,6 +475,7 @@ async def api_execute_tool(request: ToolExecuteRequest):
     except Exception as e:
         error_data = {
             "tool_name": request.tool_name,
+            "tool_category": tool_category(request.tool_name),
             "target": target,
             "success": False,
             "error": str(e),

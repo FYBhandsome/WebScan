@@ -111,8 +111,19 @@
               </div>
             </div>
 
-            <!-- 分析报告：总结 + 详细分析，均以 Markdown 渲染 -->
-            <div v-if="analysisContent" class="result-report-section">
+            <div v-if="executionCategory === 'info_collection'" class="result-report-section information-output">
+              <h4>收集到的信息</h4>
+              <dl v-if="executionInformationItems.length" class="information-list">
+                <div v-for="item in executionInformationItems" :key="item.label" class="result-row">
+                  <dt class="result-label">{{ item.label }}</dt>
+                  <dd class="result-value">{{ item.value }}</dd>
+                </div>
+              </dl>
+              <p v-else class="result-empty">信息收集已完成，工具未返回可展示的信息。</p>
+            </div>
+
+            <!-- 漏洞类工具才展示漏洞分析，避免信息工具出现“未发现漏洞”。 -->
+            <div v-else-if="analysisContent" class="result-report-section">
               <div class="report-summary markdown-body" v-html="renderedSummary"></div>
               <div class="report-analysis markdown-body" v-html="renderedAnalysis"></div>
             </div>
@@ -658,6 +669,16 @@ const analysisContent = computed(() => {
   }
 })
 
+const executionCategory = computed(() => {
+  if (execution.resultData?.tool_category) return execution.resultData.tool_category
+  return toolsList.value.find(tool => tool.name === execution.toolName)?.category || 'vuln_scan'
+})
+
+const executionInformationItems = computed(() => {
+  const items = execution.resultData?.information_summary
+  return Array.isArray(items) ? items : []
+})
+
 const renderedSummary = computed(() => {
   const text = analysisContent.value?.summary
   if (!text) return ''
@@ -916,6 +937,10 @@ const runTool = async () => {
   padding: 24px 28px;
   margin-top: 16px;
 }
+.information-output h4 { margin-bottom: 12px; font-size: 15px; }
+.information-list { margin: 0; }
+.information-list dd { margin: 0; overflow-wrap: anywhere; }
+.result-empty { margin: 0; color: var(--text-secondary); }
 
 .report-summary {
   margin-bottom: 24px;

@@ -127,9 +127,17 @@ class TestToolsAPI:
             "analyze": False,
         })
         assert executed.status_code == 200
-        assert executed.json()["data"]["result"]["data"]["target"] == (
+        execution_data = executed.json()["data"]
+        assert execution_data["result"]["data"]["target"] == (
             "https://example.com/path"
         )
+        assert execution_data["tool_category"] == "info_collection"
+        collected = {
+            item["label"]: item["value"]
+            for item in execution_data["information_summary"]
+        }
+        assert collected["target"] == "https://example.com/path"
+        assert collected["items"] == "asset"
 
         source = client.get("/api/scripts/custom_api_asset_test/source")
         assert source.status_code == 200
@@ -213,6 +221,8 @@ class TestToolsAPI:
 
         assert response.status_code == 200
         assert response.json()["data"]["target"] == target
+        assert response.json()["data"]["tool_category"] == "vuln_scan"
+        assert "information_summary" not in response.json()["data"]
         tool.invoke.assert_called_once_with(target)
 
 

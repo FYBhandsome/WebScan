@@ -19,7 +19,12 @@ from TOSKill.AI.auto_scan import AutoScanRunner
 from TOSKill.AI.core import CHAT_SYSTEM_PROMPT
 from TOSKill.AI.decision_context import build_decision_context
 from TOSKill.AI.tools import get_tool_by_name, get_all_tool_names
-from TOSKill.tools.tool_categories import collect_information_results
+from TOSKill.tools.tool_categories import (
+    collect_information_results,
+    information_items,
+    information_summary_text,
+    tool_category,
+)
 from TOSKill.AI.log_collector import log_collector
 from TOSKill.utils.error_handler import create_error_response, format_tool_error, ErrorSource, ErrorCategory
 from TOSKill.utils.log_writer import log_info, log_warn, log_error, log_success, log_debug
@@ -1248,7 +1253,17 @@ class AIChatManager:
         try:
             await self._send(session_id, {"type": "tool_execution_started", "payload": {"tool_name": tool_name, "target": target}})
             result = tool.invoke(target)
-            await self._send(session_id, {"type": "tool_execution_completed", "payload": {"tool_name": tool_name, "result": result}})
+            category = tool_category(tool_name)
+            await self._send(session_id, {
+                "type": "tool_execution_completed",
+                "payload": {
+                    "tool_name": tool_name,
+                    "tool_category": category,
+                    "result": result,
+                    "information_summary": information_items(tool_name, result) if category == "info_collection" else [],
+                    "result_summary": information_summary_text(tool_name, result) if category == "info_collection" else "",
+                },
+            })
         except Exception as e:
             await self._send_error(session_id, f"工具执行失败: {str(e)}", tool_name=tool_name)
     

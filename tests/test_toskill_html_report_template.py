@@ -90,6 +90,38 @@ def test_report_type_selects_full_template_and_keeps_categories_separate():
     assert "合规影响" not in html
 
 
+def test_full_report_classifies_dynamic_information_tool_by_runtime_category(monkeypatch):
+    from TOSKill.tools.report import scan_report_template
+
+    original_is_information = scan_report_template.is_information_tool
+    original_information_items = scan_report_template.information_items
+    monkeypatch.setattr(
+        scan_report_template,
+        "is_information_tool",
+        lambda name: name == "custom_asset_probe" or original_is_information(name),
+    )
+    monkeypatch.setattr(
+        scan_report_template,
+        "information_items",
+        lambda name, result: (
+            [{"label": "资产线索", "value": "admin.example.test"}]
+            if name == "custom_asset_probe"
+            else original_information_items(name, result)
+        ),
+    )
+    kwargs = _sample_kwargs()
+    kwargs["tool_results"]["custom_asset_probe"] = {
+        "success": True,
+        "data": {"assets": ["admin.example.test"]},
+    }
+
+    html = HTMLReportGenerator().generate_report(**kwargs, report_type="full_scan")
+
+    assert "custom_asset_probe" in html
+    assert "资产线索" in html
+    assert "admin.example.test" in html
+
+
 def test_toskill_html_report_escapes_untrusted_scan_data():
     attack = "<img src=x onerror=alert(1)>"
     kwargs = _sample_kwargs()

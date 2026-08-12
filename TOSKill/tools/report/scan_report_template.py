@@ -10,12 +10,11 @@ from html import escape
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from TOSKill.tools.tool_categories import (
-    INFO_COLLECTION_TOOL_NAMES,
     information_items,
+    is_information_tool,
+    is_vulnerability_tool,
     tool_display_name,
 )
-
-INFO_COLLECTION_TOOLS = INFO_COLLECTION_TOOL_NAMES
 
 SEVERITY = {
     "critical": ("严重", "critical"), "high": ("高危", "high"),
@@ -79,7 +78,7 @@ def _information_rows(tool_name: str, result: Any) -> List[Tuple[str, Any]]:
 def _information_cards(tool_results: Dict[str, Any]) -> List[Dict[str, Any]]:
     cards = []
     for tool_name, result in tool_results.items():
-        if tool_name not in INFO_COLLECTION_TOOLS or not _is_success(result):
+        if not is_information_tool(tool_name) or not _is_success(result):
             continue
         rows = _information_rows(tool_name, result)
         if rows:
@@ -99,7 +98,7 @@ def _list_count(result: Any, *keys: str) -> int:
 
 
 def _information_metrics(tool_results: Dict[str, Any], cards: List[Dict[str, Any]]) -> List[Tuple[str, str, str]]:
-    info_results = {name: result for name, result in tool_results.items() if name in INFO_COLLECTION_TOOLS}
+    info_results = {name: result for name, result in tool_results.items() if is_information_tool(name)}
     completed = sum(1 for result in info_results.values() if _is_success(result))
     ports = _list_count(info_results.get("port_scan", {}), "open_ports", "ports", "total_count")
     subdomains = _list_count(info_results.get("subdomain_scan", {}), "subdomains", "total_count")
@@ -191,7 +190,7 @@ def _information_section(tool_results: Dict[str, Any], include_status: bool) -> 
     if include_status:
         status_items = []
         for tool_name, result in tool_results.items():
-            if tool_name not in INFO_COLLECTION_TOOLS:
+            if not is_information_tool(tool_name):
                 continue
             state = "已完成" if _is_success(result) else "失败"
             state_class = "completed" if _is_success(result) else "failed"
@@ -377,8 +376,8 @@ def render_scan_report(
         parts.extend([_risk_section(normalized_vulns, ai_analysis), _confidence_section(confidence), _vulnerability_section(normalized_vulns), _remediation_section(normalized_vulns, ai_analysis), _ai_section(normalized_vulns, ai_analysis)])
     else:
         total_tools = len(tool_results)
-        info_tools = sum(1 for name in tool_results if name in INFO_COLLECTION_TOOLS)
-        vuln_tools = total_tools - info_tools
+        info_tools = sum(1 for name in tool_results if is_information_tool(name))
+        vuln_tools = sum(1 for name in tool_results if is_vulnerability_tool(name))
         parts.append(f'''<section class="card info-module"><h2 class="module-title">{_icon()}扫描执行概览</h2><div class="overview-grid">
           <div class="overview-item"><span class="overview-value">{total_tools}</span><span class="overview-label">已执行扫描工具</span><span class="overview-tip">信息收集与漏洞验证</span></div>
           <div class="overview-item"><span class="overview-value">{info_tools}</span><span class="overview-label">信息收集工具</span><span class="overview-tip">资产、服务与应用攻击面</span></div>

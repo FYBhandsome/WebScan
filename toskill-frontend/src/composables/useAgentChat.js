@@ -2187,16 +2187,21 @@ export function useAgentChat() {
 
       case 'script_generated':
         const genToolName = data.payload?.tool_name || ''
+        const isGeneratedPreview = data.payload?.registered === false
         const genCategoryLabel = data.payload?.category === 'vuln_scan' ? '漏洞扫描' : '信息收集'
         scriptGenerationProgress.value = { stage: 'completed', progress: 100, message: '脚本生成成功' }
-        addInfoBlock(`脚本生成完成: ${genToolName}；已保存至“工具 → ${genCategoryLabel} → 自定义工具”`)
-        saveScriptHistory({
-          tool_name: genToolName,
-          description: data.payload?.description || '',
-          source: 'generate',
-          category: data.payload?.category || '',
-          script_content: data.payload?.script_code || ''
-        })
+        addInfoBlock(isGeneratedPreview
+          ? `脚本预览已生成: ${genToolName}；确认后才会保存至工具库`
+          : `脚本生成完成: ${genToolName}；已保存至“工具 → ${genCategoryLabel} → 自定义工具”`)
+        if (!isGeneratedPreview) {
+          saveScriptHistory({
+            tool_name: genToolName,
+            description: data.payload?.description || '',
+            source: 'generate',
+            category: data.payload?.category || '',
+            script_content: data.payload?.script_code || ''
+          })
+        }
         upsertRunStep(
           { step_id: `script-generated:${genToolName}`, tool: genToolName },
           {
@@ -2208,7 +2213,7 @@ export function useAgentChat() {
         isTyping.value = false
         isThinking.value = false
         currentThinking.value = ''
-        if (pendingGenerateScript.value) {
+        if (pendingGenerateScript.value && !isGeneratedPreview) {
           const target = scriptQueue.value[currentScriptIndex.value]?.target || ''
           scriptQueue.value.splice(currentScriptIndex.value + 1, 0, { tool_name: genToolName, status: 'pending', target })
           addInfoBlock(`新脚本 "${genToolName}" 已加入执行队列，继续循环`)
