@@ -41,6 +41,20 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info(f"启动 {settings.APP_NAME} v{settings.APP_VERSION}")
     logger.info(f"服务地址: http://{settings.HOST}:{settings.PORT}")
+
+    try:
+        from TOSKill.AI.tools import script_manager
+        restore_result = script_manager.restore_registered_tools()
+        logger.info(
+            "自定义工具恢复完成: restored=%s, removed=%s, failed=%s",
+            len(restore_result.get("restored", [])),
+            len(restore_result.get("removed", [])),
+            len(restore_result.get("failed", [])),
+        )
+    except Exception as e:
+        # A broken custom script must not prevent the scanner service itself
+        # from starting; restore failures remain visible in logs and API data.
+        logger.warning(f"恢复自定义工具失败: {e}")
     
     from TOSKill.AI.model_check import verify_model_connectivity
     result = verify_model_connectivity()

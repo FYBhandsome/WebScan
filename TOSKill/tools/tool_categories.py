@@ -77,6 +77,15 @@ def tool_category(tool_name: str) -> str:
         return "info_collection"
     if tool_name in VULN_SCAN_TOOL_NAMES:
         return "vuln_scan"
+    # Dynamic tools are deliberately not added to the immutable built-in
+    # sets. Resolve their persisted metadata at runtime instead.
+    try:
+        from TOSKill.AI.tools import get_tool_metadata
+        metadata = get_tool_metadata(tool_name)
+        if metadata and metadata.get("source") == "custom":
+            return metadata.get("category", "other")
+    except (ImportError, RuntimeError):
+        pass
     return "other"
 
 

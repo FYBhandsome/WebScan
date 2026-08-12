@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -18,7 +18,8 @@ from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm
 from TOSKill.AI.state import create_initial_state, append_chat, update_state, get_state_summary
 from TOSKill.AI.tools import (
     TOOL_MAP, get_tool_by_name, get_all_tool_names,
-    INFO_COLLECTION_TOOLS, VULN_SCAN_TOOLS, clean_target, clean_target_for_tool
+    INFO_COLLECTION_TOOLS, VULN_SCAN_TOOLS, clean_target, clean_target_for_tool,
+    get_tool_metadata, list_tool_metadata, script_manager
 )
 from TOSKill.analysis.result_analyzer import get_analyzer
 from TOSKill.utils.target import normalize_scan_target
@@ -50,7 +51,7 @@ class ToolExecuteRequest(BaseModel):
     @field_validator("tool_name")
     @classmethod
     def validate_tool_name(cls, v: str) -> str:
-        if v not in TOOL_MAP:
+        if not get_tool_by_name(v):
             valid_tools = ", ".join(list(TOOL_MAP.keys())[:10]) + "..."
             raise ValueError(f"工具 '{v}' 不存在。可用工具: {valid_tools}")
         return v
@@ -64,6 +65,31 @@ class ToolExecuteRequest(BaseModel):
 class BatchToolExecuteRequest(BaseModel):
     tool_names: List[str] = Field(..., description="工具名称列表")
     target: str = Field(..., description="扫描目标")
+
+
+class CustomToolRegisterRequest(BaseModel):
+    tool_name: str = Field(..., min_length=1, max_length=64, description="工具名称")
+    script_content: str = Field(..., min_length=1, description="Python脚本内容")
+    description: str = Field(default="", max_length=500, description="工具简介")
+    category: str = Field(..., description="info_collection 或 vuln_scan")
+    creation_method: str = Field(default="upload", description="upload 或 ai_generate")
+    include_in_default_scan: bool = Field(default=False, description="自定义工具固定为false")
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, value: str) -> str:
+        normalized = str(value).strip().lower()
+        if normalized not in {"info_collection", "vuln_scan"}:
+            raise ValueError("category 必须是 info_collection 或 vuln_scan")
+        return normalized
+
+    @field_validator("creation_method")
+    @classmethod
+    def validate_creation_method(cls, value: str) -> str:
+        normalized = str(value).strip().lower()
+        if normalized not in {"upload", "ai_generate"}:
+            raise ValueError("creation_method 必须是 upload 或 ai_generate")
+        return normalized
 
 
 class ChatRequest(BaseModel):
@@ -337,18 +363,71 @@ async def api_full_scan(request: ScanRequest):
 # ==================== 工具执行接口 ====================
 
 @router.get("/tools", response_model=APIResponse)
-async def api_list_tools():
-    tools = [{"name": n, "description": getattr(t, 'description', '')} for n, t in TOOL_MAP.items()]
+async def api_list_tools(
+    category: Optional[str] = Query(default=None),
+    source: Optional[str] = Query(default=None),
+):
+    if category and category not in {"info_collection", "vuln_scan", "poc", "other"}:
+        raise HTTPException(status_code=400, detail="不支持的工具类别")
+    if source and source not in {"system", "custom"}:
+        raise HTTPException(status_code=400, detail="不支持的工具来源")
+    tools = list_tool_metadata(category=category, source=source)
     return APIResponse(data={"tools": tools, "count": len(tools)})
 
 
 @router.get("/tools/categories", response_model=APIResponse)
 async def api_list_tools_by_category():
+    tools = list_tool_metadata()
     return APIResponse(data={
-        "info_collection": [t.name for t in INFO_COLLECTION_TOOLS],
-        "vuln_scan": [t.name for t in VULN_SCAN_TOOLS],
-        "all": list(TOOL_MAP.keys())
+        "info_collection": [t["name"] for t in tools if t["category"] == "info_collection"],
+        "vuln_scan": [t["name"] for t in tools if t["category"] == "vuln_scan"],
+        "system": [t["name"] for t in tools if t["source"] == "system"],
+        "custom": [t["name"] for t in tools if t["source"] == "custom"],
+        "all": [t["name"] for t in tools],
     })
+
+
+@router.post("/tools/custom", response_model=APIResponse)
+async def api_register_custom_tool(request: CustomToolRegisterRequest):
+    result = script_manager.register_script_as_tool(
+        script_content=request.script_content,
+        script_name=request.tool_name,
+        description=request.description or "自定义扫描工具",
+        category=request.category,
+        creation_method=request.creation_method,
+        include_in_default_scan=request.include_in_default_scan,
+    )
+    if not result.get("success"):
+        code = result.get("error_code", "CUSTOM_TOOL_REGISTER_FAILED")
+        status = 409 if code in {
+            "SYSTEM_TOOL_NAME_CONFLICT", "CUSTOM_TOOL_NAME_CONFLICT"
+        } else 400
+        raise HTTPException(
+            status_code=status,
+            detail={"message": result.get("error", "注册失败"), "error_code": code},
+        )
+    return APIResponse(
+        message=f"自定义工具 '{request.tool_name}' 注册成功",
+        data={"tool": result["metadata"]},
+    )
+
+
+@router.delete("/tools/{tool_name}", response_model=APIResponse)
+async def api_delete_custom_tool(tool_name: str):
+    result = script_manager.unregister_custom_tool(tool_name)
+    if not result.get("success"):
+        code = result.get("error_code", "CUSTOM_TOOL_DELETE_FAILED")
+        if code == "SYSTEM_TOOL_DELETE_FORBIDDEN":
+            status = 403
+        elif code == "CUSTOM_TOOL_NOT_FOUND":
+            status = 404
+        else:
+            status = 400
+        raise HTTPException(
+            status_code=status,
+            detail={"message": result.get("error", "删除失败"), "error_code": code},
+        )
+    return APIResponse(message=f"自定义工具 '{tool_name}' 已删除", data={"tool_name": tool_name})
 
 
 @router.post("/tools/execute", response_model=APIResponse)
@@ -741,6 +820,9 @@ async def get_script_history(limit: int = 50):
 @script_router.get("/{tool_name}/source", response_model=APIResponse)
 async def get_script_source(tool_name: str):
     """获取脚本源码"""
+    custom_tool = script_manager.get_custom_tool_record(tool_name, include_script=True)
+    if custom_tool:
+        return APIResponse(data={"script": custom_tool})
     script = memory_store.get_script_by_name(tool_name)
     if not script:
         raise HTTPException(status_code=404, detail=f"脚本 '{tool_name}' 不存在")
@@ -749,9 +831,18 @@ async def get_script_source(tool_name: str):
 @script_router.delete("/{tool_name}", response_model=APIResponse)
 async def delete_script(tool_name: str):
     """删除脚本"""
-    success = memory_store.delete_script_history(tool_name)
-    if not success:
-        raise HTTPException(status_code=500, detail="删除脚本失败")
+    result = script_manager.unregister_custom_tool(tool_name)
+    if not result.get("success"):
+        code = result.get("error_code")
+        if code == "SYSTEM_TOOL_DELETE_FORBIDDEN":
+            raise HTTPException(status_code=403, detail=result.get("error"))
+        if code != "CUSTOM_TOOL_NOT_FOUND":
+            raise HTTPException(status_code=500, detail=result.get("error", "删除脚本失败"))
+        # Preserve support for old history-only records created before the
+        # persistent custom tool registry existed.
+        if not memory_store.get_script_by_name(tool_name):
+            raise HTTPException(status_code=404, detail=f"脚本 '{tool_name}' 不存在")
+    memory_store.delete_script_history(tool_name)
     return APIResponse(message=f"脚本 '{tool_name}' 已删除")
 
 @script_router.post("/save", response_model=APIResponse)

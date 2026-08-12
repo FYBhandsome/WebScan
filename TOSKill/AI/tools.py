@@ -27,10 +27,13 @@ from typing import Dict, Any, List, Optional, TypedDict, Callable
 from langchain.tools import tool
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
+from pathlib import Path
 import logging
 import re
 import ipaddress
 import socket
+import sqlite3
+import threading
 
 # 预先导入所有工具模块，避免并发执行时的模块导入死锁
 from TOSKill.tools.info_collection.baseinfo import baseinfo
@@ -354,6 +357,12 @@ URL_PRESERVING_TOOLS = frozenset({
 def clean_target_for_tool(tool_name: str, target: str) -> str:
     """Prepare a target using the input shape expected by a specific tool."""
     if tool_name in URL_PRESERVING_TOOLS:
+        return normalize_scan_target(target)
+    # Uploaded tools define their own target handling contract. Preserve the
+    # normalized URL so an HTTP script does not unexpectedly lose scheme,
+    # path or query parameters merely because its name is not built in.
+    manager = globals().get("script_manager")
+    if manager and tool_name in manager.get_registered_scripts():
         return normalize_scan_target(target)
     return clean_target(target)
 
@@ -1528,6 +1537,14 @@ ALL_TOOLS = INFO_COLLECTION_TOOLS + VULN_SCAN_TOOLS + POC_TOOLS
 
 TOOL_MAP = {t.name: t for t in ALL_TOOLS}
 
+# Keep the built-in registry immutable from the perspective of custom tools.
+# Dynamic tools remain directly executable through TOOL_MAP, but are not added
+# to these collections so they cannot silently change default scan plans.
+SYSTEM_INFO_TOOL_NAMES = frozenset(t.name for t in INFO_COLLECTION_TOOLS)
+SYSTEM_VULN_TOOL_NAMES = frozenset(t.name for t in VULN_SCAN_TOOLS)
+SYSTEM_POC_TOOL_NAMES = frozenset(t.name for t in POC_TOOLS)
+SYSTEM_TOOL_NAMES = SYSTEM_INFO_TOOL_NAMES | SYSTEM_VULN_TOOL_NAMES | SYSTEM_POC_TOOL_NAMES
+
 TOOL_SEQUENCE_INFO = [
     "baseinfo_scan",
     "port_scan",
@@ -1563,6 +1580,11 @@ TOOL_SEQUENCE_VULN = [
 
 def get_tool_by_name(name: str):
     """根据名称获取工具"""
+    if name not in TOOL_MAP:
+        try:
+            script_manager.restore_registered_tools()
+        except (NameError, sqlite3.Error, OSError):
+            pass
     return TOOL_MAP.get(name)
 
 
@@ -1573,7 +1595,7 @@ def get_all_tool_names() -> List[str]:
 
 def is_tool_exists(tool_name: str) -> bool:
     """检查工具是否存在"""
-    return tool_name in TOOL_MAP
+    return get_tool_by_name(tool_name) is not None
 
 
 def get_tools_by_mode(mode: str) -> List:
@@ -1600,7 +1622,70 @@ def get_tool_sequence(mode: str) -> List[str]:
 
 def get_custom_tool_names() -> List[str]:
     """获取自定义工具名称列表"""
-    return [name for name in TOOL_MAP.keys() if name.startswith('custom_') or name.startswith('ai_gen_')]
+    return list(script_manager.get_registered_scripts().keys())
+
+
+def get_tool_metadata(tool_name: str) -> Optional[Dict[str, Any]]:
+    """Return the canonical metadata used by API, workflow and UI."""
+    if tool_name in SYSTEM_INFO_TOOL_NAMES:
+        category = "info_collection"
+    elif tool_name in SYSTEM_VULN_TOOL_NAMES:
+        category = "vuln_scan"
+    elif tool_name in SYSTEM_POC_TOOL_NAMES:
+        category = "poc"
+    else:
+        custom = script_manager.get_registered_scripts().get(tool_name)
+        if not custom:
+            return None
+        return {
+            "name": tool_name,
+            "description": custom.get("description", ""),
+            "category": custom.get("category", "other"),
+            "source": "custom",
+            "creation_method": custom.get("creation_method", "upload"),
+            "script_path": custom.get("script_path") or custom.get("path", ""),
+            "enabled": bool(custom.get("enabled", True)),
+            "include_in_default_scan": bool(custom.get("include_in_default_scan", False)),
+            "created_at": custom.get("created_at") or custom.get("registered_at"),
+            "updated_at": custom.get("updated_at") or custom.get("registered_at"),
+            "is_custom": True,
+        }
+
+    tool = TOOL_MAP.get(tool_name)
+    return {
+        "name": tool_name,
+        "description": getattr(tool, "description", "") if tool else "",
+        "category": category,
+        "source": "system",
+        "creation_method": "builtin",
+        "script_path": "",
+        "enabled": True,
+        "include_in_default_scan": True,
+        "created_at": None,
+        "updated_at": None,
+        "is_custom": False,
+    }
+
+
+def list_tool_metadata(
+    category: Optional[str] = None,
+    source: Optional[str] = None,
+    synchronize: bool = True,
+) -> List[Dict[str, Any]]:
+    """List system and custom tools using one stable response model."""
+    if synchronize:
+        script_manager.restore_registered_tools()
+    records = []
+    for name in TOOL_MAP:
+        metadata = get_tool_metadata(name)
+        if not metadata:
+            continue
+        if category and metadata["category"] != category:
+            continue
+        if source and metadata["source"] != source:
+            continue
+        records.append(metadata)
+    return records
 
 
 @tool
@@ -1619,7 +1704,9 @@ class ScriptManager:
     
     _instance = None
     _scripts_dir = None
+    _db_path = None
     _registered_scripts: Dict[str, Dict] = {}
+    _registry_lock = threading.RLock()
     
     @classmethod
     def get_instance(cls):
@@ -1628,7 +1715,166 @@ class ScriptManager:
             from TOSKill.config import settings
             cls._scripts_dir = settings.CUSTOM_SCRIPTS_PATH
             cls._scripts_dir.mkdir(parents=True, exist_ok=True)
+            cls._instance._ensure_registry_schema()
         return cls._instance
+
+    def _get_db_path(self) -> Path:
+        if self._db_path:
+            return Path(self._db_path)
+        from TOSKill.config import settings
+        return Path(settings.DB_PATH)
+
+    def _connect_registry(self) -> sqlite3.Connection:
+        db_path = self._get_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path), timeout=10)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _ensure_registry_schema(self) -> None:
+        with self._registry_lock, self._connect_registry() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS custom_tools (
+                    tool_name TEXT PRIMARY KEY,
+                    script_content TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    category TEXT NOT NULL,
+                    creation_method TEXT NOT NULL DEFAULT 'upload',
+                    script_path TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    include_in_default_scan INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_custom_tools_category "
+                "ON custom_tools(category, enabled)"
+            )
+
+    @staticmethod
+    def _normalize_category(category: str) -> str:
+        normalized = str(category or "").strip().lower()
+        if normalized == "poc":
+            return "vuln_scan"
+        if normalized in {"info_collection", "vuln_scan"}:
+            return normalized
+        # Transitional compatibility for clients that do not yet send the new
+        # category field. New REST registrations reject this value explicitly.
+        return "other"
+
+    @staticmethod
+    def _normalize_creation_method(creation_method: str) -> str:
+        normalized = str(creation_method or "upload").strip().lower()
+        return normalized if normalized in {"upload", "ai_generate"} else "upload"
+
+    def _metadata_from_row(self, row: sqlite3.Row) -> Dict[str, Any]:
+        return {
+            "name": row["tool_name"],
+            "description": row["description"],
+            "category": row["category"],
+            "source": "custom",
+            "creation_method": row["creation_method"],
+            "script_path": row["script_path"],
+            "enabled": bool(row["enabled"]),
+            "include_in_default_scan": bool(row["include_in_default_scan"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "is_custom": True,
+        }
+
+    def _load_persisted_rows(self, enabled_only: bool = True) -> List[sqlite3.Row]:
+        self._ensure_registry_schema()
+        sql = "SELECT * FROM custom_tools"
+        if enabled_only:
+            sql += " WHERE enabled = 1"
+        sql += " ORDER BY created_at ASC"
+        with self._registry_lock, self._connect_registry() as conn:
+            return list(conn.execute(sql).fetchall())
+
+    def _build_runtime_tool(self, script_path: Path, script_name: str, description: str):
+        import importlib.util
+
+        try:
+            from langchain_core.tools import Tool
+        except ImportError:
+            from langchain.tools import Tool
+
+        def tool_func(target: str):
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    f"toskill_custom_{script_name}", str(script_path)
+                )
+                if not spec or not spec.loader:
+                    return {"success": False, "error": "无法加载脚本"}
+
+                module = importlib.util.module_from_spec(spec)
+                safe_builtins = {
+                    'print': print, 'len': len, 'range': range,
+                    'str': str, 'int': int, 'float': float, 'bool': bool,
+                    'list': list, 'dict': dict, 'set': set, 'tuple': tuple,
+                    'True': True, 'False': False, 'None': None,
+                    'isinstance': isinstance, 'type': type,
+                    'Exception': Exception, 'ValueError': ValueError,
+                    'TypeError': TypeError, 'KeyError': KeyError,
+                    'ImportError': ImportError, 'AttributeError': AttributeError,
+                    'min': min, 'max': max, 'sum': sum, 'sorted': sorted,
+                    'abs': abs, 'round': round, 'enumerate': enumerate,
+                    'zip': zip, 'map': map, 'filter': filter, 'any': any, 'all': all,
+                    'hasattr': hasattr, 'getattr': getattr, 'setattr': setattr,
+                    '__import__': lambda name, *args, **kwargs: __import__(name, *args, **kwargs)
+                }
+                module.__builtins__ = safe_builtins
+                spec.loader.exec_module(module)
+
+                logger.info(f"自定义脚本执行: {script_name} -> {target}")
+                if hasattr(module, 'run'):
+                    return module.run(target)
+                if hasattr(module, 'scan'):
+                    return module.scan(target)
+                return {"success": False, "error": "脚本缺少run或scan函数"}
+            except Exception as exc:
+                logger.error(f"自定义脚本 {script_name} 执行失败: {exc}")
+                return {"success": False, "error": str(exc)}
+
+        return Tool(name=script_name, description=description, func=tool_func)
+
+    def restore_registered_tools(self) -> Dict[str, Any]:
+        """Restore enabled custom tools and synchronize this worker's registry."""
+        restored = []
+        removed = []
+        failed = []
+        with self._registry_lock:
+            rows = self._load_persisted_rows(enabled_only=True)
+            persisted_names = {row["tool_name"] for row in rows}
+            for name in set(self._registered_scripts) - persisted_names:
+                tool = TOOL_MAP.pop(name, None)
+                while tool in ALL_TOOLS:
+                    ALL_TOOLS.remove(tool)
+                self._registered_scripts.pop(name, None)
+                removed.append(name)
+
+            for row in rows:
+                name = row["tool_name"]
+                if name in SYSTEM_TOOL_NAMES:
+                    failed.append({"tool_name": name, "error": "与系统工具重名"})
+                    continue
+                metadata = self._metadata_from_row(row)
+                script_path = Path(row["script_path"])
+                try:
+                    if not script_path.exists():
+                        script_path.parent.mkdir(parents=True, exist_ok=True)
+                        script_path.write_text(row["script_content"], encoding="utf-8")
+                    if name not in TOOL_MAP:
+                        TOOL_MAP[name] = self._build_runtime_tool(
+                            script_path, name, row["description"]
+                        )
+                        restored.append(name)
+                    self._registered_scripts[name] = metadata
+                except Exception as exc:
+                    logger.error(f"恢复自定义工具 {name} 失败: {exc}")
+                    failed.append({"tool_name": name, "error": str(exc)})
+        return {"restored": restored, "removed": removed, "failed": failed}
     
     def _get_llm(self):
         """获取LLM实例 - 使用统一客户端"""
@@ -1671,106 +1917,172 @@ class ScriptManager:
             "output_type": "其他"
         }
     
-    def register_script_as_tool(self, script_content: str, script_name: str, 
-                                 description: str, category: str = "custom") -> Dict:
-        """将脚本注册为LangChain工具"""
-        from pathlib import Path
-        from datetime import datetime
-        import importlib.util
-
-        # LangChain 1.x moved the Tool implementation to langchain_core. Keep
-        # a fallback for older installations, but never let an import failure
-        # escape before the registration error can be reported to the client.
+    def register_script_as_tool(
+        self,
+        script_content: str,
+        script_name: str,
+        description: str,
+        category: str = "custom",
+        creation_method: str = "upload",
+        include_in_default_scan: bool = False,
+    ) -> Dict:
+        """Persist and register one custom tool without changing default scans."""
         try:
-            from langchain_core.tools import Tool
-        except ImportError:
-            try:
-                from langchain.tools import Tool
-            except ImportError as exc:
-                logger.error(f"加载 LangChain Tool 失败: {exc}")
+            from ..AI.script_safety import sanitize_script_name, validate_script_safety
+            safe_name, name_error = sanitize_script_name(script_name)
+            if name_error:
                 return {
                     "success": False,
-                    "error": f"脚本工具注册依赖不可用: {exc}",
-                    "error_code": "SCRIPT_TOOL_IMPORT_FAILED",
+                    "error": f"脚本名称不合法: {name_error}",
+                    "error_code": "INVALID_SCRIPT_NAME",
                 }
-        
-        try:
-            from ..AI.script_safety import validate_script_safety
+            script_name = safe_name
             is_safe, safety_err = validate_script_safety(script_content)
             if not is_safe:
-                return {"success": False, "error": f"脚本安全审查未通过: {safety_err}"}
-        except ImportError:
-            pass
-        
-        try:
-            script_path = self._scripts_dir / f"{script_name}.py"
-            with open(script_path, 'w', encoding='utf-8') as f:
-                f.write(script_content)
-            
-            def create_tool_func(script_path, script_name):
-                def tool_func(target: str):
-                    try:
-                        spec = importlib.util.spec_from_file_location("custom_module", script_path)
-                        if not spec or not spec.loader:
-                            return {"success": False, "error": "无法加载脚本"}
-                        
-                        module = importlib.util.module_from_spec(spec)
-                        safe_builtins = {
-                            'print': print, 'len': len, 'range': range,
-                            'str': str, 'int': int, 'float': float, 'bool': bool,
-                            'list': list, 'dict': dict, 'set': set, 'tuple': tuple,
-                            'True': True, 'False': False, 'None': None,
-                            'isinstance': isinstance, 'type': type,
-                            'Exception': Exception, 'ValueError': ValueError,
-                            'TypeError': TypeError, 'KeyError': KeyError,
-                            'ImportError': ImportError, 'AttributeError': AttributeError,
-                            'min': min, 'max': max, 'sum': sum, 'sorted': sorted,
-                            'abs': abs, 'round': round, 'enumerate': enumerate,
-                            'zip': zip, 'map': map, 'filter': filter, 'any': any, 'all': all,
-                            'hasattr': hasattr, 'getattr': getattr, 'setattr': setattr,
-                            '__import__': lambda name, *args, **kwargs: __import__(name, *args, **kwargs)
-                        }
-                        module.__builtins__ = safe_builtins
-                        spec.loader.exec_module(module)
-                        
-                        logger.info(f"自定义脚本执行: {script_name} -> {target}")
-                        
-                        if hasattr(module, 'run'):
-                            return module.run(target)
-                        elif hasattr(module, 'scan'):
-                            return module.scan(target)
-                        else:
-                            return {"success": False, "error": "脚本缺少run或scan函数"}
-                    except Exception as e:
-                        logger.error(f"自定义脚本 {script_name} 执行失败: {e}")
-                        return {"success": False, "error": str(e)}
-                return tool_func
-            
-            tool = Tool(
-                name=script_name,
-                description=description,
-                func=create_tool_func(str(script_path), script_name)
-            )
-            
-            if tool and hasattr(tool, 'name'):
-                TOOL_MAP[tool.name] = tool
-                if tool not in ALL_TOOLS:
-                    ALL_TOOLS.append(tool)
-                logger.info(f"动态注册工具: {tool.name}")
-                self._registered_scripts[script_name] = {
-                    "path": str(script_path),
-                    "description": description,
-                    "category": category,
-                    "registered_at": datetime.now().isoformat()
+                return {
+                    "success": False,
+                    "error": f"脚本安全审查未通过: {safety_err}",
+                    "error_code": "SCRIPT_SAFETY_REJECTED",
                 }
-                return {"success": True, "tool_name": script_name, "tool": tool}
-            
-            script_path.unlink(missing_ok=True)
-            return {"success": False, "error": "工具注册失败，脚本文件已清理"}
-            
-        except Exception as e:
-            logger.error(f"注册脚本工具失败: {e}")
-            return {"success": False, "error": str(e)}
+        except ImportError as exc:
+            return {
+                "success": False,
+                "error": f"脚本安全校验依赖不可用: {exc}",
+                "error_code": "SCRIPT_VALIDATOR_IMPORT_FAILED",
+            }
+
+        normalized_category = self._normalize_category(category)
+        normalized_method = self._normalize_creation_method(creation_method)
+        if include_in_default_scan:
+            return {
+                "success": False,
+                "error": "自定义工具不能直接加入默认扫描计划",
+                "error_code": "DEFAULT_SCAN_MUTATION_FORBIDDEN",
+            }
+        if script_name in SYSTEM_TOOL_NAMES:
+            return {
+                "success": False,
+                "error": f"工具名称 '{script_name}' 与系统工具冲突",
+                "error_code": "SYSTEM_TOOL_NAME_CONFLICT",
+            }
+
+        script_path = Path(self._scripts_dir) / f"{script_name}.py"
+        now = datetime.now().isoformat()
+        with self._registry_lock:
+            self._ensure_registry_schema()
+            with self._connect_registry() as conn:
+                exists = conn.execute(
+                    "SELECT 1 FROM custom_tools WHERE tool_name = ?", (script_name,)
+                ).fetchone()
+            if exists or script_name in TOOL_MAP or script_path.exists():
+                return {
+                    "success": False,
+                    "error": f"自定义工具 '{script_name}' 已存在",
+                    "error_code": "CUSTOM_TOOL_NAME_CONFLICT",
+                }
+
+            try:
+                script_path.parent.mkdir(parents=True, exist_ok=True)
+                script_path.write_text(script_content, encoding="utf-8")
+                tool = self._build_runtime_tool(script_path, script_name, description)
+                with self._connect_registry() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO custom_tools (
+                            tool_name, script_content, description, category,
+                            creation_method, script_path, enabled,
+                            include_in_default_scan, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
+                        """,
+                        (
+                            script_name, script_content, description,
+                            normalized_category, normalized_method,
+                            str(script_path.resolve()), now, now,
+                        ),
+                    )
+                metadata = {
+                    "name": script_name,
+                    "description": description,
+                    "category": normalized_category,
+                    "source": "custom",
+                    "creation_method": normalized_method,
+                    "script_path": str(script_path.resolve()),
+                    "enabled": True,
+                    "include_in_default_scan": False,
+                    "created_at": now,
+                    "updated_at": now,
+                    "is_custom": True,
+                }
+                TOOL_MAP[script_name] = tool
+                self._registered_scripts[script_name] = metadata
+                logger.info(f"动态注册并持久化工具: {script_name}")
+                return {
+                    "success": True,
+                    "tool_name": script_name,
+                    "tool": tool,
+                    "metadata": metadata,
+                }
+            except Exception as exc:
+                TOOL_MAP.pop(script_name, None)
+                self._registered_scripts.pop(script_name, None)
+                try:
+                    with self._connect_registry() as conn:
+                        conn.execute("DELETE FROM custom_tools WHERE tool_name = ?", (script_name,))
+                except Exception:
+                    pass
+                script_path.unlink(missing_ok=True)
+                logger.error(f"注册脚本工具失败: {exc}")
+                return {
+                    "success": False,
+                    "error": str(exc),
+                    "error_code": "SCRIPT_REGISTER_FAILED",
+                }
+
+    def unregister_custom_tool(self, tool_name: str, delete_script: bool = True) -> Dict[str, Any]:
+        """Remove a custom tool from persistence and this worker's runtime."""
+        if tool_name in SYSTEM_TOOL_NAMES:
+            return {
+                "success": False,
+                "error": "系统工具不允许删除",
+                "error_code": "SYSTEM_TOOL_DELETE_FORBIDDEN",
+            }
+        self._ensure_registry_schema()
+        with self._registry_lock, self._connect_registry() as conn:
+            row = conn.execute(
+                "SELECT * FROM custom_tools WHERE tool_name = ?", (tool_name,)
+            ).fetchone()
+            if not row:
+                return {
+                    "success": False,
+                    "error": f"自定义工具 '{tool_name}' 不存在",
+                    "error_code": "CUSTOM_TOOL_NOT_FOUND",
+                }
+            conn.execute("DELETE FROM custom_tools WHERE tool_name = ?", (tool_name,))
+
+        tool = TOOL_MAP.pop(tool_name, None)
+        while tool in ALL_TOOLS:
+            ALL_TOOLS.remove(tool)
+        self._registered_scripts.pop(tool_name, None)
+        if delete_script:
+            Path(row["script_path"]).unlink(missing_ok=True)
+        logger.info(f"自定义工具已注销: {tool_name}")
+        return {"success": True, "tool_name": tool_name}
+
+    def get_custom_tool_record(
+        self, tool_name: str, include_script: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """Read one persisted custom tool, optionally including source code."""
+        self._ensure_registry_schema()
+        with self._registry_lock, self._connect_registry() as conn:
+            row = conn.execute(
+                "SELECT * FROM custom_tools WHERE tool_name = ?", (tool_name,)
+            ).fetchone()
+        if not row:
+            return None
+        record = self._metadata_from_row(row)
+        if include_script:
+            record["script_content"] = row["script_content"]
+        return record
     
     async def generate_script_with_ai(self, description: str) -> str:
         """使用AI生成扫描脚本"""
@@ -1809,6 +2121,12 @@ class ScriptManager:
     
     def get_registered_scripts(self) -> Dict:
         """获取已注册的脚本列表"""
+        # Synchronize additions/deletions made by another API worker before
+        # exposing category or source metadata in this process.
+        try:
+            self.restore_registered_tools()
+        except (sqlite3.Error, OSError):
+            pass
         return self._registered_scripts.copy()
 
 

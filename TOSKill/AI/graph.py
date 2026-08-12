@@ -2354,7 +2354,8 @@ async def script_upload_process(state: ScanState) -> ScanState:
         script_content=script_content,
         script_name=registered_name,
         description=analysis.get("description", "自定义扫描脚本"),
-        category=analysis.get("category", "custom")
+        category=analysis.get("category", "custom"),
+        creation_method="upload",
     )
     
     if not result.get("success"):
@@ -2502,7 +2503,8 @@ async def script_generate_process(state: ScanState) -> ScanState:
         script_content=script_code,
         script_name=tool_name,
         description=analysis.get("description", description),
-        category=analysis.get("category", "custom")
+        category=analysis.get("category", "custom"),
+        creation_method="ai_generate",
     )
     
     if not result.get("success"):

@@ -86,6 +86,17 @@ class TestToolRegistry:
             "https://example.com/search?q=test",
         ) == "example.com"
 
+    def test_clean_target_for_custom_tool_preserves_url(self, monkeypatch):
+        import TOSKill.AI.tools as tools_module
+
+        monkeypatch.setattr(
+            tools_module.script_manager,
+            "get_registered_scripts",
+            lambda: {"custom_http_probe": {"category": "info_collection"}},
+        )
+        target = "https://example.com/search?q=test"
+        assert tools_module.clean_target_for_tool("custom_http_probe", target) == target
+
     def test_webside_query_uses_structured_tool_invoke(self):
         from TOSKill.AI.tools import webside_query_scan
 

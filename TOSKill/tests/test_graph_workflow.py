@@ -254,7 +254,9 @@ class TestScriptWorkflowState:
 
         script_name = "custom_langchain_compat_test"
         old_scripts_dir = script_manager._scripts_dir
+        old_db_path = script_manager._db_path
         script_manager._scripts_dir = tmp_path
+        script_manager._db_path = tmp_path / "custom-tools.db"
         try:
             result = script_manager.register_script_as_tool(
                 "def run(target):\n    return {'success': True, 'target': target}",
@@ -264,7 +266,9 @@ class TestScriptWorkflowState:
             assert result["success"] is True
             assert result["tool_name"] == script_name
         finally:
+            script_manager.unregister_custom_tool(script_name)
             script_manager._scripts_dir = old_scripts_dir
+            script_manager._db_path = old_db_path
             script_manager._registered_scripts.pop(script_name, None)
             tool = TOOL_MAP.pop(script_name, None)
             if tool in ALL_TOOLS:
