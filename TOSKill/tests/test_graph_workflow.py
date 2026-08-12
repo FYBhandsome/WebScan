@@ -13,6 +13,14 @@ import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
 
+@pytest.fixture(scope="module", autouse=True)
+def close_global_orchestrator_after_module():
+    """Release the async SQLite checkpointer initialized by workflow tests."""
+    yield
+    from TOSKill.AI.graph import get_agent_orchestrator
+    asyncio.run(get_agent_orchestrator().aclose())
+
+
 @pytest.mark.asyncio
 class TestIntentRecognition:
     """意图识别工作流测试"""
@@ -24,15 +32,18 @@ class TestIntentRecognition:
         from TOSKill.AI.graph import intent_recognition
         
         mock_llm = MagicMock()
-        mock_llm.invoke.return_value = MagicMock(content='{"intent": "chat", "confidence": 0.9, "explanation": "用户在进行普通对话"}')
+        bound_llm = MagicMock()
+        bound_llm.invoke.return_value = MagicMock(tool_calls=[])
+        mock_llm.bind_tools.return_value = bound_llm
         mock_get_llm.return_value = mock_llm
         
         state = create_initial_state(target="", task_id="test_intent_chat")
         state["user_input"] = "你好，介绍一下你自己"
         state["chat_history"] = [{"role": "user", "content": "你好，介绍一下你自己"}]
         
-        result = intent_recognition(state)
+        result = await intent_recognition(state)
         assert result is not None
+        assert result["intent_type"] == "chat"
 
     @patch('TOSKill.AI.graph.get_llm')
     async def test_intent_scan_request(self, mock_get_llm):
@@ -41,15 +52,22 @@ class TestIntentRecognition:
         from TOSKill.AI.graph import intent_recognition
         
         mock_llm = MagicMock()
-        mock_llm.invoke.return_value = MagicMock(content='{"intent": "scan", "confidence": 0.95, "target": "http://example.com", "mode": "info_collection"}')
+        bound_llm = MagicMock()
+        bound_llm.invoke.return_value = MagicMock(tool_calls=[{
+            "name": "intent_scan",
+            "args": {"target": "http://example.com", "mode": "info_collection"},
+        }])
+        mock_llm.bind_tools.return_value = bound_llm
         mock_get_llm.return_value = mock_llm
         
         state = create_initial_state(target="", task_id="test_intent_scan")
         state["user_input"] = "扫描 example.com"
         state["chat_history"] = [{"role": "user", "content": "扫描 example.com"}]
         
-        result = intent_recognition(state)
+        result = await intent_recognition(state)
         assert result is not None
+        assert result["intent_type"] == "scan"
+        assert result["target"] == "http://example.com"
 
 
 class TestAgentOrchestrator:

@@ -139,6 +139,20 @@ class TestToolsAPI:
         assert collected["target"] == "https://example.com/path"
         assert collected["items"] == "asset"
 
+        from TOSKill.tools.report.html_report_generator import HTMLReportGenerator
+        html = HTMLReportGenerator().generate_report(
+            target="https://example.com/path",
+            scan_time="2026-08-13 00:00:00",
+            vulnerabilities=[],
+            tool_results={"custom_api_asset_test": execution_data["result"]},
+            session_id="custom-api-e2e",
+            report_type="full_scan",
+        )
+        assert "custom_api_asset_test" in html
+        assert "items" in html
+        assert "asset" in html
+        assert html.index("信息收集结果") < html.index("漏洞扫描风险概览")
+
         source = client.get("/api/scripts/custom_api_asset_test/source")
         assert source.status_code == 200
         assert source.json()["data"]["script"]["script_content"] == VALID_CUSTOM_SCRIPT

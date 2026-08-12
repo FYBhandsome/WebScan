@@ -438,9 +438,10 @@ async def api_execute_tool(request: ToolExecuteRequest):
     
     try:
         result = tool.invoke(target)
+        category = tool_category(request.tool_name)
         response_data = {
             "tool_name": request.tool_name,
-            "tool_category": tool_category(request.tool_name),
+            "tool_category": category,
             "target": target,
             "success": True,
             "result": result,
@@ -449,7 +450,7 @@ async def api_execute_tool(request: ToolExecuteRequest):
         if response_data["tool_category"] == "info_collection":
             response_data["information_summary"] = information_items(request.tool_name, result)
 
-        if request.analyze:
+        if request.analyze and category == "vuln_scan":
             try:
                 analyzer = get_analyzer()
                 analysis = analyzer.analyze(
@@ -482,7 +483,7 @@ async def api_execute_tool(request: ToolExecuteRequest):
             "timestamp": datetime.now().isoformat()
         }
 
-        if request.analyze:
+        if request.analyze and error_data["tool_category"] == "vuln_scan":
             try:
                 analyzer = get_analyzer()
                 analysis = analyzer.analyze(

@@ -375,6 +375,10 @@ async def test_tools_view_single_tool_mode_regression():
 
     event_types = [call.args[1]["type"] for call in manager._send.call_args_list]
     assert event_types == ["tool_execution_started", "tool_execution_completed"]
+    completed_payload = manager._send.call_args_list[-1].args[1]["payload"]
+    assert completed_payload["tool_category"] == "info_collection"
+    assert completed_payload["information_summary"] == [{"label": "ok", "value": "是"}]
+    assert "未发现漏洞" not in completed_payload["result_summary"]
     tool.invoke.assert_called_once_with("example.com")
 
 
@@ -388,12 +392,16 @@ async def test_tools_view_single_tool_rest_api_regression():
         analyze=False,
     )
 
-    with patch("TOSKill.api.scan_api.get_tool_by_name", return_value=tool):
+    with patch("TOSKill.api.scan_api.get_tool_by_name", return_value=tool), \
+         patch("TOSKill.api.scan_api.get_analyzer") as get_analyzer:
         response = await api_execute_tool(request)
 
     assert response.code == 200
     assert response.data["tool_name"] == "baseinfo_scan"
+    assert response.data["tool_category"] == "info_collection"
     assert response.data["success"] is True
+    assert "analysis" not in response.data
+    get_analyzer.assert_not_called()
     tool.invoke.assert_called_once_with("example.com")
 
 
