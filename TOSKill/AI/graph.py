@@ -48,6 +48,11 @@ from TOSKill.tools.tool_categories import (
     is_vulnerability_tool,
     tool_category,
 )
+from TOSKill.tools.report.vulnerability_normalizer import (
+    consolidate_vulnerabilities,
+    vulnerability_evidence_count,
+    vulnerability_occurrence_count,
+)
 from ..config import settings
 from ..RAG.retriever import get_scan_strategy
 from ..utils.log_writer import log_info, log_warn, log_error, log_success, log_debug
@@ -3741,7 +3746,17 @@ async def report_generation(state: ScanState) -> ScanState:
     logger.info(f"[{state.get('task_id')}] 报告生成节点")
     
     tool_results = state.get("tool_results", {})
-    vulnerabilities = state.get("vulnerabilities", [])
+    raw_vulnerabilities = state.get("vulnerabilities", [])
+    vulnerabilities = consolidate_vulnerabilities(raw_vulnerabilities)
+    raw_vulnerability_count = vulnerability_occurrence_count(vulnerabilities)
+    evidence_count = vulnerability_evidence_count(vulnerabilities)
+    logger.info(
+        "[%s] 报告漏洞归并完成: 原始命中=%d, 逻辑问题=%d, 独立证据=%d",
+        state.get("task_id"),
+        raw_vulnerability_count,
+        len(vulnerabilities),
+        evidence_count,
+    )
     target = state.get("target", "")
     session_id = state.get("websocket_session_id") or state.get("task_id", "unknown")
     report_type = str(state.get("report_type") or "").lower()
@@ -3765,7 +3780,9 @@ async def report_generation(state: ScanState) -> ScanState:
     scan_summary = {
         "timestamp": datetime.now().isoformat(),
         "tool_count": len(tool_results),
-        "vulnerability_count": len(vulnerabilities)
+        "vulnerability_count": len(vulnerabilities),
+        "raw_vulnerabilities_count": raw_vulnerability_count,
+        "vulnerability_evidence_count": evidence_count,
     }
     
     if ws_callback:
@@ -3776,6 +3793,8 @@ async def report_generation(state: ScanState) -> ScanState:
                     "session_id": session_id,
                     "tool_count": len(tool_results),
                     "vulnerability_count": len(vulnerabilities),
+                    "raw_vulnerabilities_count": raw_vulnerability_count,
+                    "vulnerability_evidence_count": evidence_count,
                     "report_type": report_type,
                 }
             })

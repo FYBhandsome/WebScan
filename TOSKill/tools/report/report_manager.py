@@ -16,6 +16,12 @@ from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, asdict
 import threading
 
+from TOSKill.tools.report.vulnerability_normalizer import (
+    consolidate_vulnerabilities,
+    vulnerability_evidence_count,
+    vulnerability_occurrence_count,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -135,12 +141,15 @@ class ReportManager:
         from TOSKill.tools.report.html_report_generator import get_html_report_generator
 
         self._ensure_dirs()
+        logical_vulnerabilities = consolidate_vulnerabilities(vulnerabilities)
+        raw_vulnerability_count = vulnerability_occurrence_count(logical_vulnerabilities)
+        evidence_count = vulnerability_evidence_count(logical_vulnerabilities)
 
         generator = get_html_report_generator()
         html_content = generator.generate_report(
             target=target,
             scan_time=scan_time,
-            vulnerabilities=vulnerabilities,
+            vulnerabilities=logical_vulnerabilities,
             tool_results=tool_results,
             ai_analysis=ai_analysis,
             confidence=confidence,
@@ -171,9 +180,11 @@ class ReportManager:
             "download_url": download_url,
             "format": "html",
             "report_type": report_type,
-            "vulnerabilities_count": len(vulnerabilities),
+            "vulnerabilities_count": len(logical_vulnerabilities),
+            "raw_vulnerabilities_count": raw_vulnerability_count,
+            "vulnerability_evidence_count": evidence_count,
             "tool_results": tool_results,
-            "vulnerabilities": vulnerabilities
+            "vulnerabilities": logical_vulnerabilities
         }
         
         self._mapping[session_id] = report_info

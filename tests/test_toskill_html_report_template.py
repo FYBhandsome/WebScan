@@ -10,6 +10,8 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 HTMLReportGenerator = MODULE.HTMLReportGenerator
 
+from TOSKill.tools.report.vulnerability_normalizer import consolidate_vulnerabilities
+
 
 def _sample_kwargs():
     return {
@@ -133,3 +135,127 @@ def test_toskill_html_report_escapes_untrusted_scan_data():
 
     assert attack not in html
     assert "&lt;img src=x onerror=alert(1)&gt;" in html
+
+
+def test_vulnerability_report_merges_duplicate_hits_into_one_issue_card():
+    kwargs = _sample_kwargs()
+    common = {
+        "source_tool": "lfi_scan",
+        "vuln_type": "lfi",
+        "title": "文件包含漏洞 - id (log_injection)",
+        "severity": "high",
+        "url": "http://example.test/list?id=1",
+        "method": "GET",
+        "parameter": "id",
+        "description": "参数可能读取本地文件",
+    }
+    kwargs["vulnerabilities"] = [
+        {**common, "id": "v-1", "payload": "../../etc/passwd", "evidence": "root:x:0:0"},
+        {**common, "id": "v-2", "payload": "../../etc/passwd", "evidence": "root:x:0:0"},
+        {**common, "id": "v-3", "payload": "php://filter/resource=index.php", "evidence": "PD9waHA="},
+    ]
+
+    html = HTMLReportGenerator().generate_report(**kwargs, report_type="vuln_scan")
+
+    assert "本次漏洞扫描共确认 1 个问题" in html
+    assert html.count('class="vuln-item"') == 1
+    assert "保留 2 条独立验证证据" in html
+    assert "已合并 1 条完全重复命中" in html
+    assert "../../etc/passwd" in html
+    assert "php://filter/resource=index.php" in html
+
+
+def test_vulnerability_report_keeps_different_input_positions_separate():
+    kwargs = _sample_kwargs()
+    common = {
+        "source_tool": "sqli_scan",
+        "vuln_type": "sqli",
+        "title": "SQL 注入",
+        "severity": "high",
+        "url": "http://example.test/list?id=1",
+        "method": "GET",
+        "payload": "' OR 1=1 --",
+        "evidence": "database error",
+    }
+    kwargs["vulnerabilities"] = [
+        {**common, "parameter": "User-Agent"},
+        {**common, "parameter": "Referer"},
+    ]
+
+    html = HTMLReportGenerator().generate_report(**kwargs, report_type="vuln_scan")
+
+    assert "本次漏洞扫描共确认 2 个问题" in html
+    assert html.count('class="vuln-item"') == 2
+    assert "输入位置：User-Agent" in html
+    assert "输入位置：Referer" in html
+
+
+def _lfi_result(payload: str, evidence: str, vuln_id: str):
+    return {
+        "id": vuln_id,
+        "source_tool": "lfi_scan",
+        "vuln_type": "lfi",
+        "title": "文件包含漏洞 - id (log_injection)",
+        "severity": "high",
+        "url": "http://example.test/list?id=1",
+        "method": "GET",
+        "parameter": "id",
+        "payload": payload,
+        "evidence": evidence,
+    }
+
+
+def test_vulnerability_consolidation_preserves_evidence_and_is_idempotent():
+    first = _lfi_result("../../etc/passwd", "root:x:0:0", "v-1")
+    duplicate = _lfi_result("../../etc/passwd", "root:x:0:0", "v-2")
+    second_payload = _lfi_result("php://filter/resource=index.php", "PD9waHA=", "v-3")
+
+    grouped = consolidate_vulnerabilities([first, duplicate, second_payload])
+    regrouped = consolidate_vulnerabilities(grouped)
+
+    assert len(regrouped) == 1
+    assert regrouped[0]["occurrence_count"] == 3
+    assert regrouped[0]["evidence_count"] == 2
+    assert regrouped[0]["deduplicated_count"] == 1
+    assert regrouped[0]["payloads"] == ["../../etc/passwd", "php://filter/resource=index.php"]
+    assert regrouped[0]["source_ids"] == ["v-1", "v-2", "v-3"]
+
+
+def test_vulnerability_consolidation_does_not_merge_distinct_locations_or_tools():
+    first = _lfi_result("payload", "evidence", "v-1")
+    other_parameter = _lfi_result("payload", "evidence", "v-2")
+    other_path = _lfi_result("payload", "evidence", "v-3")
+    other_tool = _lfi_result("payload", "evidence", "v-4")
+    other_parameter["parameter"] = "page"
+    other_path["url"] = "http://example.test/profile?id=1"
+    other_tool["source_tool"] = "custom_lfi_scan"
+
+    result = consolidate_vulnerabilities([first, other_parameter, other_path, other_tool])
+
+    assert len(result) == 4
+
+
+def test_html_report_metadata_uses_logical_issue_counts(tmp_path):
+    from TOSKill.tools.report.report_manager import ReportManager
+
+    manager = object.__new__(ReportManager)
+    manager.reports_dir = tmp_path
+    manager.mapping_file = tmp_path / "mapping.json"
+    manager._mapping = {}
+    first = _lfi_result("../../etc/passwd", "root:x:0:0", "v-1")
+    duplicate = _lfi_result("../../etc/passwd", "root:x:0:0", "v-2")
+    second_payload = _lfi_result("php://filter/resource=index.php", "PD9waHA=", "v-3")
+
+    report_info = manager.save_html_report(
+        session_id="session-dedup",
+        target="http://example.test",
+        scan_time="2026-08-14 12:00:00",
+        vulnerabilities=[first, duplicate, second_payload],
+        tool_results={"lfi_scan": {"success": True}},
+        report_type="vuln_scan",
+    )
+
+    assert report_info["vulnerabilities_count"] == 1
+    assert report_info["raw_vulnerabilities_count"] == 3
+    assert report_info["vulnerability_evidence_count"] == 2
+    assert len(report_info["vulnerabilities"]) == 1

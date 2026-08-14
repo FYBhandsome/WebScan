@@ -15,6 +15,7 @@ from TOSKill.tools.tool_categories import (
     is_vulnerability_tool,
     tool_display_name,
 )
+from TOSKill.tools.report.vulnerability_normalizer import consolidate_vulnerabilities
 
 SEVERITY = {
     "critical": ("严重", "critical"), "high": ("高危", "high"),
@@ -114,7 +115,7 @@ def _information_metrics(tool_results: Dict[str, Any], cards: List[Dict[str, Any
 def _normalized_vulnerabilities(vulnerabilities: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     normalized = []
-    for item in vulnerabilities or []:
+    for item in consolidate_vulnerabilities(vulnerabilities):
         if not isinstance(item, dict):
             continue
         vuln = dict(item)
@@ -264,9 +265,23 @@ def _vulnerability_section(vulnerabilities: List[Dict[str, Any]]) -> str:
                 details.append(f'<p><strong>{title}：</strong>{_safe(value)}</p>')
         parameter = vuln.get("parameter") or vuln.get("affected_parameter")
         location = f'<p class="vuln-location">输入位置：{_safe(parameter)}</p>' if _plain(parameter) else ""
+        evidence_count = int(vuln.get("evidence_count") or 0)
+        deduplicated_count = int(vuln.get("deduplicated_count") or 0)
+        evidence_summary = ""
+        if evidence_count > 1 or deduplicated_count > 0:
+            summary_parts = [f"保留 {evidence_count} 条独立验证证据"]
+            if deduplicated_count:
+                summary_parts.append(f"已合并 {deduplicated_count} 条完全重复命中")
+            evidence_summary = f'<p class="evidence-summary">{"；".join(summary_parts)}</p>'
+        payloads = vuln.get("payloads") if isinstance(vuln.get("payloads"), list) else []
+        payload_summary = ""
+        if len(payloads) > 1:
+            shown_payloads = "".join(f"<code>{_safe(payload)}</code>" for payload in payloads[:3])
+            remaining = f"<span>另有 {len(payloads) - 3} 条</span>" if len(payloads) > 3 else ""
+            payload_summary = f'<div class="payload-summary"><strong>验证 Payload：</strong>{shown_payloads}{remaining}</div>'
         cards.append(f'''<article class="vuln-item"><div class="vuln-title-row"><span class="risk-tag tag-{css}">{label}</span>{_safe(vuln["title"])}</div>
           <p class="vuln-tip-text">{_safe(vuln.get("description"), "已确认安全问题，请结合证据完成修复。")}</p>
-          <div class="vuln-detail text-body">{"".join(details) or '<p>暂无补充证据。</p>'}{location}</div></article>''')
+          <div class="vuln-detail text-body">{evidence_summary}{"".join(details) or '<p>暂无补充证据。</p>'}{payload_summary}{location}</div></article>''')
     content = "".join(cards) or '<p class="empty-state">本次漏洞扫描未确认漏洞。</p>'
     return f'<section class="card vuln-section"><h2 class="module-title">{_icon()}确认的问题（按受影响位置展示）</h2><div class="vuln-list-wrap">{content}</div></section>'
 
@@ -332,8 +347,11 @@ def _appendix(report_type: str, cards: List[Dict[str, Any]], vulnerabilities: Li
     if report_type in {"info_collection", "full_scan"}:
         items.append(f'<div class="evidence-item"><strong>信息收集证据摘要</strong>已收集 {len(cards)} 类有效信息；仅保留端口、资产、技术指纹、路径等必要字段。</div>')
     if report_type in {"vuln_scan", "full_scan"}:
-        evidence_count = sum(1 for item in vulnerabilities if _plain(item.get("evidence")))
-        items.append(f'<div class="evidence-item"><strong>漏洞验证证据摘要</strong>已确认 {len(vulnerabilities)} 个问题，其中 {evidence_count} 个携带可展示验证证据。</div>')
+        evidence_count = sum(int(item.get("evidence_count") or 0) for item in vulnerabilities)
+        raw_count = sum(int(item.get("occurrence_count") or 1) for item in vulnerabilities)
+        duplicate_count = max(0, raw_count - evidence_count)
+        duplicate_note = f"；已过滤 {duplicate_count} 条完全重复命中" if duplicate_count else ""
+        items.append(f'<div class="evidence-item"><strong>漏洞验证证据摘要</strong>已确认 {len(vulnerabilities)} 个问题，保留 {evidence_count} 条独立验证证据{duplicate_note}。</div>')
     items.append('<div class="evidence-item"><strong>报告保留策略</strong>正文不输出完整工具 JSON、响应正文和重复 Payload。</div>')
     return f'<section class="appendix-card"><details><summary class="appendix-summary">{_icon()}查看必要验证与收集证据</summary><div class="appendix-content"><div class="evidence-grid">{"".join(items)}</div></div></details></section>'
 
@@ -351,6 +369,7 @@ body { background:#f7f8fa; padding:32px; color:#222; line-height:1.8; font-famil
 .risk-head-row { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:var(--gap-lg); margin-bottom:var(--gap-md); }.risk-score-box { display:flex; align-items:baseline; gap:var(--gap-sm); }.score-num { font-size:24px; font-weight:700; }.score-desc { font-size:14px; font-weight:600; }.level-critical { color:var(--critical); }.level-high { color:var(--high); }.level-medium { color:var(--medium); }.level-low { color:var(--low); }.level-info { color:var(--info); }.risk-bar-group { display:flex; gap:var(--gap-md); flex:1; min-width:520px; }.risk-bar-item { flex:1; min-width:72px; text-align:center; }.bar-label { min-height:24px; color:#666; font-size:12px; }.bar-outer { height:6px; overflow:hidden; border-radius:3px; background:#eee; }.bar-inner { height:100%; }.bar-critical { background:var(--critical); }.bar-high { background:var(--high); }.bar-medium { background:var(--medium); }.bar-low { background:var(--low); }.bar-info { background:var(--info); }.bar-count { margin-top:4px; font-size:13px; font-weight:600; }
 .confidence-layout { display:grid; grid-template-columns:280px minmax(0,1fr); gap:var(--gap-lg); align-items:center; }.confidence-summary { padding-right:var(--gap-lg); border-right:1px solid var(--border); }.confidence-kicker { margin-bottom:6px; color:#555; font:13px "Source Han Serif CN",SimSun,serif; }.confidence-number { color:var(--primary); font-size:28px; font-weight:700; }.confidence-label { margin-left:8px; color:#444; font-size:14px; font-weight:500; }.confidence-badge { display:inline-block; margin-top:10px; padding:3px 12px; border:1px solid rgba(22,93,255,.2); border-radius:12px; color:var(--primary); background:#e8f0fe; font-size:13px; font-weight:600; }.confidence-note { margin-top:12px; color:#666; font:13px/1.7 "Source Han Serif CN",SimSun,serif; }.confidence-details { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px 24px; }.confidence-item { display:grid; grid-template-columns:116px 1fr 38px; align-items:center; gap:var(--gap-sm); }.item-label { color:#444; font:13px "Source Han Serif CN",SimSun,serif; }.item-bar-track { height:6px; overflow:hidden; border-radius:3px; background:#eee; }.item-bar-fill { display:block; height:100%; border-radius:3px; background:var(--primary); }.item-value { text-align:right; font-size:13px; font-weight:600; }.confidence-placeholder { padding:24px; color:#888; text-align:center; }
 .vuln-list-wrap { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--gap-md); }.vuln-item { padding:16px; border:1px solid var(--border); border-radius:var(--radius); }.vuln-title-row { display:flex; align-items:center; gap:var(--gap-sm); font-size:15px; font-weight:600; }.risk-tag { flex:0 0 auto; min-width:46px; padding:2px 8px; border-radius:2px; color:#fff; text-align:center; font-size:12px; }.tag-critical { background:var(--critical); }.tag-high { background:var(--high); }.tag-medium { background:var(--medium); }.tag-low { background:var(--low); }.tag-info { background:var(--info); }.vuln-tip-text { margin-top:8px; color:#555; font:13px/1.7 "Source Han Serif CN",SimSun,serif; }.vuln-detail { margin-top:12px; padding-top:12px; border-top:1px dashed var(--border); }.vuln-detail p + p { margin-top:5px; }.vuln-location { margin-top:9px; color:var(--primary); font:12px Consolas,monospace; }
+.evidence-summary { margin-bottom:8px; padding:6px 9px; border-left:3px solid var(--primary); background:#f3f7ff; color:#445; font-size:12px; }.payload-summary { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:8px; }.payload-summary code { max-width:100%; padding:2px 6px; border:1px solid var(--border); border-radius:2px; background:#f7f8fa; color:#444; overflow-wrap:anywhere; white-space:normal; }
 .fix-three-col,.ai-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--gap-lg); }.fix-block { padding:var(--gap-lg); border-radius:var(--radius); }.fix-emergency { background:#fef2f2; }.fix-deadline { background:#fffbeb; }.fix-longterm { background:#f9fafb; }.fix-block-title { margin-bottom:var(--gap-md); font-size:15px; font-weight:700; }.list-uniform li { display:flex; gap:var(--gap-sm); margin-bottom:var(--gap-sm); font:14px/1.7 "Source Han Serif CN",SimSun,serif; overflow-wrap:anywhere; }.list-uniform li:last-child { margin-bottom:0; }.list-uniform li::before { content:"-"; flex:0 0 auto; color:#666; }.analysis-block { min-height:164px; padding:18px; border:1px solid var(--border); border-radius:var(--radius); background:#f9fafb; }.analysis-block h3 { margin-bottom:9px; font-size:15px; }
 .appendix-summary { display:flex; align-items:center; gap:var(--gap-sm); cursor:pointer; color:var(--primary); font-size:14px; }.appendix-content { margin-top:var(--gap-md); padding-top:var(--gap-md); border-top:1px dashed var(--border); font:13px "Source Han Serif CN",SimSun,serif; color:#555; }.evidence-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--gap-md); }.evidence-item { padding:12px; border:1px solid var(--border); border-radius:var(--radius); background:#f9fafb; }.evidence-item strong { display:block; margin-bottom:4px; color:#222; }.footer { padding:20px; color:#666; text-align:center; font-size:12px; }
 @media (max-width:1000px) { .meta-wrap,.overview-grid,.collection-grid,.tool-grid,.vuln-list-wrap,.fix-three-col,.ai-grid,.evidence-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.confidence-layout { grid-template-columns:1fr; }.confidence-summary { padding:0 0 var(--gap-lg); border:0; border-bottom:1px solid var(--border); } }
