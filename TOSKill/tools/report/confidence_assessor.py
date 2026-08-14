@@ -180,7 +180,7 @@ class ConfidenceAssessor:
 - 目标: {target}
 - 扫描模式: {scan_mode}
 - 工具数量: {len(tool_results)}
-- 漏洞总数: {len(vulnerabilities)}
+- 归并后待复核问题数: {len(vulnerabilities)}
 - 严重: {severity_count['critical']} | 高危: {severity_count['high']} | 中危: {severity_count['medium']} | 低危: {severity_count['low']} | 信息: {severity_count['info']}
 
 ## 漏洞清单

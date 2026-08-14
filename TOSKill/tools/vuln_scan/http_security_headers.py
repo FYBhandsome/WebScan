@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 from TOSKill.tools.http_probe import fetch_http, normalize_http_url
 
 
-def _finding(url: str, header: str, title: str, description: str, evidence: str, solution: str, severity: str = "low") -> Dict[str, str]:
+def _finding(url: str, header: str, title: str, description: str, evidence: str, solution: str, severity: str = "low") -> Dict[str, Any]:
     return {
         "vuln_type": "HTTP Security Headers",
         "severity": severity,
@@ -17,6 +17,8 @@ def _finding(url: str, header: str, title: str, description: str, evidence: str,
         "evidence": evidence,
         "solution": solution,
         "parameter": header,
+        "verified": True,
+        "verification_status": "verified",
     }
 
 
@@ -24,7 +26,7 @@ def http_security_headers_scan(target: str, timeout: float = 8.0) -> Dict[str, A
     url = normalize_http_url(target)
     response = fetch_http(url, timeout=timeout, follow_redirects=True, read_body=False)
     headers = response.headers
-    findings: List[Dict[str, str]] = []
+    findings: List[Dict[str, Any]] = []
     required = {
         "content-security-policy": ("Content-Security-Policy", "缺少内容安全策略", "配置严格的 Content-Security-Policy，限制脚本和资源来源。", "medium"),
         "x-content-type-options": ("X-Content-Type-Options", "缺少 MIME 类型保护", "设置 X-Content-Type-Options: nosniff，避免浏览器 MIME 嗅探。", "low"),

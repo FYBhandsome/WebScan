@@ -213,10 +213,12 @@ def _risk_section(vulnerabilities: List[Dict[str, Any]], ai_analysis: Optional[D
     label, _ = SEVERITY[level]
     bars = []
     total = max(len(vulnerabilities), 1)
-    for severity, title in (("critical", "严重漏洞"), ("high", "高危漏洞"), ("medium", "中危漏洞"), ("low", "低危漏洞"), ("info", "信息类配置缺陷")):
+    for severity, title in (("critical", "严重告警"), ("high", "高危告警"), ("medium", "中危告警"), ("low", "低危告警"), ("info", "信息类配置缺陷")):
         bars.append(f'<div class="risk-bar-item"><div class="bar-label">{title}</div><div class="bar-outer"><div class="bar-inner bar-{severity}" style="width:{counts[severity] / total * 100:.1f}%"></div></div><div class="bar-count">{counts[severity]}</div></div>')
     top = vulnerabilities[0]["title"] if vulnerabilities else "—"
-    summary = "本次漏洞扫描未确认漏洞。" if not vulnerabilities else f"本次漏洞扫描共确认 {len(vulnerabilities)} 个问题，当前最高优先级问题为“{_safe(top)}”。"
+    verified_count = sum(1 for item in vulnerabilities if item.get("verified") is True or str(item.get("verification_status") or "").lower() in {"verified", "confirmed", "exploitable"})
+    pending_count = len(vulnerabilities) - verified_count
+    summary = "本次漏洞扫描未产生安全问题。" if not vulnerabilities else f"本次扫描归并得到 {len(vulnerabilities)} 个安全问题，其中 {verified_count} 个已由直接证据验证、{pending_count} 个仍待复核；当前最高优先级告警为“{_safe(top)}”。"
     return f'''<section class="card risk-overview"><h2 class="module-title">{_icon()}漏洞扫描风险概览</h2>
       <div class="risk-head-row"><div class="risk-score-box"><span class="score-num level-{level}">{score:g}</span><span class="score-desc level-{level}">综合风险等级：{label} ({level.upper()})</span></div><div class="risk-bar-group">{"".join(bars)}</div></div>
       <div class="text-body">{summary}</div></section>'''
@@ -282,8 +284,8 @@ def _vulnerability_section(vulnerabilities: List[Dict[str, Any]]) -> str:
         cards.append(f'''<article class="vuln-item"><div class="vuln-title-row"><span class="risk-tag tag-{css}">{label}</span>{_safe(vuln["title"])}</div>
           <p class="vuln-tip-text">{_safe(vuln.get("description"), "已确认安全问题，请结合证据完成修复。")}</p>
           <div class="vuln-detail text-body">{evidence_summary}{"".join(details) or '<p>暂无补充证据。</p>'}{payload_summary}{location}</div></article>''')
-    content = "".join(cards) or '<p class="empty-state">本次漏洞扫描未确认漏洞。</p>'
-    return f'<section class="card vuln-section"><h2 class="module-title">{_icon()}确认的问题（按受影响位置展示）</h2><div class="vuln-list-wrap">{content}</div></section>'
+    content = "".join(cards) or '<p class="empty-state">本次漏洞扫描未产生待复核问题。</p>'
+    return f'<section class="card vuln-section"><h2 class="module-title">{_icon()}待复核问题（按受影响位置展示）</h2><div class="vuln-list-wrap">{content}</div></section>'
 
 
 def _unique(values: Iterable[str]) -> List[str]:
@@ -321,7 +323,7 @@ def _remediation_section(vulnerabilities: List[Dict[str, Any]], ai_analysis: Opt
 def _ai_section(vulnerabilities: List[Dict[str, Any]], ai_analysis: Optional[Dict[str, Any]]) -> str:
     if not vulnerabilities:
         return ""
-    summary = _safe((ai_analysis or {}).get("executive_summary"), f"本次扫描确认 {len(vulnerabilities)} 个问题，应优先处理高风险项。")
+    summary = _safe((ai_analysis or {}).get("executive_summary"), f"本次扫描归并得到 {len(vulnerabilities)} 个待复核问题，应优先验证高风险项。")
     facts = []
     for vuln in vulnerabilities[:4]:
         fact = _plain(vuln["title"])
@@ -349,9 +351,10 @@ def _appendix(report_type: str, cards: List[Dict[str, Any]], vulnerabilities: Li
     if report_type in {"vuln_scan", "full_scan"}:
         evidence_count = sum(int(item.get("evidence_count") or 0) for item in vulnerabilities)
         raw_count = sum(int(item.get("occurrence_count") or 1) for item in vulnerabilities)
+        verified_count = sum(1 for item in vulnerabilities if item.get("verified") is True or str(item.get("verification_status") or "").lower() in {"verified", "confirmed", "exploitable"})
         duplicate_count = max(0, raw_count - evidence_count)
         duplicate_note = f"；已过滤 {duplicate_count} 条完全重复命中" if duplicate_count else ""
-        items.append(f'<div class="evidence-item"><strong>漏洞验证证据摘要</strong>已确认 {len(vulnerabilities)} 个问题，保留 {evidence_count} 条独立验证证据{duplicate_note}。</div>')
+        items.append(f'<div class="evidence-item"><strong>扫描告警证据摘要</strong>归并得到 {len(vulnerabilities)} 个安全问题，其中 {verified_count} 个已由直接证据验证，保留 {evidence_count} 条独立扫描证据{duplicate_note}。其余告警仍需人工或PoC复核。</div>')
     items.append('<div class="evidence-item"><strong>报告保留策略</strong>正文不输出完整工具 JSON、响应正文和重复 Payload。</div>')
     return f'<section class="appendix-card"><details><summary class="appendix-summary">{_icon()}查看必要验证与收集证据</summary><div class="appendix-content"><div class="evidence-grid">{"".join(items)}</div></div></details></section>'
 
@@ -402,7 +405,7 @@ def render_scan_report(
           <div class="overview-item"><span class="overview-value">{info_tools}</span><span class="overview-label">信息收集工具</span><span class="overview-tip">资产、服务与应用攻击面</span></div>
           <div class="overview-item"><span class="overview-value">{vuln_tools}</span><span class="overview-label">漏洞扫描工具</span><span class="overview-tip">按漏洞类别验证</span></div>
           <div class="overview-item"><span class="overview-value">{len(normalized_vulns)}</span><span class="overview-label">确认问题位置</span><span class="overview-tip">以结构化验证结果为准</span></div>
-        </div><p class="notice">完整扫描报告按工具类别分区：信息收集部分展示实际收集内容；漏洞扫描部分展示确认的问题和修复建议。两类结果不会互相替代或混合统计。</p></section>''')
+        </div><p class="notice">完整扫描报告按工具类别分区：信息收集部分展示实际收集内容；漏洞扫描部分展示待复核问题和修复建议。扫描告警需经人工或PoC复核后才能认定为已确认漏洞。</p></section>''')
         parts.extend([_information_section(tool_results, include_status=False), _risk_section(normalized_vulns, ai_analysis), _confidence_section(confidence), _vulnerability_section(normalized_vulns), _remediation_section(normalized_vulns, ai_analysis), _ai_section(normalized_vulns, ai_analysis)])
     parts.append(_appendix(report_type, cards, normalized_vulns))
     parts.append('<footer class="footer">报告由 TOSKill 自动生成；仅展示实际工具返回的有效信息与必要验证证据。</footer>')

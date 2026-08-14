@@ -30,6 +30,10 @@ class WSManager {
         this._firstConnect = true;
         this._shouldReconnect = true;
         this.subscribedSessions = new Set();
+        this.heartbeatInterval = 10000;
+        this.heartbeatStaleAfter = 30000;
+        this.heartbeatTimer = null;
+        this.lastMessageAt = 0;
     }
 
     // 设置或者更新 WS 地址
@@ -78,6 +82,7 @@ class WSManager {
                     this.connected = true;
                     this.reconnectAttempts = 0;
                     this._shouldReconnect = true;
+                    this.startHeartbeat();
 
                     if (this.onConnectCallback) {
                         this.onConnectCallback();
@@ -97,6 +102,7 @@ class WSManager {
 
                 this.ws.onmessage = (event) => {
                     try {
+                        this.lastMessageAt = Date.now();
                         const data = JSON.parse(event.data);
                         if (data.type === 'connected' && data.payload?.session_id) {
                             this.sessionId = data.payload.session_id;
@@ -116,6 +122,7 @@ class WSManager {
                 this.ws.onclose = (event) => {
                     LOG.log('WebSocket closed:', event.code, event.reason);
                     this.connected = false;
+                    this.stopHeartbeat();
 
                     if (this.onDisconnectCallback) {
                         this.onDisconnectCallback(event);
@@ -161,12 +168,36 @@ class WSManager {
         }
     }
 
+    startHeartbeat() {
+        this.stopHeartbeat();
+        this.lastMessageAt = Date.now();
+        this.heartbeatTimer = setInterval(() => {
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+            if (Date.now() - this.lastMessageAt > this.heartbeatStaleAfter) {
+                LOG.warn('WebSocket heartbeat timed out; reconnecting');
+                this.ws.close(4000, 'Heartbeat timeout');
+                return;
+            }
+
+            this.send('ping', { timestamp: Date.now() });
+        }, this.heartbeatInterval);
+    }
+
+    stopHeartbeat() {
+        if (this.heartbeatTimer) {
+            clearInterval(this.heartbeatTimer);
+            this.heartbeatTimer = null;
+        }
+    }
+
     disconnect() {
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
         }
         this._shouldReconnect = false;
+        this.stopHeartbeat();
         this.cleanupConnectPromise(new Error('Disconnected'));
         if (this.ws) {
             this.ws.close();
@@ -183,6 +214,7 @@ class WSManager {
             storageService.setActiveSessionId(sessionId);
         }
         this._shouldReconnect = false;
+        this.stopHeartbeat();
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;

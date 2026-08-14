@@ -551,7 +551,7 @@ class HTMLReportGenerator:
                     <div class="value">{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
                 </div>
                 <div class="meta-item">
-                    <div class="label">漏洞总数</div>
+                    <div class="label">归并后待复核问题</div>
                     <div class="value">{vuln_count}</div>
                 </div>
             </div>

@@ -20,7 +20,7 @@ def _parse_cookie(value: str) -> Tuple[str, Dict[str, str]]:
     return name, attributes
 
 
-def _finding(url: str, name: str, attribute: str, solution: str) -> Dict[str, str]:
+def _finding(url: str, name: str, attribute: str, solution: str) -> Dict[str, Any]:
     return {
         "vuln_type": "Cookie Security Configuration",
         "severity": "medium" if attribute in {"Secure", "HttpOnly"} else "low",
@@ -30,6 +30,8 @@ def _finding(url: str, name: str, attribute: str, solution: str) -> Dict[str, st
         "evidence": f"Set-Cookie: {name}; 未发现 {attribute}",
         "solution": solution,
         "parameter": name,
+        "verified": True,
+        "verification_status": "verified",
     }
 
 
@@ -37,7 +39,7 @@ def cookie_security_scan(target: str, timeout: float = 8.0) -> Dict[str, Any]:
     url = normalize_http_url(target)
     response = fetch_http(url, timeout=timeout, follow_redirects=True, read_body=False)
     inspected: List[Dict[str, Any]] = []
-    findings: List[Dict[str, str]] = []
+    findings: List[Dict[str, Any]] = []
     for raw_cookie in response.header_values.get("set-cookie", []):
         name, attributes = _parse_cookie(raw_cookie)
         session_like = any(marker in name.lower() for marker in SESSION_MARKERS)

@@ -24,6 +24,10 @@ from TOSKill.tools.tool_categories import (
     information_summary_text,
     tool_category,
 )
+from TOSKill.tools.report.vulnerability_normalizer import (
+    consolidate_vulnerabilities,
+    vulnerability_occurrence_count,
+)
 from TOSKill.AI.log_collector import log_collector
 from TOSKill.AI.maas_client import MaaSRequestError, get_maas_client
 from TOSKill.utils.error_handler import create_error_response, format_tool_error, ErrorSource, ErrorCategory
@@ -46,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 SCAN_MODE_MAP = {"info": "info_collection", "vuln": "vuln_scan", "full": "full_scan"}
 SCRIPT_TOOL_CATEGORIES = {"info_collection", "vuln_scan"}
+WEBSOCKET_SEND_TIMEOUT = 5.0
 
 
 def _requested_script_category(payload: Dict[str, Any]) -> str:
@@ -211,6 +216,32 @@ class AIChatManager:
             cleanup = asyncio.create_task(self._cancel_disconnected_task(session_id, 60))
             self._disconnect_cleanup[session_id] = cleanup
 
+    def _drop_websocket(self, websocket: WebSocket) -> None:
+        """Remove an unresponsive socket without blocking the scan task."""
+        for owner_session_id, connection in list(self.connections.items()):
+            if connection is websocket:
+                self.disconnect(owner_session_id, websocket)
+                return
+
+        client_id = self._ws_to_client.pop(websocket, None)
+        if client_id:
+            self._subscriptions.pop(client_id, None)
+
+    async def _send_json(self, websocket: WebSocket, message: Dict, context: str) -> bool:
+        try:
+            await asyncio.wait_for(
+                websocket.send_json(message),
+                timeout=WEBSOCKET_SEND_TIMEOUT,
+            )
+            return True
+        except asyncio.TimeoutError:
+            logger.warning(f"WebSocket send timed out: {context}")
+        except Exception as exc:
+            logger.warning(f"WebSocket send failed: {context}: {exc}")
+
+        self._drop_websocket(websocket)
+        return False
+
     async def _cancel_disconnected_task(self, session_id: str, grace_seconds: int):
         try:
             await asyncio.sleep(grace_seconds)
@@ -311,10 +342,7 @@ class AIChatManager:
     async def _send(self, session_id: str, message: Dict):
         message = self._decorate_run_event(session_id, message)
         if ws := self.connections.get(session_id):
-            try:
-                await ws.send_json(message)
-            except Exception as e:
-                logger.error(f"发送消息失败: {e}")
+            await self._send_json(ws, message, f"session={session_id}")
 
     def _pending_for_client(self, session_id: str, pending: Optional[Dict]) -> Optional[Dict]:
         """Add routing metadata to a pending interaction replay."""
@@ -343,16 +371,17 @@ class AIChatManager:
         if "session_id" not in payload:
             payload["session_id"] = session_id
             message["payload"] = payload
-        for client_id, sessions in self._subscriptions.items():
+        recipients = []
+        for client_id, sessions in list(self._subscriptions.items()):
             if session_id in sessions:
                 # 找到 client_id 对应的 WebSocket
-                for ws_conn, cid in self._ws_to_client.items():
+                for ws_conn, cid in list(self._ws_to_client.items()):
                     if cid == client_id:
-                        try:
-                            await ws_conn.send_json(message)
-                        except Exception as e:
-                            logger.error(f"广播消息失败: {e}")
+                        recipients.append(ws_conn)
                         break
+
+        for ws_conn in recipients:
+            await self._send_json(ws_conn, message, f"broadcast_session={session_id}")
     
     async def _send_error(self, session_id: str, error: str, error_code: str = None, **extra):
         if error_code:
@@ -454,6 +483,7 @@ class AIChatManager:
                   details={"type": msg_type})
         
         handlers = {
+            "ping": self._handle_ping,
             "user_input": self._handle_user_input,
             "user_confirm": self._handle_user_confirm,
             "user_choice": self._handle_user_confirm,
@@ -484,6 +514,15 @@ class AIChatManager:
             await handler(session_id, payload)
         else:
             logger.warning(f"[{session_id}] 未知消息类型: {msg_type}")
+
+    async def _handle_ping(self, session_id: str, payload: Dict):
+        await self._send(session_id, {
+            "type": "pong",
+            "payload": {
+                "timestamp": payload.get("timestamp"),
+                "server_time": datetime.now().isoformat(),
+            },
+        })
     
     async def _handle_user_input(self, session_id: str, payload: Dict):
         content = payload.get("content", "")
@@ -1035,6 +1074,16 @@ class AIChatManager:
 
     @staticmethod
     def _build_scan_result_payload(state: Dict[str, Any], target: str, run_type: str) -> Dict[str, Any]:
+        raw_vulnerabilities = state.get("vulnerabilities", [])
+        logical_vulnerabilities = consolidate_vulnerabilities(raw_vulnerabilities)
+        verified_vulnerabilities = consolidate_vulnerabilities([
+            item for item in raw_vulnerabilities
+            if isinstance(item, dict) and (
+                item.get("verified") is True
+                or str(item.get("verification_status") or "").lower()
+                in {"verified", "confirmed", "exploitable"}
+            )
+        ])
         return {
             "session_id": state.get("task_id", ""),
             "target": target,
@@ -1046,8 +1095,10 @@ class AIChatManager:
             "failed_tasks": state.get("failed_tasks", []),
             "tool_results": state.get("tool_results", {}),
             "information_results": collect_information_results(state.get("tool_results", {})),
-            "vulnerabilities": state.get("vulnerabilities", []),
-            "vulnerabilities_count": len(state.get("vulnerabilities", [])),
+            "vulnerabilities": logical_vulnerabilities,
+            "vulnerabilities_count": len(logical_vulnerabilities),
+            "raw_vulnerabilities_count": vulnerability_occurrence_count(logical_vulnerabilities),
+            "verified_vulnerabilities_count": len(verified_vulnerabilities),
             "errors": state.get("errors", []),
             "scan_status": state.get("scan_status", ""),
             "current_tool": state.get("current_tool", ""),

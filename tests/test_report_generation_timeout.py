@@ -119,7 +119,7 @@ def test_async_report_always_appends_structured_vulnerability_details(monkeypatc
     )
 
     assert "## 漏洞明细（按风险优先级排序）" in result
-    assert "本次扫描共发现 **2** 个漏洞" in result
+    assert "本次扫描产生 **2** 条原始命中，归并为 **2** 个安全问题" in result
     assert result.index("受影响参数**：id") < result.index("受影响参数**：keyword")
     assert "**请求方法**：POST" in result
     assert "**来源工具**：sqli\\_scan" in result

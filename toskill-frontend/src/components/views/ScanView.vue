@@ -139,9 +139,17 @@
               <span class="stat-number">{{ informationResults.length }}</span>
               <span class="stat-label">已收集信息</span>
             </div>
-            <div class="summary-stat" v-if="showVulnerabilityResults" :class="{ warning: (resultsData.vulnerabilities?.length || 0) > 0 }">
-              <span class="stat-number">{{ resultsData.vulnerabilities?.length || 0 }}</span>
-              <span class="stat-label">确认漏洞</span>
+            <div class="summary-stat" v-if="showVulnerabilityResults" :class="{ warning: logicalVulnerabilityCount > 0 }">
+              <span class="stat-number">{{ rawVulnerabilityCount }}</span>
+              <span class="stat-label">原始扫描命中</span>
+            </div>
+            <div class="summary-stat" v-if="showVulnerabilityResults" :class="{ warning: logicalVulnerabilityCount > 0 }">
+              <span class="stat-number">{{ logicalVulnerabilityCount }}</span>
+              <span class="stat-label">归并后安全问题</span>
+            </div>
+            <div class="summary-stat" v-if="showVulnerabilityResults" :class="{ warning: verifiedVulnerabilityCount > 0 }">
+              <span class="stat-number">{{ verifiedVulnerabilityCount }}</span>
+              <span class="stat-label">已验证问题</span>
             </div>
             <div class="summary-stat">
               <span class="stat-number">{{ resultsData.errors?.length || 0 }}</span>
@@ -295,9 +303,21 @@ const informationResults = computed(() => Array.isArray(resultsData.value.inform
 
 const showVulnerabilityResults = computed(() => selectedReportType.value !== 'info_collection')
 
+const logicalVulnerabilityCount = computed(() => Number(
+  resultsData.value.vulnerabilities_count ?? resultsData.value.vulnerabilities?.length ?? 0
+))
+
+const rawVulnerabilityCount = computed(() => Number(
+  resultsData.value.raw_vulnerabilities_count ?? logicalVulnerabilityCount.value
+))
+
+const verifiedVulnerabilityCount = computed(() => Number(
+  resultsData.value.verified_vulnerabilities_count ?? 0
+))
+
 const emptyResultMessage = computed(() => selectedReportType.value === 'info_collection'
   ? '信息收集已完成，工具未返回可展示的信息。'
-  : '扫描完成，未确认漏洞。')
+  : '扫描完成，未产生需要复核的安全告警。')
 
 const taskModal = reactive({
   show: false,
@@ -624,6 +644,9 @@ const applyRunState = (state) => {
     tool_results: state.tool_results || {},
     information_results: state.information_results || resultsData.value.information_results || [],
     vulnerabilities: state.vulnerabilities || [],
+    vulnerabilities_count: state.vulnerabilities_count ?? resultsData.value.vulnerabilities_count,
+    raw_vulnerabilities_count: state.raw_vulnerabilities_count ?? resultsData.value.raw_vulnerabilities_count,
+    verified_vulnerabilities_count: state.verified_vulnerabilities_count ?? resultsData.value.verified_vulnerabilities_count,
     report_type: state.report_type || resultsData.value.report_type || '',
     errors: state.errors || [],
     report: state.report || resultsData.value.report || '',

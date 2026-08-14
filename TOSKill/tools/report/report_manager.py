@@ -459,7 +459,21 @@ class ReportManager:
             lines.extend(["本次扫描未发现漏洞。", ""])
             return "\n".join(lines)
 
-        lines.extend([f"本次扫描共发现 **{len(ordered_vulnerabilities)}** 个漏洞，具体如下。", ""])
+        raw_count = sum(
+            int(item.get("occurrence_count") or 1)
+            for item in ordered_vulnerabilities
+        )
+        verified_count = sum(
+            1 for item in ordered_vulnerabilities
+            if item.get("verified") is True
+            or str(item.get("verification_status") or "").lower()
+            in {"verified", "confirmed", "exploitable"}
+        )
+        pending_count = len(ordered_vulnerabilities) - verified_count
+        lines.extend([
+            f"本次扫描产生 **{raw_count}** 条原始命中，归并为 **{len(ordered_vulnerabilities)}** 个安全问题，其中 **{verified_count}** 个已由直接证据验证，**{pending_count}** 个仍待复核。未经独立验证的条目不代表漏洞已确认存在。",
+            "",
+        ])
         for index, vuln in enumerate(ordered_vulnerabilities, 1):
             severity = str(vuln.get("severity") or "info").lower()
             severity_label = severity_labels.get(severity, severity.upper())
@@ -556,8 +570,8 @@ class ReportManager:
 - 目标地址: {target}
 - 扫描时间: {now}
 
-## 漏洞统计概览
-- 漏洞总数: {len(vulnerabilities)}
+## 扫描告警统计概览
+- 归并后待复核问题数: {len(vulnerabilities)}
 - 严重: {severity_count['critical']} | 高危: {severity_count['high']} | 中危: {severity_count['medium']} | 低危: {severity_count['low']} | 信息: {severity_count['info']}
 
 ## 工具结果摘要
@@ -569,7 +583,7 @@ class ReportManager:
 ## 知识库参考
 {rag_context}
 
-请生成专业安全分析报告，输出为严格 JSON 格式，包含以下内容：
+以下条目均为扫描器告警，除非证据字段明确标记 verified/confirmed，否则不得描述为“已确认漏洞”或断言漏洞一定存在。请生成专业安全分析报告，输出为严格 JSON 格式，包含以下内容：
 
 ### 1. 执行摘要 (executive_summary)
 - 用简洁专业的语言概述整体安全状况
@@ -749,7 +763,7 @@ class ReportManager:
             })
         
         return {
-            "executive_summary": f"目标 {target} 存在 {len(vulnerabilities)} 个安全问题，其中高危 {severity_count['high']} 个，中危 {severity_count['medium']} 个。建议尽快修复高危漏洞。",
+            "executive_summary": f"目标 {target} 产生 {len(vulnerabilities)} 个归并后待复核安全告警，其中高危 {severity_count['high']} 个，中危 {severity_count['medium']} 个。应先复核证据，再安排修复。",
             "risk_assessment": {
                 "overall_risk": risk_level,
                 "risk_score": risk_score,
@@ -805,7 +819,7 @@ class ReportManager:
 - 目标: {target}
 - 时间: {now}
 - 工具数: {len(tool_results)}
-- 漏洞数: {len(vulnerabilities)}
+- 归并后待复核问题数: {len(vulnerabilities)}
 
 ## 工具结果摘要
 {tool_summary}
@@ -818,6 +832,8 @@ class ReportManager:
 
 ## 任务执行记录
 {task_summary}
+
+这些条目是扫描告警，不等同于已确认漏洞。除非输入明确包含 verified/confirmed 状态，否则必须使用“待复核问题”“扫描告警”等措辞，不得断言漏洞真实存在。
 
 请生成简洁报告（控制在500字内），包含：
 1. **风险等级**: 高/中/低
@@ -895,7 +911,7 @@ class ReportManager:
             f"",
             f"## 1. 执行摘要",
             f"",
-            f"本次扫描共执行 **{len(tool_results)}** 个工具，发现 **{len(vulnerabilities)}** 个安全问题。",
+            f"本次扫描共执行 **{len(tool_results)}** 个工具，归并得到 **{len(vulnerabilities)}** 个待复核安全问题。",
             f"",
         ]
         

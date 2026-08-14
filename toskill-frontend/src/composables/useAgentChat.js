@@ -1684,16 +1684,18 @@ export function useAgentChat() {
         pendingScanConfirm.value = null
         showScanConfirm.value = false
         const tasks = data.payload?.completed_tasks || []
-        const vulnCount = data.payload?.vulnerabilities_count ?? 0
+        const logicalVulnCount = data.payload?.vulnerabilities_count ?? 0
+        const rawVulnCount = data.payload?.raw_vulnerabilities_count ?? logicalVulnCount
+        const verifiedVulnCount = data.payload?.verified_vulnerabilities_count ?? 0
         const infoCount = data.payload?.information_results?.length || 0
         const reportType = data.payload?.report_type || data.payload?.mode || ''
         let summary = `扫描完成\n目标: ${data.payload?.target || '-'}\n已完成工具: ${tasks.length} 个`
         if (reportType === 'info_collection') {
           summary += `\n已收集信息: ${infoCount} 类`
         } else if (reportType === 'full_scan') {
-          summary += `\n已收集信息: ${infoCount} 类\n确认漏洞: ${vulnCount} 个`
+          summary += `\n已收集信息: ${infoCount} 类\n原始扫描命中: ${rawVulnCount} 条\n归并后安全问题: ${logicalVulnCount} 个\n已验证问题: ${verifiedVulnCount} 个`
         } else {
-          summary += `\n确认漏洞: ${vulnCount} 个`
+          summary += `\n原始扫描命中: ${rawVulnCount} 条\n归并后安全问题: ${logicalVulnCount} 个\n已验证问题: ${verifiedVulnCount} 个`
         }
         if (data.payload?.report) summary += `\n报告: ${data.payload.report}`
         const completedRun = updateRun(data.payload || {}, { status: 'completed', completed: tasks.length, summary })
@@ -1770,7 +1772,7 @@ export function useAgentChat() {
         const infoItems = data.payload?.information_summary || []
         const message = data.payload?.tool_category === 'info_collection'
           ? (resultSummary || `已收集信息${infoItems.length ? `：${infoItems.map(item => item.label).join('、')}` : ''}`)
-          : (data.payload?.vulnerable ? '发现漏洞' : '未确认漏洞')
+          : (data.payload?.vulnerable ? '发现待复核安全告警' : '未发现明确安全告警')
         const auth = data.payload?.auth_obtained ? ' | 已获取认证' : ''
         upsertRunStep(data.payload || {}, {
           title: data.payload?.tool || '扫描工具',

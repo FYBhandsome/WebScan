@@ -22,7 +22,7 @@ def cors_misconfiguration_scan(target: str, timeout: float = 8.0) -> Dict[str, A
     allow_origin = response.headers.get("access-control-allow-origin", "")
     allow_credentials = response.headers.get("access-control-allow-credentials", "").lower() == "true"
     reflected = allow_origin == PROBE_ORIGIN
-    findings: List[Dict[str, str]] = []
+    findings: List[Dict[str, Any]] = []
     if reflected and allow_credentials:
         findings.append({
             "vuln_type": "CORS Misconfiguration",
@@ -33,6 +33,8 @@ def cors_misconfiguration_scan(target: str, timeout: float = 8.0) -> Dict[str, A
             "evidence": f"Origin: {PROBE_ORIGIN}; Access-Control-Allow-Origin: {allow_origin}; Access-Control-Allow-Credentials: true",
             "solution": "使用严格的可信 Origin 白名单，避免动态反射任意 Origin，并仅在必要时启用凭证跨域。",
             "parameter": "Origin",
+            "verified": True,
+            "verification_status": "verified",
         })
     return {
         "success": True,

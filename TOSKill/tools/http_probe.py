@@ -55,8 +55,12 @@ def build_public_url(target: str, path: str) -> str:
 
 def _header_maps(headers) -> tuple[Dict[str, str], Dict[str, List[str]]]:
     values: Dict[str, List[str]] = {}
+    processed = set()
     for key in headers.keys():
         key_text = str(key).lower()
+        if key_text in processed:
+            continue
+        processed.add(key_text)
         current = headers.get_all(key) if hasattr(headers, "get_all") else None
         if not current:
             current = [headers.get(key)]

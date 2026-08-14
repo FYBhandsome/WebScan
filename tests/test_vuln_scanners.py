@@ -6,8 +6,12 @@
 """
 
 import pytest
+import asyncio
 import sys
+import importlib.util
+from email.message import Message
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
@@ -171,6 +175,23 @@ class TestSQLiScanner:
         assert "true" in BOOLEAN_PAYLOADS
         assert "false" in BOOLEAN_PAYLOADS
 
+    def test_union_detection_requires_reflected_marker(self):
+        from backend.vulnerability_scan_plugins.sqli.scanner import SQLiScanner
+
+        scanner = SQLiScanner("http://example.com")
+        marker = "TOSKILL_UNION_TEST"
+
+        assert scanner._check_union_success("normal login page", marker) is False
+        assert scanner._check_union_success(f"result: {marker}", marker) is True
+
+    def test_union_payload_places_marker_in_requested_column(self):
+        from backend.vulnerability_scan_plugins.sqli.scanner import SQLiScanner
+
+        scanner = SQLiScanner("http://example.com")
+        payload = scanner._generate_union_payload(3, marker="MARKER", marker_column=1)
+
+        assert payload == "' UNION SELECT NULL,'MARKER',NULL--"
+
 
 class TestXSSScanner:
     """XSS扫描器测试"""
@@ -235,6 +256,27 @@ class TestLfiScanner:
         
         assert scanner.target == "http://example.com?file=test"
 
+    def test_page_image_name_is_not_lfi_evidence(self):
+        from backend.vulnerability_scan_plugins.lfi.scanner import LfiScanner
+
+        scanner = LfiScanner("http://example.com?file=test")
+        login_page = '<img src="images/login_logo.png">'
+
+        assert scanner._check_lfi_signature(login_page, "/etc/passwd", login_page) is None
+        assert scanner._check_lfi_signature(login_page, "/etc/passwd", "") is None
+
+    def test_new_passwd_signature_is_lfi_evidence(self):
+        from backend.vulnerability_scan_plugins.lfi.scanner import LfiScanner
+
+        scanner = LfiScanner("http://example.com?file=test")
+        signature = scanner._check_lfi_signature(
+            "root:x:0:0:root:/root:/bin/bash",
+            "/etc/passwd",
+            "normal page",
+        )
+
+        assert signature and signature.startswith("linux_passwd:")
+
 
 class TestSsrfScanner:
     """SSRF扫描器测试"""
@@ -255,6 +297,15 @@ class TestSsrfScanner:
         assert len(CLOUD_METADATA_PAYLOADS) > 0
         assert len(INTERNAL_NETWORK_PAYLOADS) > 0
         assert len(BYPASS_TECHNIQUES) > 0
+
+    def test_ssrf_requires_target_response_signature(self):
+        from backend.vulnerability_scan_plugins.ssrf.scanner import SsrfScanner
+
+        scanner = SsrfScanner("http://example.com")
+        expected = [r"instance-id", r"ami-[a-z0-9]+"]
+
+        assert scanner._check_ssrf_signature("normal 200 login page", expected) is None
+        assert scanner._check_ssrf_signature("instance-id\ni-123456", expected) == "instance-id"
 
 
 class TestCmdiScanner:
@@ -299,6 +350,36 @@ class TestCsrfScanner:
         from backend.vulnerability_scan_plugins.csrf.scanner import CSRFScanner
         assert CSRFScanner is not None
 
+    def test_samesite_is_read_from_raw_set_cookie_header(self):
+        from backend.vulnerability_scan_plugins.csrf.scanner import CSRFScanner
+
+        attributes = CSRFScanner._parse_set_cookie_headers([
+            "PHPSESSID=abc123; Path=/; HttpOnly; SameSite=Strict"
+        ])
+
+        assert attributes["phpsessid"]["httponly"] == "true"
+        assert attributes["phpsessid"]["samesite"] == "Strict"
+
+    def test_strict_samesite_cookie_is_not_reported(self):
+        from backend.vulnerability_scan_plugins.csrf.scanner import CSRFScanner
+
+        scanner = CSRFScanner("http://example.com")
+        scanner._cookie_analysis = {
+            "cookies": [{
+                "name": "PHPSESSID",
+                "domain": "example.com",
+                "path": "/",
+                "secure": True,
+                "has_httponly": True,
+                "samesite": "Strict",
+            }]
+        }
+        result = scanner._create_result()
+
+        scanner._check_samesite_protection(result)
+
+        assert result.vulnerabilities == []
+
 
 class TestFileUploadScanner:
     """文件上传扫描器测试"""
@@ -322,6 +403,108 @@ class TestInfoLeakScanner:
         from backend.vulnerability_scan_plugins.infoleak.scanner import SENSITIVE_PATTERNS
         
         assert len(SENSITIVE_PATTERNS) > 0
+
+
+class TestScanResultAccuracy:
+    """扫描结果计数与底层HTTP证据测试。"""
+
+    def test_header_maps_does_not_duplicate_repeated_header_values(self):
+        module_path = project_root / "TOSKill" / "tools" / "http_probe.py"
+        spec = importlib.util.spec_from_file_location("toskill_http_probe_test", module_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        headers = Message()
+        headers.add_header("Set-Cookie", "security=impossible; Path=/; HttpOnly")
+        headers.add_header("Set-Cookie", "PHPSESSID=abc; Path=/; HttpOnly; SameSite=Strict")
+
+        flattened, values = module._header_maps(headers)
+
+        assert len(values["set-cookie"]) == 2
+        assert flattened["set-cookie"].count("PHPSESSID") == 1
+
+    def test_completion_payload_separates_result_counts(self):
+        from TOSKill.api.ai_chat_websocket import AIChatManager
+
+        duplicate = {
+            "source_tool": "lfi_scan",
+            "vuln_type": "lfi",
+            "title": "文件包含漏洞 - file (basic)",
+            "url": "http://example.com",
+            "method": "GET",
+            "parameter": "file",
+            "payload": "/etc/passwd",
+        }
+        second_payload = {**duplicate, "payload": "../etc/passwd"}
+        verified_header = {
+            "source_tool": "http_security_headers_scan",
+            "vuln_type": "HTTP Security Headers",
+            "title": "缺少内容安全策略",
+            "url": "http://example.com",
+            "parameter": "Content-Security-Policy",
+            "verified": True,
+            "verification_status": "verified",
+        }
+
+        payload = AIChatManager._build_scan_result_payload(
+            {
+                "task_id": "scan-1",
+                "vulnerabilities": [duplicate, second_payload, verified_header],
+                "completed_tasks": ["lfi_scan", "http_security_headers_scan"],
+            },
+            "http://example.com",
+            "automatic",
+        )
+
+        assert payload["raw_vulnerabilities_count"] == 3
+        assert payload["vulnerabilities_count"] == 2
+        assert payload["verified_vulnerabilities_count"] == 1
+        assert len(payload["vulnerabilities"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_unresponsive_websocket_does_not_block_scan_events(self, monkeypatch):
+        from TOSKill.api import ai_chat_websocket
+
+        manager = ai_chat_websocket.AIChatManager()
+        websocket = AsyncMock()
+
+        async def never_finishes(_message):
+            await asyncio.Future()
+
+        websocket.send_json.side_effect = never_finishes
+        manager.connections["session-1"] = websocket
+        manager._ws_to_client[websocket] = "client-1"
+        manager._subscriptions["client-1"] = {"session-1"}
+        monkeypatch.setattr(ai_chat_websocket, "WEBSOCKET_SEND_TIMEOUT", 0.01)
+
+        await asyncio.wait_for(
+            manager._send_multi("session-1", {
+                "type": "task_completed",
+                "payload": {"tool": "slow_scan"},
+            }),
+            timeout=0.2,
+        )
+
+        assert "session-1" not in manager.connections
+        assert websocket not in manager._ws_to_client
+
+    @pytest.mark.asyncio
+    async def test_websocket_ping_receives_pong(self):
+        from TOSKill.api.ai_chat_websocket import AIChatManager
+
+        manager = AIChatManager()
+        websocket = AsyncMock()
+        manager.connections["session-1"] = websocket
+
+        await manager.handle_message("session-1", {
+            "type": "ping",
+            "payload": {"timestamp": 12345},
+        })
+
+        sent = websocket.send_json.call_args.args[0]
+        assert sent["type"] == "pong"
+        assert sent["payload"]["timestamp"] == 12345
 
 
 if __name__ == "__main__":

@@ -70,7 +70,7 @@ def test_report_type_selects_vulnerability_template_with_blue_progress_bar():
 
     assert "安全分析研判报告" in html
     assert "漏洞扫描风险概览" in html
-    assert "确认的问题（按受影响位置展示）" in html
+    assert "待复核问题（按受影响位置展示）" in html
     assert "SQL 注入" in html
     assert "分层加固整改方案" in html
     assert "AI 智能分析" in html
@@ -157,7 +157,7 @@ def test_vulnerability_report_merges_duplicate_hits_into_one_issue_card():
 
     html = HTMLReportGenerator().generate_report(**kwargs, report_type="vuln_scan")
 
-    assert "本次漏洞扫描共确认 1 个问题" in html
+    assert "本次扫描归并得到 1 个安全问题" in html
     assert html.count('class="vuln-item"') == 1
     assert "保留 2 条独立验证证据" in html
     assert "已合并 1 条完全重复命中" in html
@@ -184,7 +184,7 @@ def test_vulnerability_report_keeps_different_input_positions_separate():
 
     html = HTMLReportGenerator().generate_report(**kwargs, report_type="vuln_scan")
 
-    assert "本次漏洞扫描共确认 2 个问题" in html
+    assert "本次扫描归并得到 2 个安全问题" in html
     assert html.count('class="vuln-item"') == 2
     assert "输入位置：User-Agent" in html
     assert "输入位置：Referer" in html
