@@ -40,12 +40,15 @@ def webside_query(ip: str) -> Dict[str, Any]:
                 "side_sites": result.get("data", []),
                 "total_count": len(result.get("data", []))
             },
-            "error": None if result.get("success") else result.get("message"),
+            "error": None if result.get("success") else (
+                f"旁站查询外部服务不可用: {result.get('message') or '未知错误'}"
+            ),
             "metadata": {
                 "tool": "webside_query",
                 "ip": ip,
                 "has_data": result.get("has_data", False),
-                "sites_count": len(result.get("data", []))
+                "sites_count": len(result.get("data", [])),
+                "provider": "api.webscan.cc",
             }
         }
     except ImportError as e:

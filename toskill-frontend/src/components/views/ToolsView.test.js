@@ -51,7 +51,7 @@ describe('ToolsView', () => {
     expect(wrapper.text()).toContain('Port Scan')
     expect(wrapper.text()).not.toContain('Custom Assets')
 
-    await wrapper.get('.source-filter button:nth-child(2)').trigger('click')
+    await wrapper.get('.source-switch button:nth-child(2)').trigger('click')
     expect(wrapper.text()).toContain('Custom Assets')
     expect(wrapper.text()).not.toContain('Port Scan')
 
@@ -133,7 +133,8 @@ describe('ToolsView', () => {
     await wrapper.get('#executeToolBtn').trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('收集到的信息')
+    expect(wrapper.text()).toContain('收集结果')
+    expect(wrapper.text()).toContain('执行完成')
     expect(wrapper.text()).toContain('开放端口')
     expect(wrapper.text()).toContain('80、443')
     expect(wrapper.text()).not.toContain('未发现漏洞')

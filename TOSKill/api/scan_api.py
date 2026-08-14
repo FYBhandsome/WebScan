@@ -171,12 +171,16 @@ async def _execute_tools_async(target: str, tools: List[str]) -> Tuple[List[Dict
                 result = await tool.ainvoke(tool_target)
             else:
                 result = tool.invoke(tool_target)
+            tool_success = not (isinstance(result, dict) and result.get("success") is False)
             results.append({
                 "tool": tool_name,
-                "success": True,
+                "success": tool_success,
                 "result": result,
+                "error": result.get("error") if isinstance(result, dict) and not tool_success else None,
                 "timestamp": datetime.now().isoformat()
             })
+            if not tool_success:
+                errors.append(f"{tool_name}: {result.get('error') or '工具执行失败'}")
         except Exception as e:
             logger.error(f"工具 {tool_name} 执行失败: {e}")
             errors.append(f"{tool_name}: {str(e)}")
@@ -443,12 +447,14 @@ async def api_execute_tool(request: ToolExecuteRequest):
             "tool_name": request.tool_name,
             "tool_category": category,
             "target": target,
-            "success": True,
+            "success": not (isinstance(result, dict) and result.get("success") is False),
             "result": result,
             "timestamp": datetime.now().isoformat()
         }
         if response_data["tool_category"] == "info_collection":
             response_data["information_summary"] = information_items(request.tool_name, result)
+        if not response_data["success"]:
+            response_data["error"] = result.get("error") or "工具执行失败"
 
         if request.analyze and category == "vuln_scan":
             try:

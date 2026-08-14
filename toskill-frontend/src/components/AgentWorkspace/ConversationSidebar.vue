@@ -118,7 +118,7 @@ onUnmounted(() => document.removeEventListener('click', closeContextMenu))
 
 .collapse-btn {
   position: absolute;
-  top: 8px;
+  top: 17px;
   right: 8px;
   width: 24px;
   height: 24px;
@@ -135,7 +135,8 @@ onUnmounted(() => document.removeEventListener('click', closeContextMenu))
 
 .new-conv-btn {
   margin: 12px;
-  padding: 8px 8px;
+  margin-right: 40px;
+  padding: 8px 8px 8px 8px;
   display: flex;
   align-items: center;
   gap: 8px;

@@ -50,22 +50,24 @@ FIELD_LABELS = {
     "options_status_code": "OPTIONS 状态", "head_status_code": "HEAD 状态",
     "redirect_location": "重定向地址", "public_resources": "公开资源",
     "discovered_paths": "发现路径", "target_url": "目标地址",
+    "status_message": "查询状态", "collection_status": "探测状态", "query_status": "查询状态",
+    "provider_error": "数据源诊断",
 }
 
 PREFERRED_FIELDS = {
     "baseinfo_scan": ("ip", "host", "hostname", "server", "title", "status_code"),
     "port_scan": ("open_ports", "ports", "total_count"),
-    "subdomain_scan": ("subdomains", "total_count"),
+    "subdomain_scan": ("status_message", "subdomains", "total_count", "provider", "provider_error"),
     "dir_brute": ("directories", "files", "found_paths", "total_count"),
     "waf_detect_scan": ("waf_detected", "waf_type", "waf", "detected", "name"),
     "cdn_detect_scan": ("cdn_detected", "cdn_provider", "detected", "provider"),
     "cms_detect_scan": ("cms_name", "cms_version", "cms", "version"),
     "crawler_scan": ("pages", "urls", "crawled_urls", "page_count", "forms", "form_count", "parameters", "params"),
     "ip_locate_scan": ("ip", "location", "isp", "provider"),
-    "webside_query_scan": ("website_name", "record", "domain", "provider"),
+    "webside_query_scan": ("status_message", "website_name", "record", "domain", "provider"),
     "web_weight_scan": ("weight", "domain"),
     "infoleak_scan": ("leaks_found", "leak_details"),
-    "tls_certificate_scan": ("host", "port", "tls_version", "cipher", "certificate_subject", "certificate_issuer", "certificate_expires_at", "subject_alt_names"),
+    "tls_certificate_scan": ("status_message", "host", "port", "tls_version", "cipher", "certificate_subject", "certificate_issuer", "certificate_expires_at", "subject_alt_names"),
     "http_methods_scan": ("allowed_methods", "options_status_code", "head_status_code", "redirect_location", "server"),
     "public_metadata_scan": ("discovered_paths", "total_count", "public_resources"),
 }
@@ -134,6 +136,8 @@ def result_data(result: Any) -> Dict[str, Any]:
 def information_items(tool_name: str, result: Any, limit: int = 6) -> List[Dict[str, str]]:
     """Return UI-safe, structured information collected by one info tool."""
     if not is_information_tool(tool_name):
+        return []
+    if isinstance(result, dict) and result.get("success") is False:
         return []
     data = result_data(result)
     items: List[Dict[str, str]] = []

@@ -17,7 +17,15 @@
       >
         <div class="step-rail">
           <span class="step-dot" :class="`status-${step.status || 'pending'}`">
-            {{ statusIcon(step.status) }}
+            <svg
+              v-if="step.status === 'completed'"
+              class="step-check-icon"
+              viewBox="0 0 16 16"
+              aria-label="已完成"
+            >
+              <path d="M3.5 8.2 6.6 11l5.9-6.2" />
+            </svg>
+            <span v-else aria-hidden="true">{{ statusIcon(step.status) }}</span>
           </span>
           <span class="step-line"></span>
         </div>
@@ -136,7 +144,7 @@ const statusLabel = (status) => ({
 }[status] || '运行中')
 
 const statusIcon = (status) => ({
-  completed: '✓', failed: '×', skipped: '−', waiting: '?', cancelled: '−', running: '•'
+  failed: '×', skipped: '−', waiting: '?', cancelled: '−', running: '•'
 }[status] || '○')
 
 const formatTime = (timestamp) => {
@@ -177,6 +185,15 @@ const formatTime = (timestamp) => {
 }
 .step-dot.status-running { color: #059669; border-color: #34d399; animation: pulse 1.4s infinite; }
 .step-dot.status-completed { color: white; border-color: #10b981; background: #10b981; }
+.step-check-icon {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .step-dot.status-failed { color: white; border-color: #ef4444; background: #ef4444; }
 .step-dot.status-skipped, .step-dot.status-cancelled { background: #f4f4f5; }
 .step-line { position: absolute; top: 17px; bottom: 0; width: 1px; background: #e4e4e7; }

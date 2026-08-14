@@ -298,6 +298,16 @@ def normalize_scanner_result(
     data = raw_result.get("data", {})
     error = raw_result.get("error")
 
+    # Compatibility guard for legacy adapters that accidentally wrapped a
+    # complete scanner result inside an outer successful ToolResult.
+    if isinstance(data, dict) and isinstance(data.get("success"), bool):
+        nested = data
+        success = nested["success"]
+        data = nested.get("data", {})
+        error = nested.get("error") or error
+        if "metadata" not in raw_result and isinstance(nested.get("metadata"), dict):
+            raw_result = {**raw_result, "metadata": nested["metadata"]}
+
     if not isinstance(success, bool):
         return wrap_tool_result(False, {}, error="扫描器返回的 success 字段不是布尔值")
     if data is None:
@@ -345,6 +355,7 @@ def clean_target(target: str) -> str:
 URL_PRESERVING_TOOLS = frozenset({
     "sqli_scan",
     "xss_scan",
+    "waf_detect_scan",
     "tls_certificate_scan",
     "http_methods_scan",
     "public_metadata_scan",
@@ -435,6 +446,14 @@ def invoke_tool_with_auth(tool, params_or_target, state: Dict[str, Any] = None) 
                 params["auth_token"] = auth_token
     
     result = tool.invoke(params)
+    if (
+        isinstance(result, dict)
+        and result.get("success") is True
+        and isinstance(result.get("data"), dict)
+        and isinstance(result["data"].get("success"), bool)
+        and ("data" in result["data"] or "error" in result["data"])
+    ):
+        result = normalize_scanner_result(result)
     if not validate_tool_result(result):
         logger.error(f"工具 {getattr(tool, 'name', 'unknown')} 返回格式不符合 ToolResult 规范")
         return wrap_tool_result(
@@ -627,10 +646,7 @@ def subdomain_scan(target: str) -> ToolResult:
     logger.info(f"[+] 执行子域名扫描：{t}")
     try:
         raw_result = subdomain(t)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"子域名扫描失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -687,14 +703,11 @@ def waf_detect_scan(target: str) -> ToolResult:
             - error: 错误信息（如有）
             - timestamp: 执行时间戳
     """
-    t = clean_target(target)
+    t = normalize_scan_target(target)
     logger.info(f"[+] 执行WAF检测：{t}")
     try:
         raw_result = waf_detect(t)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"WAF检测失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -821,14 +834,15 @@ def ip_locate_scan(target: str) -> ToolResult:
             - error: 错误信息（如有）
             - timestamp: 执行时间戳
     """
-    t = clean_target(target)
+    try:
+        t = resolve_target_ip(target)
+    except (TypeError, ValueError) as e:
+        logger.error(f"IP定位目标解析失败: {e}")
+        return wrap_tool_result(success=False, data={}, error=str(e))
     logger.info(f"[+] 执行IP定位：{t}")
     try:
         raw_result = ip_locate(t)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"IP定位失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -862,6 +876,17 @@ def webside_query_scan(target: str) -> ToolResult:
         raw_success = raw_result.get("success", False) if isinstance(raw_result, dict) else True
         raw_data = raw_result.get("data") if isinstance(raw_result, dict) else {"result": raw_result}
         raw_error = raw_result.get("error") if isinstance(raw_result, dict) else None
+        if not raw_success:
+            neutral_message = "旁站查询数据源暂不可用，本次未获得可展示结果。"
+            return wrap_tool_result(
+                success=True,
+                data={
+                    **(raw_data if isinstance(raw_data, dict) else {}),
+                    "query_status": "provider_unavailable",
+                    "status_message": neutral_message,
+                    "provider_error": raw_error or "未知外部服务错误",
+                },
+            )
         return wrap_tool_result(
             success=raw_success,
             data=raw_data if isinstance(raw_data, dict) else {},
@@ -895,10 +920,7 @@ def web_weight_scan(target: str) -> ToolResult:
     logger.info(f"[+] 执行权重查询：{t}")
     try:
         raw_result = web_weight(t)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"权重查询失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -928,7 +950,21 @@ def tls_certificate_scan(target: str) -> ToolResult:
     """收集 HTTPS 服务的 TLS 协议、证书主体、签发者、有效期与 SAN 信息。"""
     logger.info(f"[+] 执行 TLS 证书分析：{target}")
     try:
-        return normalize_scanner_result(tls_certificate(target))
+        raw_result = tls_certificate(target)
+        if isinstance(raw_result, dict) and raw_result.get("success") is False:
+            raw_data = raw_result.get("data")
+            failure_type = raw_data.get("failure_type", "unavailable") if isinstance(raw_data, dict) else "unavailable"
+            return wrap_tool_result(
+                success=True,
+                data={
+                    **(raw_data if isinstance(raw_data, dict) else {}),
+                    "tls_available": False,
+                    "collection_status": failure_type,
+                    "status_message": "未检测到可访问的 TLS 服务。",
+                    "diagnostic": raw_result.get("error") or "TLS 探测未返回可用结果",
+                },
+            )
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"TLS 证书分析失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -2087,8 +2123,9 @@ class ScriptManager:
     async def generate_script_with_ai(self, description: str) -> str:
         """使用AI生成扫描脚本"""
         from ..AI.script_safety import extract_code_block
+        from ..AI.maas_client import get_maas_client
+        from ..config import settings
         
-        llm = self._get_llm()
         prompt = f"""根据以下需求生成一个Python安全扫描脚本：
 
 需求：{description}
@@ -2109,15 +2146,18 @@ class ScriptManager:
 
 只输出Python代码，使用```python包裹代码。
 """
-        try:
-            response = llm.invoke(prompt).content
-            code = extract_code_block(response)
-            if code:
-                return code
-            return response.strip()
-        except Exception as e:
-            logger.error(f"AI生成脚本失败: {e}")
-            return ""
+        response = await get_maas_client().complete(
+            messages=[
+                {"role": "system", "content": "你是安全扫描脚本生成助手，只输出符合约束的 Python 代码。"},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=settings.SCRIPT_GENERATION_MAX_TOKENS,
+            timeout=settings.SCRIPT_GENERATION_TIMEOUT,
+            max_retries=settings.SCRIPT_GENERATION_MAX_RETRIES,
+            temperature=settings.LLM_TEMPERATURE,
+        )
+        code = extract_code_block(response)
+        return code or response.strip()
     
     def get_registered_scripts(self) -> Dict:
         """获取已注册的脚本列表"""

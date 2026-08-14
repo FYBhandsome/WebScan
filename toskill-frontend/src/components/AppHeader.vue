@@ -60,7 +60,22 @@ const props = defineProps({
   showScanProgress: Boolean
 })
 
-const hasProgress = computed(() => props.scanProgress?.total > 0)
+const progressStatuses = new Set([
+  'queued',
+  'scanning',
+  'running',
+  'waiting',
+  'waiting_user',
+  'pausing_for_chat',
+  'paused_for_chat',
+  'replanning',
+  'reporting',
+  'completed',
+  'error'
+])
+const hasProgress = computed(() => (
+  props.scanProgress?.total > 0 && progressStatuses.has(props.scanStatus)
+))
 const progressPercent = computed(() => {
   if (!props.scanProgress?.total) return 0
   return Math.min(100, Math.round(((props.scanProgress.current || 0) / props.scanProgress.total) * 100))

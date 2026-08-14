@@ -57,14 +57,8 @@ async def test_paused_websocket_chat_persists_structured_context():
 
     manager = AIChatManager()
     manager.connections[session_id] = AsyncMock()
-    manager.chat_client = MagicMock()
-    manager.chat_client.chat.completions.create = AsyncMock(
-        return_value=type(
-            "Response",
-            (),
-            {"choices": [type("Choice", (), {"message": type("Message", (), {"content": "收到，稍后按要求调整扫描。"})()})()]},
-        )()
-    )
+    manager.maas_client = MagicMock()
+    manager.maas_client.complete = AsyncMock(return_value="收到，稍后按要求调整扫描。")
 
     try:
         await manager._handle_chat(
@@ -78,12 +72,30 @@ async def test_paused_websocket_chat_persists_structured_context():
         assert "weakpass_scan" in excluded
         assert stored["decision_context"]["risk_tolerance"] == "low_impact"
         assert stored["decision_context_version"] == 1
-        request = manager.chat_client.chat.completions.create.await_args.kwargs
+        request = manager.maas_client.complete.await_args.kwargs
         assert request["max_tokens"] == settings.CHAT_MAX_TOKENS
         assert [message["role"] for message in request["messages"]].count("system") == 1
         assert "扫描上下文" in request["messages"][0]["content"]
     finally:
         memory_store.delete_session(session_id)
+
+
+@pytest.mark.asyncio
+async def test_chat_returns_normalized_maas_error():
+    from TOSKill.AI.maas_client import MaaSRequestError
+
+    manager = AIChatManager()
+    manager.maas_client = MagicMock()
+    manager.maas_client.complete = AsyncMock(side_effect=MaaSRequestError(
+        "MODEL_TIMEOUT", "AI模型请求超时（120秒），请检查网络或稍后重试", retryable=True
+    ))
+    manager._send_error = AsyncMock()
+
+    await manager._handle_chat("chat-timeout", {"content": "你好"})
+
+    manager._send_error.assert_awaited_once()
+    assert manager._send_error.await_args.kwargs["error_code"] == "MODEL_TIMEOUT"
+    assert manager._send_error.await_args.kwargs["retryable"] is True
 
 
 @pytest.mark.asyncio

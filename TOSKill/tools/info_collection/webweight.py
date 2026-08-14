@@ -4,7 +4,30 @@
 封装backend.plugins.webweight模块
 """
 
+import ipaddress
+from urllib.parse import urlparse
 from typing import Dict, Any
+
+
+def _registrable_domain(target: str) -> str:
+    """Return a queryable host, collapsing ordinary multi-level subdomains."""
+    value = str(target or "").strip()
+    parsed = urlparse(value if "://" in value else f"//{value}")
+    host = (parsed.hostname or "").strip(".").lower()
+    if not host:
+        raise ValueError("网站权重查询缺少有效域名")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        labels = host.split(".")
+        if len(labels) < 2 or any(not label for label in labels):
+            raise ValueError(f"网站权重查询域名格式无效: {host}")
+        # The provider accepts root domains. This covers common public suffixes
+        # without introducing another network-backed dependency.
+        second_level_suffixes = {"com.cn", "net.cn", "org.cn", "gov.cn", "co.uk", "org.uk", "com.au"}
+        suffix = ".".join(labels[-2:])
+        return ".".join(labels[-3:]) if suffix in second_level_suffixes and len(labels) >= 3 else suffix
+    raise ValueError("网站权重查询仅支持域名，不支持 IP 地址")
 
 
 def web_weight(domain: str) -> Dict[str, Any]:
@@ -29,18 +52,21 @@ def web_weight(domain: str) -> Dict[str, Any]:
     try:
         from backend.plugins.webweight.webweight import get_web_weight
         
-        result = get_web_weight(domain)
+        lookup_domain = _registrable_domain(domain)
+        result = get_web_weight(lookup_domain)
         
         return {
             "success": result.get("success", False),
             "data": {
                 "result": result.get("result", ""),
-                "raw_data": result.get("raw_data", {})
+                "raw_data": result.get("raw_data", {}),
+                "lookup_domain": lookup_domain,
             },
             "error": None if result.get("success") else result.get("message"),
             "metadata": {
                 "tool": "web_weight",
                 "domain": domain,
+                "lookup_domain": lookup_domain,
                 "result": result.get("result", "")
             }
         }

@@ -32,13 +32,18 @@ class TOSKillSettings(BaseSettings):
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://maas-api.cn-huabei-1.xf-yun.com/v2")
     MODEL_ID: str = os.getenv("MODEL_ID", "xop35qwen2b")
     LLM_TEMPERATURE: float = 0.1
-    # 暂停扫描期间的聊天请求使用 OpenAI 兼容客户端。显式保留 max_tokens
+    # 聊天与脚本生成统一使用 OpenAI 兼容客户端。显式保留 max_tokens
     # 字段，避免部分 MaaS 服务不支持 max_completion_tokens。
     CHAT_MAX_TOKENS: int = 512
+    CHAT_AI_TIMEOUT: float = 120.0
+    CHAT_AI_MAX_RETRIES: int = 2
     CHAT_CONTEXT_MAX_CHARS: int = 3500
     CHAT_HISTORY_MAX_MESSAGES: int = 8
     CHAT_HISTORY_MESSAGE_MAX_CHARS: int = 1200
     REPORT_AI_TIMEOUT: float = 30.0
+    SCRIPT_GENERATION_MAX_TOKENS: int = 1536
+    SCRIPT_GENERATION_TIMEOUT: float = 60.0
+    SCRIPT_GENERATION_MAX_RETRIES: int = 1
 
     # 置信度评估配置
     CONFIDENCE_ASSESSMENT_ENABLED: bool = True

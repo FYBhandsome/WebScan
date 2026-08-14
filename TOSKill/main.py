@@ -87,6 +87,11 @@ async def lifespan(app: FastAPI):
         await get_agent_orchestrator().aclose()
     except Exception as e:
         logger.warning(f"关闭工作流 Checkpointer 失败: {e}")
+    try:
+        from TOSKill.AI.maas_client import close_maas_client
+        await close_maas_client()
+    except Exception as e:
+        logger.warning(f"关闭 MaaS 客户端失败: {e}")
     logger.info("服务关闭")
 
 

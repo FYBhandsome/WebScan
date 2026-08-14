@@ -36,4 +36,23 @@ describe('AgentRunTimeline script category field', () => {
     const emittedFields = wrapper.emitted('submit-input')[0][1]
     expect(emittedFields[0].value).toBe('vuln_scan')
   })
+
+  it('renders a consistent SVG check for completed steps', () => {
+    const wrapper = mount(AgentRunTimeline, {
+      props: {
+        run: {
+          status: 'running',
+          steps: [
+            { stepId: 'tool:done', title: 'done', status: 'completed' },
+            { stepId: 'tool:active', title: 'active', status: 'running' }
+          ]
+        }
+      }
+    })
+
+    const completedDot = wrapper.get('[data-step-id="tool:done"] .step-dot')
+    expect(completedDot.find('svg.step-check-icon').exists()).toBe(true)
+    expect(completedDot.text()).not.toContain('✓')
+    expect(wrapper.findAll('.step-dot.status-running')).toHaveLength(1)
+  })
 })

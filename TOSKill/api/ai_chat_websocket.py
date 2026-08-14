@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
-from openai import AsyncOpenAI
 
 from TOSKill.AI.state import create_initial_state, append_chat, update_state
 from TOSKill.AI.graph import memory_store, get_agent_orchestrator, get_llm as _get_llm, scan_total_tasks
@@ -26,6 +25,7 @@ from TOSKill.tools.tool_categories import (
     tool_category,
 )
 from TOSKill.AI.log_collector import log_collector
+from TOSKill.AI.maas_client import MaaSRequestError, get_maas_client
 from TOSKill.utils.error_handler import create_error_response, format_tool_error, ErrorSource, ErrorCategory
 from TOSKill.utils.log_writer import log_info, log_warn, log_error, log_success, log_debug
 from TOSKill.utils.target import normalize_scan_target
@@ -139,7 +139,7 @@ class AIChatManager:
         self.run_types: Dict[str, str] = {}
         self._cancelled_automatic_sessions = set()
         self.llm = None
-        self.chat_client: Optional[AsyncOpenAI] = None
+        self.maas_client = None
         self._event_sequences: Dict[str, int] = {}
         self._run_events: Dict[str, List[Dict]] = {}
         self._completion_notified = set()
@@ -155,16 +155,10 @@ class AIChatManager:
             self.llm = _get_llm()
         return self.llm
 
-    def _get_chat_client(self) -> AsyncOpenAI:
-        """Use the same OpenAI-compatible request form as model_check.py."""
-        if self.chat_client is None:
-            self.chat_client = AsyncOpenAI(
-                api_key=settings.OPENAI_API_KEY,
-                base_url=settings.OPENAI_BASE_URL,
-                timeout=120.0,
-                max_retries=2,
-            )
-        return self.chat_client
+    def _get_maas_client(self):
+        if self.maas_client is None:
+            self.maas_client = get_maas_client()
+        return self.maas_client
     
     async def connect(self, websocket: WebSocket, session_id: str = None) -> str:
         await websocket.accept()
@@ -239,9 +233,10 @@ class AIChatManager:
         run_id = payload.get("run_id") or state.get("run_id") or session_id
         self._event_sequences[run_id] = self._event_sequences.get(run_id, 0) + 1
 
-        tool = payload.get("tool") or payload.get("tool_name")
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        tool = payload.get("tool") or payload.get("tool_name") or details.get("tool")
         if not tool and message_type == "workflow_log" and payload.get("node") == "execute_task":
-            tool = state.get("next_task")
+            tool = state.get("current_tool") or state.get("current_task") or state.get("next_task")
         if message_type.startswith("task_") or message_type.startswith("direct_tool_") or message_type == "tool_progress":
             step_id = f"tool:{tool or 'unknown'}"
         elif message_type.startswith("report_"):
@@ -265,10 +260,10 @@ class AIChatManager:
         payload.update({
             "run_id": run_id,
             "run_type": payload.get("run_type") or state.get("run_type", "interactive"),
-            "step_id": payload.get("step_id") or step_id,
+            "step_id": payload.get("step_id") or details.get("step_id") or step_id,
             "sequence": self._event_sequences[run_id],
             "event": message_type,
-            "status": payload.get("status") or status_map.get(message_type, "running"),
+            "status": payload.get("status") or details.get("task_status") or status_map.get(message_type, "running"),
             "timestamp": payload.get("timestamp") or datetime.now().isoformat(),
         })
         decorated = {**message, "payload": payload}
@@ -1199,19 +1194,13 @@ class AIChatManager:
                 len(messages[0]["content"]),
                 settings.CHAT_MAX_TOKENS,
             )
-            response = await self._get_chat_client().chat.completions.create(
-                model=settings.MODEL_ID,
+            ai_content = await self._get_maas_client().complete(
                 messages=messages,
-                temperature=settings.LLM_TEMPERATURE,
                 max_tokens=settings.CHAT_MAX_TOKENS,
+                timeout=settings.CHAT_AI_TIMEOUT,
+                max_retries=settings.CHAT_AI_MAX_RETRIES,
+                temperature=settings.LLM_TEMPERATURE,
             )
-            if not response.choices:
-                raise RuntimeError("AI模型未返回候选回复")
-            ai_content = response.choices[0].message.content or ""
-            if not isinstance(ai_content, str):
-                ai_content = str(ai_content)
-            if not ai_content.strip():
-                raise RuntimeError("AI模型返回空回复")
             memory_store.append_chat(session_id, "assistant", ai_content)
 
             if is_paused_scan_chat:
@@ -1227,6 +1216,15 @@ class AIChatManager:
                 })
             
             await self._send(session_id, {"type": "ai_message", "payload": {"content": ai_content}})
+        except MaaSRequestError as e:
+            logger.warning("[%s] AI对话模型请求失败 [%s]: %s", session_id, e.code, e)
+            await self._send_error(
+                session_id,
+                str(e),
+                error_code=e.code,
+                retryable=e.retryable,
+                message_count=len(locals().get("messages", [])),
+            )
         except Exception as e:
             logger.exception("[%s] AI对话请求失败", session_id)
             await self._send_error(
@@ -1486,10 +1484,9 @@ class AIChatManager:
                 await self._send_error(session_id, f"AI生成脚本安全审查未通过: {msg}", error_code="VALIDATION_FAILED")
                 return
             
-            analysis = await script_manager.analyze_script_with_ai(script_code)
-            selected_category = _requested_script_category(payload) or analysis.get("category", "other")
+            selected_category = _requested_script_category(payload) or "info_collection"
             default_name = f"ai_gen_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-            tool_name = analysis.get("tool_name", default_name)
+            tool_name = default_name
             safe_name, name_err = sanitize_script_name(tool_name)
             tool_name = safe_name or default_name
             
@@ -1505,12 +1502,22 @@ class AIChatManager:
                 "type": "script_generated",
                 "payload": {
                     "tool_name": tool_name,
-                    "description": analysis.get("description", description),
+                    "description": description,
                     "script_code": script_code,
                     "suggested_category": selected_category,
                     "registered": False,
                     "message": "AI脚本已生成，请预览并确认注册"
                 }
+            })
+        except MaaSRequestError as e:
+            logger.warning(f"脚本生成模型请求失败 [{e.code}]: {e}")
+            await self._send(session_id, {
+                "type": "script_generation_progress",
+                "payload": {"stage": "failed", "progress": 100, "message": str(e), "error_code": e.code}
+            })
+            await self._send(session_id, {
+                "type": "script_error",
+                "payload": {"error": str(e), "error_code": e.code, "retryable": e.retryable}
             })
         except Exception as e:
             logger.error(f"脚本生成处理失败: {e}")

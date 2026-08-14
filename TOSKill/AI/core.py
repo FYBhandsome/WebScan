@@ -151,11 +151,14 @@ def execute_tool(tool_name: str, target: str) -> Dict[str, Any]:
     logger.info(f"执行工具: {tool_name} -> {cleaned_target}")
     
     result = tool.invoke(cleaned_target)
+    success = not (isinstance(result, dict) and result.get("success") is False)
     
     return {
         "tool_name": tool_name,
         "target": cleaned_target,
         "result": result,
+        "success": success,
+        "error": result.get("error") if isinstance(result, dict) and not success else None,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -172,7 +175,10 @@ def execute_tools_batch(tool_names: List[str], target: str) -> Dict[str, Any]:
         
         try:
             tool_target = clean_target_for_tool(tool_name, target)
-            results[tool_name] = tool.invoke(tool_target)
+            result = tool.invoke(tool_target)
+            results[tool_name] = result
+            if isinstance(result, dict) and result.get("success") is False:
+                errors.append(f"{tool_name}: {result.get('error') or '工具执行失败'}")
         except Exception as e:
             errors.append(f"{tool_name}: {str(e)}")
     

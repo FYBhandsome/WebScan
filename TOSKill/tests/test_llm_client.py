@@ -4,7 +4,7 @@ TOSKill LLM统一客户端测试
 """
 import pytest
 import time
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
 
 class TestCircuitBreaker:
@@ -177,3 +177,58 @@ class TestLLMClientEdgeCases:
         initial_len = len(llm_client._latency_history)
         llm_client._record_success(1.5)
         assert len(llm_client._latency_history) == initial_len + 1
+
+
+@pytest.mark.asyncio
+async def test_unified_maas_client_uses_per_operation_options():
+    from TOSKill.AI.maas_client import MaaSClient
+
+    raw_client = MagicMock()
+    configured_client = MagicMock()
+    raw_client.with_options.return_value = configured_client
+    configured_client.chat.completions.create = AsyncMock(return_value=MagicMock(
+        choices=[MagicMock(message=MagicMock(content="generated content"))]
+    ))
+    client = MaaSClient(raw_client)
+
+    content = await client.complete(
+        [{"role": "user", "content": "hello"}],
+        max_tokens=321,
+        timeout=12,
+        max_retries=1,
+        temperature=0.2,
+    )
+
+    assert content == "generated content"
+    raw_client.with_options.assert_called_once_with(timeout=12, max_retries=1)
+    request = configured_client.chat.completions.create.await_args.kwargs
+    assert request["max_tokens"] == 321
+    assert request["model"]
+
+
+@pytest.mark.asyncio
+async def test_unified_maas_client_normalizes_timeout():
+    import httpx
+    from openai import APITimeoutError
+
+    from TOSKill.AI.maas_client import MaaSClient, MaaSRequestError
+
+    raw_client = MagicMock()
+    configured_client = MagicMock()
+    raw_client.with_options.return_value = configured_client
+    configured_client.chat.completions.create = AsyncMock(
+        side_effect=APITimeoutError(request=httpx.Request("POST", "https://maas.test/chat/completions"))
+    )
+    client = MaaSClient(raw_client)
+
+    with pytest.raises(MaaSRequestError) as exc_info:
+        await client.complete(
+            [{"role": "user", "content": "hello"}],
+            max_tokens=321,
+            timeout=60,
+            max_retries=1,
+        )
+
+    assert exc_info.value.code == "MODEL_TIMEOUT"
+    assert exc_info.value.retryable is True
+    assert "60秒" in str(exc_info.value)

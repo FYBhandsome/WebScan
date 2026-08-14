@@ -47,6 +47,26 @@ class TestWSManagerLogic:
         except Exception:
             pass
 
+    def test_execute_task_log_uses_explicit_tool_step_metadata(self):
+        from TOSKill.api.ai_chat_websocket import AIChatManager
+
+        manager = AIChatManager()
+        event = manager._decorate_run_event("log-metadata", {
+            "type": "workflow_log",
+            "payload": {
+                "node": "execute_task",
+                "message": "任务完成: port_scan",
+                "details": {
+                    "tool": "port_scan",
+                    "step_id": "tool:port_scan",
+                    "task_status": "completed",
+                },
+            },
+        })
+
+        assert event["payload"]["step_id"] == "tool:port_scan"
+        assert event["payload"]["status"] == "completed"
+
 
 class TestWSPayloadValidation:
     """WS Payload验证测试"""

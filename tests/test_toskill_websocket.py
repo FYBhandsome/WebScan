@@ -445,6 +445,7 @@ class TestMessageHandlers:
             })
 
         fake_script_manager.register_script_as_tool.assert_not_called()
+        fake_script_manager.analyze_script_with_ai.assert_not_awaited()
         generated_events = [
             call.args[1] for call in mock_send.await_args_list
             if call.args[1].get("type") == "script_generated"
@@ -452,6 +453,32 @@ class TestMessageHandlers:
         assert len(generated_events) == 1
         assert generated_events[0]["payload"]["registered"] is False
         assert generated_events[0]["payload"]["script_code"] == generated
+
+    @pytest.mark.asyncio
+    async def test_standalone_script_generation_returns_normalized_model_timeout(
+        self, manager, clean_memory_store
+    ):
+        """模型超时应返回可重试错误，不应退化成无上下文的生成失败。"""
+        from TOSKill.AI.maas_client import MaaSRequestError
+
+        fake_script_manager = MagicMock()
+        fake_script_manager.generate_script_with_ai = AsyncMock(side_effect=MaaSRequestError(
+            "MODEL_TIMEOUT", "AI模型请求超时（60秒），请检查网络或稍后重试", retryable=True
+        ))
+
+        with patch('TOSKill.AI.tools.script_manager', fake_script_manager), \
+             patch.object(manager, '_send', new_callable=AsyncMock) as mock_send:
+            await manager._handle_script_description("standalone-timeout", {
+                "description": "收集页面标题",
+                "tool_category": "info_collection",
+                "preview_only": True,
+            })
+
+        payloads = [call.args[1] for call in mock_send.await_args_list]
+        error = next(message for message in payloads if message["type"] == "script_error")
+        assert error["payload"]["error_code"] == "MODEL_TIMEOUT"
+        assert error["payload"]["retryable"] is True
+        assert not any(message["type"] == "script_generated" for message in payloads)
 
     @pytest.mark.asyncio
     async def test_script_content_with_wrong_interaction_id_does_not_resume(self, manager, clean_memory_store):

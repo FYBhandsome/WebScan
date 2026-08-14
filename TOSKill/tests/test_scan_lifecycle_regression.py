@@ -406,6 +406,28 @@ async def test_tools_view_single_tool_rest_api_regression():
 
 
 @pytest.mark.asyncio
+async def test_tools_view_rest_api_propagates_tool_failure():
+    tool = MagicMock()
+    tool.invoke.return_value = {
+        "success": False,
+        "data": {"failure_type": "provider_unavailable"},
+        "error": "外部服务不可用",
+    }
+    request = ToolExecuteRequest(
+        tool_name="webside_query_scan",
+        target="https://example.com/",
+        analyze=False,
+    )
+
+    with patch("TOSKill.api.scan_api.get_tool_by_name", return_value=tool):
+        response = await api_execute_tool(request)
+
+    assert response.data["success"] is False
+    assert response.data["error"] == "外部服务不可用"
+    assert response.data["information_summary"] == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("tool_name", ["sqli_scan", "xss_scan"])
 async def test_vulnerability_tool_rest_api_preserves_complete_url(tool_name):
     tool = MagicMock()

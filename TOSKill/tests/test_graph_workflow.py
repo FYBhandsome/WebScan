@@ -13,6 +13,15 @@ import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
 
+def test_empty_idle_session_does_not_publish_tool_library_as_scan_total():
+    from TOSKill.AI.graph import scan_total_tasks
+    from TOSKill.AI.state import create_initial_state
+
+    state = create_initial_state("", task_id="empty-idle-session")
+
+    assert scan_total_tasks(state) == 0
+
+
 @pytest.fixture(scope="module", autouse=True)
 def close_global_orchestrator_after_module():
     """Release the async SQLite checkpointer initialized by workflow tests."""

@@ -9,6 +9,12 @@ import { API } from '../services/api.js'
 import { storageService } from '../services/storageService.js'
 import { addLog } from './useLogBus.js'
 import { createScanConfirmationIdentity, shouldRouteWaitingInputToInteraction } from './scanRequestState.js'
+import {
+  appendLogWithoutChangingStepStatus,
+  normalizeRunLogPayload,
+  removeLegacyExecuteTaskSteps,
+  settleOtherRunningToolSteps
+} from './runStepState.js'
 
 export function useAgentChat() {
   const inputText = ref('')
@@ -259,6 +265,8 @@ export function useAgentChat() {
     isTyping.value = false
     isThinking.value = false
     scanActive.value = false
+    scanStatus.value = 'idle'
+    scanProgress.value = { current: 0, total: 0, activeTool: '' }
     waitingForChoice.value = false
     pendingScanConfirm.value = null
     showScanConfirm.value = false
@@ -274,10 +282,10 @@ export function useAgentChat() {
     showToast('已创建新对话', 'success')
   }
 
-  const handleSwitchConversation = async (id) => {
-    if (id === conversationState.currentId) return
+  const handleSwitchConversation = async (id, { force = false, persistCurrent = true } = {}) => {
+    if (!force && id === conversationState.currentId) return
     // 先保存当前会话的 blocks 到 localStorage
-    if (conversationState.currentId) {
+    if (persistCurrent && conversationState.currentId) {
       persistConsoleState()
     }
     // 获取目标对话的后端 session_id
@@ -290,6 +298,8 @@ export function useAgentChat() {
     isTyping.value = false
     isThinking.value = false
     scanActive.value = false
+    scanStatus.value = 'idle'
+    scanProgress.value = { current: 0, total: 0, activeTool: '' }
     waitingForChoice.value = false
     pendingScanConfirm.value = null
     showScanConfirm.value = false
@@ -322,10 +332,12 @@ export function useAgentChat() {
     }
     deleteConversation(id)
     if (conversationState.currentId) {
-      handleSwitchConversation(conversationState.currentId)
+      handleSwitchConversation(conversationState.currentId, { force: true, persistCurrent: false })
     } else {
       workspaceBlocks.value = []
       scanActive.value = false
+      scanStatus.value = 'idle'
+      scanProgress.value = { current: 0, total: 0, activeTool: '' }
     }
     showToast('会话已删除', 'success')
   }
@@ -529,6 +541,7 @@ export function useAgentChat() {
     }
     if (payload.target) run.target = payload.target
     if (payload.mode) run.mode = payload.mode
+    removeLegacyExecuteTaskSteps(run)
     return run
   }
 
@@ -686,7 +699,15 @@ export function useAgentChat() {
     }
 
     const hasScan = Boolean(state.target || state.planned_tasks?.length || state.completed_tasks?.length)
-    scanStatus.value = !hasScan ? 'idle' : state.is_complete ? 'completed' : (
+    if (!hasScan) {
+      scanStatus.value = 'idle'
+      scanActive.value = false
+      scanProgress.value = { current: 0, total: 0, activeTool: '' }
+      if (scanPause.status !== 'idle') resetScanPause()
+      return true
+    }
+
+    scanStatus.value = state.is_complete ? 'completed' : (
       stateStatus === 'waiting_user' ? 'waiting' : (stateStatus || 'scanning')
     )
     scanActive.value = scanStatus.value === 'scanning' || scanStatus.value === 'running'
@@ -699,20 +720,11 @@ export function useAgentChat() {
   }
 
   const appendRunLog = (payload = {}) => {
-    const step = upsertRunStep(payload, {
-      title: payload.tool || payload.node || payload.step_id || '执行过程',
-      status: payload.status === 'failed' ? 'failed' : 'running'
+    const normalized = normalizeRunLogPayload(payload)
+    const step = upsertRunStep(normalized, {
+      title: normalized.tool || normalized.node || normalized.step_id || '执行过程'
     })
-    const entry = {
-      id: payload.id || `${payload.sequence || Date.now()}:${payload.message || ''}`,
-      level: String(payload.level || 'info').toLowerCase(),
-      message: payload.message || '',
-      timestamp: payload.timestamp || new Date().toISOString()
-    }
-    if (!step.logs.some(item => item.id === entry.id)) {
-      step.logs.push(entry)
-      if (step.logs.length > 100) step.logs.splice(0, step.logs.length - 100)
-    }
+    appendLogWithoutChangingStepStatus(step, normalized)
   }
 
   const addStreamText = (content) => {
@@ -1739,7 +1751,9 @@ export function useAgentChat() {
         isTyping.value = true
         isThinking.value = false
         currentThinking.value = ''
-        updateRun(data.payload || {}, { status: 'running' })
+        const runningRun = updateRun(data.payload || {}, { status: 'running' })
+        const runningStepId = data.payload?.step_id || `tool:${data.payload?.tool || 'unknown'}`
+        settleOtherRunningToolSteps(runningRun, runningStepId)
         upsertRunStep(data.payload || {}, {
           title: data.payload?.tool || '扫描工具',
           status: 'running',
@@ -1766,15 +1780,6 @@ export function useAgentChat() {
           rawResult: data.payload?.raw_result || {},
           completedAt: data.payload?.timestamp || new Date().toISOString()
         })
-        // 同步更新 execute_task step（由 workflow_log 创建，stepId 不同）
-        const runBlock = ensureRunBlock(data.payload || {})
-        const executeStep = runBlock.steps.find(step =>
-          step.stepId === 'workflow:execute_task' || step.title === 'execute_task'
-        )
-        if (executeStep?.status === 'running') {
-          executeStep.status = 'completed'
-          executeStep.completedAt = data.payload?.timestamp || new Date().toISOString()
-        }
         if (scriptLoopActive.value && currentScriptIndex.value < scriptQueue.value.length) {
           const script = scriptQueue.value[currentScriptIndex.value]
           script.status = 'completed'

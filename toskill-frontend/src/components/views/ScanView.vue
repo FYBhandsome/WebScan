@@ -1664,7 +1664,7 @@ select:focus {
   }
 
   .scan-main {
-    padding: 20px;
+    padding: 50px;
   }
 
   .mode-cards {

@@ -3,35 +3,36 @@
     <div class="page-header">
       <div>
         <h2>安全工具</h2>
-        <p class="page-subtitle">按用途和来源管理扫描能力</p>
       </div>
       <button class="primary-btn create-tool-btn" @click="openNewToolModal">+ 新建工具</button>
     </div>
 
-    <div class="tools-filter primary-filter" aria-label="工具类型">
-      <button 
-        class="filter-btn" 
-        :class="{ active: currentCategory === 'info_collection' }"
-        @click="filterTools('info_collection')"
-      >信息收集 <span>{{ categoryCounts.info_collection }}</span></button>
-      <button 
-        class="filter-btn" 
-        :class="{ active: currentCategory === 'vuln_scan' }"
-        @click="filterTools('vuln_scan')"
-      >漏洞扫描 <span>{{ categoryCounts.vuln_scan }}</span></button>
-    </div>
+    <div class="tools-controls">
+      <div class="tools-filter primary-filter" aria-label="工具类型">
+        <button
+          class="filter-btn"
+          :class="{ active: currentCategory === 'info_collection' }"
+          @click="filterTools('info_collection')"
+        >信息收集 <span>{{ categoryCounts.info_collection }}</span></button>
+        <button
+          class="filter-btn"
+          :class="{ active: currentCategory === 'vuln_scan' }"
+          @click="filterTools('vuln_scan')"
+        >漏洞扫描 <span>{{ categoryCounts.vuln_scan }}</span></button>
+      </div>
 
-    <div class="tools-filter source-filter" aria-label="工具来源">
-      <button 
-        class="filter-btn" 
-        :class="{ active: currentSource === 'system' }"
-        @click="currentSource = 'system'"
-      >系统工具 <span>{{ sourceCounts.system }}</span></button>
-      <button 
-        class="filter-btn" 
-        :class="{ active: currentSource === 'custom' }"
-        @click="currentSource = 'custom'"
-      >自定义工具 <span>{{ sourceCounts.custom }}</span></button>
+      <div class="source-switch" role="group" aria-label="工具来源">
+        <button
+          class="source-switch-btn"
+          :class="{ active: currentSource === 'system' }"
+          @click="currentSource = 'system'"
+        >系统工具 <span>{{ sourceCounts.system }}</span></button>
+        <button
+          class="source-switch-btn"
+          :class="{ active: currentSource === 'custom' }"
+          @click="currentSource = 'custom'"
+        >自定义工具 <span>{{ sourceCounts.custom }}</span></button>
+      </div>
     </div>
 
     <div class="tools-grid" id="toolsGrid">
@@ -51,7 +52,7 @@
         <div class="tool-card-header">
           <h4>{{ formatToolName(tool.name) }}</h4>
           <button v-if="tool.source === 'custom'" class="tool-delete-btn"
-            title="删除自定义工具" @click.stop="deleteCustomTool(tool)">删除</button>
+            title="删除自定义工具" aria-label="删除自定义工具" @click.stop="deleteCustomTool(tool)">×</button>
         </div>
         <p>{{ parsedDescription(tool.description).brief || parsedDescription(tool.description).name || '安全扫描工具' }}</p>
         <div class="tool-card-meta">
@@ -69,57 +70,66 @@
     <Transition name="panel-slide">
       <div v-if="execution.show" class="tool-execution" id="toolExecution">
         <div class="execution-header">
-          <h3 id="executionTitle">执行工具: {{ formatToolName(execution.toolName) }}</h3>
-          <button class="close-btn" id="closeExecution" @click="closeExecution">×</button>
+          <div class="execution-title">
+            <h3 id="executionTitle">{{ formatToolName(execution.toolName) }}</h3>
+            <p>{{ executionToolDescription }}</p>
+          </div>
+          <button class="close-btn" id="closeExecution" aria-label="关闭执行窗口" @click="closeExecution">×</button>
         </div>
-        <div class="execution-form">
-          <input 
-            type="text" 
-            id="toolTarget" 
-            v-model="execution.target" 
-            placeholder="输入目标URL或IP"
-            @keydown.enter="runTool"
-          >
-          <button 
-            id="executeToolBtn" 
-            class="primary-btn" 
-            @click="runTool" 
-            :disabled="execution.isExecuting"
-          >
-            {{ execution.isExecuting ? '执行中...' : '执行' }}
-          </button>
+        <div class="execution-form-field">
+          <div class="execution-form">
+            <input
+              type="text"
+              id="toolTarget"
+              v-model="execution.target"
+              placeholder="输入目标 URL 或 IP"
+              @keydown.enter="runTool"
+            >
+            <button
+              id="executeToolBtn"
+              class="primary-btn execute-tool-btn"
+              @click="runTool"
+              :disabled="execution.isExecuting"
+            >
+              {{ execution.isExecuting ? '执行中...' : '执行' }}
+            </button>
+          </div>
         </div>
-        <div class="execution-result" v-show="execution.resultText || execution.resultData">
 
-          <div v-if="execution.resultText" class="result-text">{{ execution.resultText }}</div>
+        <div v-if="execution.isExecuting" class="execution-pending" role="status">
+          <span class="pending-spinner" aria-hidden="true"></span>
+          <span>正在执行工具，请稍候…</span>
+        </div>
 
-          <div v-if="execution.resultData" class="result-structured">
+        <div v-else-if="execution.resultText" class="execution-error" role="alert">
+          {{ execution.resultText }}
+        </div>
 
-            <!-- 基础信息：目标 / 工具 / 时间 -->
-            <div class="result-section">
-              <div class="result-row">
-                <span class="result-label">目标</span>
-                <span class="result-value mono">{{ execution.resultData.target }}</span>
-              </div>
-              <div class="result-row">
-                <span class="result-label">工具</span>
-                <span class="result-value">{{ formatToolName(execution.resultData.tool_name) }}</span>
-              </div>
-              <div class="result-row">
-                <span class="result-label">时间</span>
-                <span class="result-value">{{ formatTimestamp(execution.resultData.timestamp) }}</span>
-              </div>
+        <div v-if="execution.resultData" class="execution-result">
+          <div class="execution-status" :class="{ failed: !executionSucceeded }">
+            <span class="status-icon" aria-hidden="true">{{ executionSucceeded ? '✓' : '!' }}</span>
+            <div>
+              <strong>{{ executionSucceeded ? '执行完成' : '执行未完成' }}</strong>
+              <p>{{ executionStatusText }}</p>
+            </div>
+          </div>
+
+          <div class="result-structured">
+
+            <div class="result-meta" aria-label="本次执行信息">
+              <span><b>目标</b>{{ execution.resultData.target }}</span>
+              <span><b>执行时间</b>{{ formatTimestamp(execution.resultData.timestamp) }}</span>
             </div>
 
             <div v-if="executionCategory === 'info_collection'" class="result-report-section information-output">
-              <h4>收集到的信息</h4>
+              <h4>收集结果</h4>
               <dl v-if="executionInformationItems.length" class="information-list">
                 <div v-for="item in executionInformationItems" :key="item.label" class="result-row">
                   <dt class="result-label">{{ item.label }}</dt>
                   <dd class="result-value">{{ item.value }}</dd>
                 </div>
               </dl>
-              <p v-else class="result-empty">信息收集已完成，工具未返回可展示的信息。</p>
+              <p v-else class="result-empty">本次执行完成，工具未返回可展示的信息。</p>
             </div>
 
             <!-- 漏洞类工具才展示漏洞分析，避免信息工具出现“未发现漏洞”。 -->
@@ -674,9 +684,29 @@ const executionCategory = computed(() => {
   return toolsList.value.find(tool => tool.name === execution.toolName)?.category || 'vuln_scan'
 })
 
+const executionToolDescription = computed(() => {
+  const tool = toolsList.value.find(item => item.name === execution.toolName)
+  const description = parsedDescription(tool?.description).brief || parsedDescription(tool?.description).name
+  const categoryLabel = executionCategory.value === 'info_collection' ? '信息收集工具' : '漏洞扫描工具'
+  return description ? `${categoryLabel} · ${description}` : categoryLabel
+})
+
 const executionInformationItems = computed(() => {
   const items = execution.resultData?.information_summary
   return Array.isArray(items) ? items : []
+})
+
+const executionSucceeded = computed(() => execution.resultData?.success !== false)
+
+const executionStatusText = computed(() => {
+  if (!executionSucceeded.value) {
+    return execution.resultData?.error || '工具未能完成本次执行，请检查目标或稍后重试。'
+  }
+  if (executionCategory.value === 'info_collection') {
+    const count = executionInformationItems.value.length
+    return count ? `已收集到 ${count} 项可展示信息` : '工具已完成执行'
+  }
+  return '扫描已完成，请查看分析结果'
 })
 
 const renderedSummary = computed(() => {
@@ -749,28 +779,58 @@ const runTool = async () => {
   gap: 24px;
 }
 
-.page-subtitle {
-  margin: 6px 0 0;
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
 .create-tool-btn {
   flex-shrink: 0;
   padding-inline: 18px;
+  background: #10B981;
 }
 
-.primary-filter {
-  margin-bottom: 10px;
+.create-tool-btn:hover {
+  background: #059669;
 }
 
-.source-filter {
-  margin-top: 0;
+.tools-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 26px;
 }
 
-.source-filter .filter-btn {
-  border-radius: 8px;
+.primary-filter {
+  margin-bottom: 0;
+}
+
+.source-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: #F3F4F6;
+  flex-shrink: 0;
+}
+
+.source-switch-btn {
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.source-switch-btn:hover {
+  color: #047857;
+}
+
+.source-switch-btn.active {
+  background: #FFFFFF;
+  color: #047857;
+  border-color: #A7F3D0;
+  box-shadow: 0 1px 2px rgba(16, 185, 129, 0.12);
 }
 
 .filter-btn span {
@@ -793,33 +853,61 @@ const runTool = async () => {
 }
 
 .custom-tool {
-  border-left: 4px solid var(--warning-color);
+  border-left: 4px solid #10B981;
 }
 
 .tool-card.highlighted {
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.14), 0 10px 28px rgba(22, 119, 255, 0.12);
+  border-color: #10B981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.14), 0 10px 28px rgba(16, 185, 129, 0.12);
+}
+
+.tool-category {
+  color: #047857;
+  background: #ECFDF5;
+  border: 1px solid #A7F3D0;
+  border-radius: 999px;
 }
 
 .tool-card-header {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
+  justify-content: center;
   gap: 12px;
+  position: relative;
+  width: 100%;
+}
+
+.tool-card-header h4 {
+  text-align: center;
 }
 
 .tool-delete-btn {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 24px;
+  height: 24px;
   border: 0;
+  border-radius: 50%;
   background: transparent;
   color: var(--error-color, #ff4d4f);
-  font-size: 12px;
+  font-size: 20px;
+  line-height: 20px;
   cursor: pointer;
-  padding: 2px 0;
+  padding: 0;
+  opacity: 0.62;
+  transition: background 0.2s ease, opacity 0.2s ease;
+}
+
+.tool-delete-btn:hover {
+  background: #FFF1F0;
+  opacity: 1;
 }
 
 .tool-card-meta {
   display: flex;
   align-items: center;
+  justify-content: center;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
@@ -829,17 +917,16 @@ const runTool = async () => {
   font-size: 12px;
   padding: 3px 9px;
   border-radius: 999px;
-  color: #475569;
-  background: #f1f5f9;
+  color: #047857;
+  background: #ECFDF5;
 }
 
 .tool-source.custom {
-  color: #9a6700;
-  background: #fff7d6;
+  color: #047857;
+  background: #D1FAE5;
 }
 
 .tool-created {
-  margin-left: auto;
   color: var(--text-secondary);
   font-size: 12px;
 }
@@ -847,8 +934,186 @@ const runTool = async () => {
 .tool-execution-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(15, 23, 42, 0.4);
   z-index: 999;
+}
+
+.tool-execution {
+  border-radius: 16px;
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.18);
+}
+
+.execution-header {
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.execution-title h3 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+.execution-title p {
+  margin: 0px 0 0;
+  color: #6B7280;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.close-btn {
+  flex: 0 0 auto;
+  color: #374151;
+  background: #F3F4F6;
+  font-size: 19px;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.close-btn:hover {
+  color: #B91C1C;
+  background: #FFF1F0;
+}
+
+.execution-form-field > label {
+  display: block;
+  margin-bottom: 8px;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.execution-form {
+  gap: 10px;
+  margin-bottom: 0;
+}
+
+.execution-form input {
+  color: #111827;
+  background: #FFFFFF;
+  border-color: #E5E7EB;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.execution-form input:focus {
+  outline: none;
+  border-color: #10B981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
+}
+
+.execute-tool-btn {
+  min-width: 78px;
+  padding-inline: 18px;
+  background: #10B981;
+}
+
+.execute-tool-btn:hover:not(:disabled) {
+  background: #059669;
+}
+
+.execution-pending,
+.execution-status,
+.execution-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.execution-pending {
+  color: #047857;
+  background: #ECFDF5;
+}
+
+.pending-spinner {
+  width: 15px;
+  height: 15px;
+  border: 2px solid #A7F3D0;
+  border-top-color: #10B981;
+  border-radius: 50%;
+  animation: execution-spin 0.75s linear infinite;
+}
+
+.execution-error {
+  align-items: flex-start;
+  color: #B91C1C;
+  background: #FFF1F0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.execution-result {
+  max-height: 62vh !important;
+  margin-top: 20px;
+  padding: 0 !important;
+  overflow: auto;
+  background: transparent !important;
+  border-radius: 0;
+  font-family: inherit !important;
+  white-space: normal !important;
+}
+
+.execution-status {
+  margin-top: 0;
+  color: #047857;
+  background: #ECFDF5;
+}
+
+.execution-status.failed {
+  color: #B91C1C;
+  background: #FFF1F0;
+}
+
+.status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #FFFFFF;
+  background: #10B981;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.execution-status.failed .status-icon {
+  background: #EF4444;
+}
+
+.execution-status strong,
+.execution-status p {
+  display: block;
+}
+
+.execution-status p {
+  margin: 2px 0 0;
+  color: inherit;
+  line-height: 1.5;
+}
+
+.result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  padding: 16px 2px 18px;
+  color: #6B7280;
+  font-size: 13px;
+  border-bottom: 1px solid #E5E7EB;
+}
+
+.result-meta span {
+  display: inline-flex;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.result-meta b {
+  color: #374151;
+  font-weight: 600;
 }
 
 .overlay-fade-enter-active,
@@ -891,36 +1156,33 @@ const runTool = async () => {
   flex-direction: column;
 }
 
-/* 基础信息区域 — 左对齐、字体放大 */
-.result-section {
-  padding: 16px 0;
-  border-bottom: 1px solid var(--border-color, #e5e7eb);
-}
-
-.result-section:last-child {
-  border-bottom: none;
-}
-
 .result-row {
   display: flex;
-  justify-content: flex-start;
-  align-items: baseline;
-  padding: 8px 0;
-  gap: 16px;
+  align-items: flex-start;
+  padding: 13px 0;
+  gap: 20px;
+  border-bottom: 1px solid #F0F1F3;
+}
+
+.result-row:last-child {
+  border-bottom: 0;
 }
 
 .result-label {
-  font-size: 14px;
-  color: var(--text-secondary, #666);
+  width: 112px;
+  min-width: 112px;
+  font-size: 13px;
+  color: #6B7280;
   flex-shrink: 0;
-  min-width: 50px;
   font-weight: 500;
 }
 
 .result-value {
-  font-size: 15px;
-  color: var(--text-primary, #111);
-  word-break: break-all;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.65;
+  color: #111827;
+  overflow-wrap: anywhere;
   text-align: left;
 }
 
@@ -929,18 +1191,29 @@ const runTool = async () => {
   font-size: 14px;
 }
 
-/* 分析报告容器 — 统一背景，无 AI 装饰 */
 .result-report-section {
-  background: var(--card-bg, #ffffff);
-  border: 1px solid var(--border-color, #e5e7eb);
-  border-radius: 8px;
-  padding: 24px 28px;
-  margin-top: 16px;
+  padding: 22px 0 0;
+  margin-top: 0;
 }
-.information-output h4 { margin-bottom: 12px; font-size: 15px; }
+.information-output h4 {
+  margin-bottom: 6px;
+  color: #111827;
+  font-size: 16px;
+}
 .information-list { margin: 0; }
 .information-list dd { margin: 0; overflow-wrap: anywhere; }
-.result-empty { margin: 0; color: var(--text-secondary); }
+.result-empty {
+  margin: 12px 0 0;
+  padding: 14px;
+  color: #6B7280;
+  background: #F9FAFB;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+@keyframes execution-spin {
+  to { transform: rotate(360deg); }
+}
 
 .report-summary {
   margin-bottom: 24px;
@@ -956,7 +1229,7 @@ const runTool = async () => {
   color: var(--text-primary);
   margin-bottom: 12px;
   padding-bottom: 8px;
-  border-bottom: 2px solid var(--primary-color, #1677ff);
+  border-bottom: 2px solid #10B981;
 }
 
 .report-analysis::before {
@@ -967,7 +1240,7 @@ const runTool = async () => {
   color: var(--text-primary);
   margin-bottom: 12px;
   padding-bottom: 8px;
-  border-bottom: 2px solid var(--primary-color, #1677ff);
+  border-bottom: 2px solid #10B981;
 }
 
 /* Markdown 渲染主题 — 统一左对齐，专业文档风格 */
@@ -1027,7 +1300,7 @@ const runTool = async () => {
 }
 
 .markdown-body :deep(blockquote) {
-  border-left: 4px solid var(--primary-color, #1677ff);
+  border-left: 4px solid #10B981;
   padding: 8px 16px;
   margin: 12px 0;
   background: #f8fafc;
@@ -1075,7 +1348,13 @@ const runTool = async () => {
   }
 
   .result-report-section {
-    padding: 16px;
+    padding: 18px 0 0;
+  }
+
+  .result-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
   }
 
   .markdown-body {
@@ -1097,13 +1376,13 @@ const runTool = async () => {
 }
 
 .new-custom-tool-card:hover {
-  border-color: var(--primary-color, #1677ff);
-  background: #f0f5ff;
+  border-color: #10B981;
+  background: #F0FDF4;
 }
 
 .new-tool-icon {
   font-size: 36px;
-  color: var(--primary-color, #1677ff);
+  color: #10B981;
   font-weight: 300;
   margin-bottom: 12px;
 }
@@ -1144,9 +1423,9 @@ const runTool = async () => {
 }
 
 .tool-type-picker button.active {
-  border-color: var(--primary-color);
-  color: var(--primary-color);
-  background: #eef6ff;
+  border-color: #A7F3D0;
+  color: #047857;
+  background: #ECFDF5;
 }
 
 .option-card {
@@ -1160,8 +1439,8 @@ const runTool = async () => {
 }
 
 .option-card:hover {
-  border-color: var(--primary-color, #1677ff);
-  box-shadow: 0 4px 16px rgba(22, 119, 255, 0.12);
+  border-color: #10B981;
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.12);
   transform: translateY(-2px);
 }
 
@@ -1226,7 +1505,8 @@ const runTool = async () => {
 
 .form-group input[type="text"]:focus,
 .form-group textarea:focus {
-  border-color: var(--primary-color);
+  border-color: #10B981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
 }
 
 .script-editor {
@@ -1277,9 +1557,9 @@ const runTool = async () => {
 }
 
 .form-status.info {
-  background: #e6f4ff;
-  color: #1677ff;
-  border: 1px solid #91caff;
+  background: #ECFDF5;
+  color: #047857;
+  border: 1px solid #A7F3D0;
 }
 
 .form-status.success {
@@ -1326,6 +1606,15 @@ const runTool = async () => {
     align-self: flex-start;
   }
 
+  .tools-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .source-switch {
+    align-self: flex-start;
+  }
+
   .tool-type-picker {
     grid-template-columns: 1fr;
   }
@@ -1345,24 +1634,47 @@ const runTool = async () => {
   border: 1px solid var(--border-light);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   padding: 24px;
+  min-height: 210px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
 }
 
 .tool-card:hover {
-  border-color: var(--text-primary);
+  border-color: #10B981;
+  box-shadow: 0 8px 22px rgba(16, 185, 129, 0.12);
   transform: translateY(-2px);
 }
 
+.tool-card p {
+  width: 100%;
+  flex: 1;
+  margin-bottom: 12px;
+  text-align: center;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
 .filter-btn {
-  background: transparent;
-  border: 1px solid var(--border-light);
+  background: #FFFFFF;
+  border: 1px solid var(--border-color);
   border-radius: 20px;
   color: var(--text-secondary);
 }
 
+.filter-btn:hover {
+  border-color: #A7F3D0;
+  color: #047857;
+  background: #F0FDF4;
+}
+
 .filter-btn.active {
-  background: var(--text-primary);
-  color: #fff;
-  border-color: var(--text-primary);
+  background: #ECFDF5;
+  color: #047857;
+  border-color: #A7F3D0;
 }
 
 /* 弹窗尺寸覆盖 — 覆盖全局 style.css 中的 500px / 300px 限制 */
@@ -1377,7 +1689,7 @@ const runTool = async () => {
 .execution-result {
   max-height: 70vh !important;
   overflow: auto;
-  padding: 20px !important;
+  padding: 0 !important;
   font-family: inherit !important;
   white-space: normal !important;
 }
@@ -1399,7 +1711,16 @@ const runTool = async () => {
   }
   .execution-result {
     max-height: 55vh !important;
-    padding: 12px !important;
+    padding: 0 !important;
+  }
+
+  .execution-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .execute-tool-btn {
+    width: 100%;
   }
 }
 </style>

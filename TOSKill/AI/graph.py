@@ -144,6 +144,17 @@ def _active_tool_sequence(state: ScanState) -> List[str]:
 def scan_total_tasks(state: ScanState) -> int:
     """Return the authoritative dynamic denominator used by all clients."""
     planned = state.get("planned_tasks")
+    # A newly-created WebSocket session has a default scan mode but no scan.
+    # Do not expose the mode's tool-library size as if it were an active plan.
+    if (
+        state.get("scan_status", "idle") == "idle"
+        and not state.get("target")
+        and not planned
+        and not state.get("completed_tasks")
+        and not state.get("failed_tasks")
+        and not state.get("run_id")
+    ):
+        return 0
     if state.get("workflow_mode") == "full_scan" or state.get("mode") == "full_scan":
         # Old paused sessions stored only the active phase queue.
         # Treat an uninitialized full state as all current built-ins plus any
@@ -2433,6 +2444,7 @@ async def script_upload_process(state: ScanState) -> ScanState:
 async def script_generate_process(state: ScanState) -> ScanState:
     """AI脚本生成处理节点"""
     from .tools import script_manager
+    from .maas_client import MaaSRequestError
     from .script_safety import validate_script_safety, sanitize_script_name
     from datetime import datetime
     
@@ -2491,7 +2503,23 @@ async def script_generate_process(state: ScanState) -> ScanState:
         except Exception as e:
             logger.error(f"WebSocket推送失败: {e}")
     
-    script_code = await script_manager.generate_script_with_ai(description)
+    try:
+        script_code = await script_manager.generate_script_with_ai(description)
+    except MaaSRequestError as exc:
+        if ws_callback:
+            await ws_callback({
+                "type": "script_error",
+                "payload": {"error": str(exc), "error_code": exc.code, "retryable": exc.retryable},
+            })
+        return _restore_after_script_failure(state, str(exc))
+    except Exception as exc:
+        logger.exception(f"[{session_id}] AI生成脚本异常: {exc}")
+        if ws_callback:
+            await ws_callback({
+                "type": "script_error",
+                "payload": {"error": "AI生成脚本失败", "error_code": "GENERATION_FAILED"},
+            })
+        return _restore_after_script_failure(state, f"AI生成脚本失败: {exc}")
 
     if ws_callback:
         try:
@@ -2520,8 +2548,6 @@ async def script_generate_process(state: ScanState) -> ScanState:
             })
         return _restore_after_script_failure(state, f"AI生成脚本安全审查未通过: {safety_err}")
     
-    analysis = await script_manager.analyze_script_with_ai(script_code)
-
     if ws_callback:
         try:
             await ws_callback({
@@ -2532,7 +2558,7 @@ async def script_generate_process(state: ScanState) -> ScanState:
             logger.error(f"WebSocket推送失败: {e}")
     
     default_name = f"ai_gen_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    tool_name = analysis.get("tool_name", default_name)
+    tool_name = default_name
     safe_name, name_err = sanitize_script_name(tool_name)
     if name_err:
         safe_name = default_name
@@ -2541,7 +2567,7 @@ async def script_generate_process(state: ScanState) -> ScanState:
     result = script_manager.register_script_as_tool(
         script_content=script_code,
         script_name=tool_name,
-        description=analysis.get("description", description),
+        description=description,
         category=selected_category,
         creation_method="ai_generate",
     )
@@ -2565,7 +2591,7 @@ async def script_generate_process(state: ScanState) -> ScanState:
                 "payload": {
                     "tool_name": result["tool_name"],
                     "script_code": script_code,
-                    "description": analysis.get("description"),
+                    "description": description,
                     "category": selected_category,
                     "creation_method": "ai_generate",
                     "message": f"AI脚本已生成并注册: {result['tool_name']}"
@@ -2578,7 +2604,7 @@ async def script_generate_process(state: ScanState) -> ScanState:
         state,
         result.get("tool_name", ""),
         script_code,
-        analysis.get("description", description),
+        description,
         selected_category,
         "ai_generate",
     )
@@ -3164,7 +3190,13 @@ async def execute_task(state: ScanState) -> ScanState:
         last_activity_time=datetime.now().isoformat(),
     )
     memory_store.save_session(session_id, state)
-    log_collector.add_log(session_id, "execute_task", "info", f"任务开始: {task}, 目标={target}")
+    log_collector.add_log(
+        session_id,
+        "execute_task",
+        "info",
+        f"任务开始: {task}, 目标={target}",
+        details={"tool": task, "step_id": f"tool:{task}", "task_status": "running"},
+    )
     ws_callback = memory_store.get_websocket_callback(session_id)
     
     task_is_authorized = state.get("authorized_task") == task
@@ -3410,7 +3442,13 @@ async def execute_task(state: ScanState) -> ScanState:
 
             schedule_tool_result_analysis(session_id, task, target, res, ws_callback)
         
-        log_collector.add_log(session_id, "execute_task", "info", f"任务完成: {task}")
+        log_collector.add_log(
+            session_id,
+            "execute_task",
+            "info",
+            f"任务完成: {task}",
+            details={"tool": task, "step_id": f"tool:{task}", "task_status": "completed"},
+        )
         
         new_state = append_chat(state, "system", f"任务：{task}\n结果：{res}\n分析：{analysis}")
         tool_results = state.get("tool_results", {}).copy()
@@ -3472,7 +3510,13 @@ async def execute_task(state: ScanState) -> ScanState:
         
     except Exception as e:
         logger.error(f"执行任务失败: {e}")
-        log_collector.add_log(session_id, "execute_task", "error", f"任务失败: {task}, 错误: {str(e)}")
+        log_collector.add_log(
+            session_id,
+            "execute_task",
+            "error",
+            f"任务失败: {task}, 错误: {str(e)}",
+            details={"tool": task, "step_id": f"tool:{task}", "task_status": "failed"},
+        )
         
         from TOSKill.utils.error_handler import format_tool_error
         error_response = format_tool_error(task, e)
