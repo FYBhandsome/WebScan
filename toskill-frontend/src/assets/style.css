@@ -6,9 +6,15 @@
 
 
 :root {
-  --primary-color: #1677ff;
-  --primary-hover: #0d66d0;
-  --success-color: #34C759;
+  --primary-color: #047857;
+  --primary-hover: #065F46;
+  --primary-subtle: #ECFDF5;
+  --primary-muted: #D1FAE5;
+  --primary-border: #A7F3D0;
+  --primary-focus: rgba(16, 185, 129, 0.18);
+  --primary-disabled: #A7F3D0;
+  --primary-disabled-text: #065F46;
+  --success-color: #15803D;
   --warning-color: #FF9500;
   --error-color: #FF3B30;
   --bg-color: #f5f7fa;
@@ -20,7 +26,7 @@
   --bg-secondary: #fafafa;
   --text-primary: #000000;
   --text-secondary: #404040;
-  --accent-color: #007AFF;
+  --accent-color: #047857;
   --border-light: #eaeaea;
   --input-border: #d2d2d7;
   --font-family: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text", sans-serif;
@@ -133,7 +139,7 @@ body, #app {
 }
 
 .nav-item.active {
-    background-color: #e6f4ff;
+    background-color: var(--primary-subtle);
     color: var(--primary-color);
 }
 
@@ -255,7 +261,7 @@ body, #app {
 }
 
 .message.ai .message-avatar {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, #10B981 0%, #047857 100%);
     color: white;
     margin-right: 12px;
 }
@@ -385,7 +391,8 @@ body, #app {
 }
 
 .send-btn:disabled {
-    background: #94b8f0;
+    background: var(--primary-disabled);
+    color: var(--primary-disabled-text);
     cursor: not-allowed;
 }
 
@@ -444,7 +451,8 @@ body, #app {
 }
 
 .primary-btn:disabled {
-    background: #94b8f0;
+    background: var(--primary-disabled);
+    color: var(--primary-disabled-text);
     cursor: not-allowed;
 }
 
@@ -490,7 +498,7 @@ body, #app {
 
 .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--primary-color), #667eea);
+    background: linear-gradient(90deg, var(--primary-color), #10B981);
     border-radius: 4px;
     transition: width 0.3s ease;
     width: 0%;
@@ -604,7 +612,7 @@ body, #app {
 .filter-btn:hover, .filter-btn.active {
     border-color: var(--primary-color);
     color: var(--primary-color);
-    background: #e6f4ff;
+    background: var(--primary-subtle);
 }
 
 .tools-grid {
@@ -641,7 +649,7 @@ body, #app {
 .tool-category {
     display: inline-block;
     padding: 4px 8px;
-    background: #e6f4ff;
+    background: var(--primary-subtle);
     color: var(--primary-color);
     border-radius: 4px;
     font-size: 12px;
@@ -962,7 +970,7 @@ body, #app {
 }
 
 .vulnerability-item.low {
-    background: #f0f5ff;
+    background: var(--primary-subtle);
     border-color: var(--primary-color);
 }
 
@@ -1026,8 +1034,8 @@ body, #app {
 }
 
 .interaction-required .message-bubble {
-    background: linear-gradient(135deg, #e6f4ff 0%, #f0f5ff 100%);
-    border: 1px solid #91caff;
+    background: linear-gradient(135deg, #F0FDF4 0%, var(--primary-subtle) 100%);
+    border: 1px solid var(--primary-border);
 }
 
 .interaction-header {
@@ -1066,7 +1074,7 @@ body, #app {
 
 .interaction-btn:hover {
     border-color: var(--primary-color);
-    background: #f0f5ff;
+    background: var(--primary-subtle);
 }
 
 .choice-key {
@@ -1095,7 +1103,7 @@ body, #app {
 
 .interaction-progress .progress-bar {
     height: 6px;
-    background: linear-gradient(90deg, var(--primary-color), #667eea);
+    background: linear-gradient(90deg, var(--primary-color), #10B981);
     border-radius: 3px;
     margin-bottom: 6px;
     transition: width 0.3s ease;
@@ -1173,7 +1181,7 @@ body, #app {
 
 .input-dialog .dialog-input:focus {
     border-color: var(--primary-color);
-    box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.1);
+    box-shadow: 0 0 0 3px var(--primary-focus);
 }
 
 .input-dialog .dialog-footer {
@@ -1211,10 +1219,10 @@ body, #app {
 }
 
 .workflow-progress-card {
-    background: linear-gradient(135deg, #e6f4ff 0%, #f0f5ff 100%);
+    background: linear-gradient(135deg, #F0FDF4 0%, var(--primary-subtle) 100%);
     border-radius: 12px;
     padding: 16px;
-    border: 1px solid #91caff;
+    border: 1px solid var(--primary-border);
 }
 
 .workflow-progress-card .progress-header {
@@ -1244,7 +1252,7 @@ body, #app {
 
 .workflow-progress-card .progress-bar-container {
     height: 8px;
-    background: rgba(22, 119, 255, 0.2);
+    background: var(--primary-muted);
     border-radius: 4px;
     overflow: hidden;
     margin-bottom: 10px;
@@ -1252,7 +1260,7 @@ body, #app {
 
 .workflow-progress-card .progress-bar-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--primary-color), #667eea);
+    background: linear-gradient(90deg, var(--primary-color), #10B981);
     border-radius: 4px;
     transition: width 0.5s ease;
 }
@@ -1297,7 +1305,7 @@ body, #app {
 
 .tool-option-btn:hover {
     border-color: var(--primary-color);
-    background: #f0f5ff;
+    background: var(--primary-subtle);
 }
 
 @keyframes slideInUp {

@@ -944,25 +944,43 @@ export function useAgentChat() {
     }
   }
 
+  const createReportLinks = (reportUrl = '', htmlReportUrl = '', fallbackLink = null) => {
+    const links = [
+      { label: '查看 HTML 报告', url: htmlReportUrl },
+      { label: '查看 Markdown 报告', url: reportUrl }
+    ].map(({ label, url }) => {
+      const filename = decodeURIComponent(String(url).split('/').filter(Boolean).pop() || '')
+      return filename ? { label, filename } : null
+    }).filter(Boolean)
+
+    if (!links.length && fallbackLink?.filename) {
+      links.push(fallbackLink)
+    }
+
+    return links.filter((link, index) => (
+      links.findIndex(candidate => candidate.filename === link.filename) === index
+    ))
+  }
+
   // Older console history stored the raw Markdown preview and both download
-  // URLs in the report step. Convert those records to the same compact link
+  // URLs in the report step. Convert those records to the same two-link
   // presentation used for newly generated reports.
   const normalizePersistedReportSteps = (blocks = []) => blocks.map(block => {
     if (block?.type !== 'agent_run') return block
     return {
       ...block,
       steps: (block.steps || []).map(step => {
-        if (step?.title !== '生成扫描报告' || step.reportLink) return step
+        if (step?.title !== '生成扫描报告' || Array.isArray(step.reportLinks)) return step
         const urls = String(step.message || '').match(/\/api\/reports\/download\/[^\s)]+/g) || []
         const htmlUrl = urls.find(url => url.toLowerCase().endsWith('.html'))
-        const reportUrl = htmlUrl || urls[0] || ''
-        const filename = reportUrl.split('/').pop() || ''
-        if (!filename) return step
+        const markdownUrl = urls.find(url => /\.md(?:$|[?#])/.test(url.toLowerCase()))
+        const reportLinks = createReportLinks(markdownUrl, htmlUrl, step.reportLink)
+        if (!reportLinks.length) return step
         return {
           ...step,
           message: '报告已生成，HTML 和 Markdown 文件已保存到报告页面。',
           analysis: '',
-          reportLink: { label: '查看扫描报告', filename: decodeURIComponent(filename) }
+          reportLinks
         }
       })
     }
@@ -1985,18 +2003,12 @@ export function useAgentChat() {
         isTyping.value = false
         const reportUrl = data.payload?.report_url || ''
         const htmlReportUrl = data.payload?.html_report_url || ''
-        const reportFilename = decodeURIComponent(
-          (htmlReportUrl || reportUrl).split('/').filter(Boolean).pop() || ''
-        )
         upsertRunStep(data.payload || {}, {
           title: '生成扫描报告',
           status: 'completed',
           message: '报告已生成，HTML 和 Markdown 文件已保存到报告页面。',
           analysis: '',
-          reportLink: {
-            label: '查看扫描报告',
-            filename: reportFilename
-          }
+          reportLinks: createReportLinks(reportUrl, htmlReportUrl)
         })
         break
 

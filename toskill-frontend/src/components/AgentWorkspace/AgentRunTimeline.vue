@@ -37,12 +37,13 @@
           </div>
           <div v-if="step.message" class="step-message">{{ step.message }}</div>
           <a
-            v-if="step.reportLink"
+            v-for="reportLink in step.reportLinks || (step.reportLink ? [step.reportLink] : [])"
+            :key="reportLink.filename"
             href="#"
             class="report-link"
-            @click.prevent="$emit('open-report', step.reportLink.filename || '')"
+            @click.prevent="$emit('open-report', reportLink.filename || '')"
           >
-            {{ step.reportLink.label || '查看扫描报告' }}
+            {{ reportLink.label || '查看扫描报告' }}
           </a>
           <div v-if="step.analysis && step.analysis !== step.message" class="step-analysis">{{ step.analysis }}</div>
 
@@ -130,11 +131,17 @@
       </article>
     </div>
 
-    <footer v-if="run.summary" class="run-summary">{{ run.summary }}</footer>
+    <footer
+      v-if="run.summary"
+      class="run-summary markdown-body"
+      v-html="renderMarkdown(run.summary)"
+    ></footer>
   </section>
 </template>
 
 <script setup>
+import { marked } from 'marked'
+
 defineProps({ run: { type: Object, required: true } })
 defineEmits(['action', 'submit-input', 'open-report'])
 
@@ -152,6 +159,8 @@ const formatTime = (timestamp) => {
   const date = new Date(timestamp)
   return Number.isNaN(date.getTime()) ? timestamp : date.toLocaleTimeString('zh-CN', { hour12: false })
 }
+
+const renderMarkdown = (text) => marked.parse(text || '', { breaks: true, gfm: true })
 </script>
 
 <style scoped>
@@ -204,7 +213,8 @@ const formatTime = (timestamp) => {
 .step-message, .step-analysis { margin-top: 4px; color: #52525b; white-space: pre-wrap; word-break: break-word; }
 .step-analysis { padding-left: 10px; border-left: 2px solid #d1fae5; }
 .report-link {
-  display: inline-flex;
+  display: flex;
+  width: fit-content;
   margin-top: 7px;
   padding: 0;
   border: 0;
@@ -269,7 +279,22 @@ const formatTime = (timestamp) => {
 .step-log.level-error { color: #dc2626; }
 .step-log.level-warning { color: #b45309; }
 .step-details pre { max-height: 240px; overflow: auto; padding: 10px; border-radius: 6px; background: #f4f4f5; color: #3f3f46; font: 12px/1.5 Consolas, Monaco, monospace; white-space: pre-wrap; }
-.run-summary { margin-top: 4px; padding-left: 12px; border-left: 2px solid #10b981; color: #3f3f46; white-space: pre-wrap; }
+.run-summary { margin-top: 4px; padding-left: 12px; border-left: 2px solid #10b981; color: #3f3f46; word-break: break-word; }
+.run-summary :deep(p) { margin: 0 0 10px; }
+.run-summary :deep(p:last-child) { margin-bottom: 0; }
+.run-summary :deep(h1),
+.run-summary :deep(h2),
+.run-summary :deep(h3),
+.run-summary :deep(h4) { margin: 16px 0 8px; color: #27272a; line-height: 1.4; }
+.run-summary :deep(h1) { font-size: 20px; }
+.run-summary :deep(h2) { font-size: 18px; }
+.run-summary :deep(h3) { font-size: 16px; }
+.run-summary :deep(ul),
+.run-summary :deep(ol) { margin: 0 0 10px; padding-left: 24px; }
+.run-summary :deep(li) { margin-bottom: 4px; }
+.run-summary :deep(hr) { margin: 18px 0; border: 0; border-top: 1px solid #d4d4d8; }
+.run-summary :deep(pre) { overflow: auto; padding: 10px; border-radius: 6px; background: #f4f4f5; }
+.run-summary :deep(code) { font-family: Consolas, Monaco, monospace; }
 
 @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(16, 185, 129, .12); } }
 </style>

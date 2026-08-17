@@ -66,7 +66,7 @@ describe('ToolsView', () => {
     })
     const wrapper = await mountView()
     await wrapper.get('.create-tool-btn').trigger('click')
-    await wrapper.get('.tool-type-picker button:nth-child(3)').trigger('click')
+    await wrapper.get('.tool-type-picker button:nth-child(2)').trigger('click')
     await wrapper.get('.option-card:first-child').trigger('click')
     const inputs = wrapper.findAll('.new-tool-form input')
     await inputs[0].setValue('custom_probe')
@@ -135,9 +135,70 @@ describe('ToolsView', () => {
 
     expect(wrapper.text()).toContain('收集结果')
     expect(wrapper.text()).toContain('执行完成')
+    expect(wrapper.get('.execution-status .status-line').text()).toContain('执行完成 · 已收集 1 项信息')
+    expect(wrapper.text()).not.toContain('收集到的信息')
     expect(wrapper.text()).toContain('开放端口')
     expect(wrapper.text()).toContain('80、443')
     expect(wrapper.text()).not.toContain('未发现漏洞')
+    wrapper.unmount()
+  })
+
+  it('renders base information as readable groups instead of transport fields', async () => {
+    apiMock.getTools.mockResolvedValue({
+      data: {
+        tools: [{
+          name: 'baseinfo_scan',
+          description: '基础信息收集',
+          category: 'info_collection',
+          source: 'system',
+          creation_method: 'builtin',
+        }],
+      },
+    })
+    apiMock.executeTool.mockResolvedValue({
+      data: {
+        tool_name: 'baseinfo_scan',
+        tool_category: 'info_collection',
+        target: 'http://testasp.vulnweb.com',
+        timestamp: '2026-08-17T10:27:05',
+        information_summary: [
+          { label: 'success', value: '是' },
+          { label: 'data', value: 'code: 200; msg: 查询成功' },
+          { label: 'metadata', value: 'tool: baseinfo' },
+        ],
+        result: {
+          success: true,
+          data: {
+            success: true,
+            data: {
+              code: 200,
+              msg: '查询成功',
+              domain: 'testasp.vulnweb.com',
+              server: 'Microsoft-IIS/8.5',
+              language: 'ASP.NET',
+              ip: ['44.238.29.244 (物理地址: United States, Oregon, Portland, Amazon.com)  '],
+              os: 'Windows Server',
+              register: 'http://whois.chinaz.com/testasp.vulnweb.com',
+            },
+            metadata: { tool: 'baseinfo' },
+          },
+        },
+      },
+    })
+    const wrapper = await mountView()
+    await wrapper.get('.tool-card').trigger('click')
+    await wrapper.get('#toolTarget').setValue('http://testasp.vulnweb.com')
+    await wrapper.get('#executeToolBtn').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.execution-status .status-line').text()).toContain('执行完成 · 已收集 8 项基础信息')
+    expect(wrapper.text()).toContain('服务与响应')
+    expect(wrapper.text()).toContain('网站可正常访问（HTTP 200）')
+    expect(wrapper.text()).toContain('网站技术')
+    expect(wrapper.text()).toContain('IP 归属信息')
+    expect(wrapper.text()).toContain('注册信息查询入口')
+    expect(wrapper.text()).not.toContain('metadata')
+    expect(wrapper.text()).not.toContain('查询成功')
     wrapper.unmount()
   })
 })

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -134,6 +135,9 @@ class AutoScanRunner:
         errors = list(state.get("errors", []))
         tool_results = dict(state.get("tool_results", {}))
         vulnerabilities = list(state.get("vulnerabilities", []))
+        task_metadata = dict(state.get("task_metadata") or {})
+        for tool_name in planned_tasks:
+            task_metadata.setdefault(tool_name, {"status": "pending"})
 
         state = update_state(
             state,
@@ -146,6 +150,7 @@ class AutoScanRunner:
             errors=errors,
             tool_results=tool_results,
             vulnerabilities=vulnerabilities,
+            task_metadata=task_metadata,
             is_complete=False,
             cancelled=False,
             scan_status="running",
@@ -179,7 +184,9 @@ class AutoScanRunner:
             memory_store.save_session(self.session_id, state)
 
             try:
+                execution_started_at = time.perf_counter()
                 result = await self._execute_tool(tool_name, state)
+                duration_ms = round((time.perf_counter() - execution_started_at) * 1000, 3)
                 tool_results[tool_name] = result
                 auth_info = extract_auth_from_result(result)
                 if auth_info:
@@ -197,6 +204,12 @@ class AutoScanRunner:
                         failed_tasks.append(tool_name)
                     errors.append(f"{tool_name}: {result.get('error') or '工具执行失败'}")
 
+                task_metadata[tool_name] = {
+                    **task_metadata.get(tool_name, {}),
+                    "status": "completed" if success else "failed",
+                    "duration_ms": duration_ms,
+                }
+
                 state = update_state(
                     state,
                     tool_results=dict(tool_results),
@@ -204,6 +217,7 @@ class AutoScanRunner:
                     failed_tasks=list(failed_tasks),
                     vulnerabilities=list(vulnerabilities),
                     errors=list(errors),
+                    task_metadata=dict(task_metadata),
                     task_result={"tool": tool_name, "result": result},
                     task_history=list(state.get("task_history", [])) + [
                         f"{tool_name}: {str(result)[:200]}"
@@ -221,6 +235,7 @@ class AutoScanRunner:
                     "tool_category": tool_category(tool_name),
                     "target": self.target,
                     "success": success,
+                    "duration_ms": duration_ms,
                     "raw_result": result,
                     "vulnerabilities": current_vulnerabilities,
                     "information_summary": information_items(tool_name, result),
@@ -233,14 +248,21 @@ class AutoScanRunner:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                duration_ms = round((time.perf_counter() - execution_started_at) * 1000, 3)
                 error_message = f"{tool_name}: {exc}"
                 errors.append(error_message)
                 if tool_name not in failed_tasks:
                     failed_tasks.append(tool_name)
+                task_metadata[tool_name] = {
+                    **task_metadata.get(tool_name, {}),
+                    "status": "failed",
+                    "duration_ms": duration_ms,
+                }
                 state = update_state(
                     state,
                     failed_tasks=list(failed_tasks),
                     errors=list(errors),
+                    task_metadata=dict(task_metadata),
                     current_tool="",
                     current_task="",
                     progress=round((index + 1) / max(len(planned_tasks), 1) * 100, 1),
@@ -250,6 +272,7 @@ class AutoScanRunner:
                     "tool": tool_name,
                     "target": self.target,
                     "error": str(exc),
+                    "duration_ms": duration_ms,
                 })
 
             await self._send("workflow_progress", {

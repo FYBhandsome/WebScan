@@ -32,10 +32,20 @@
       </div>
     </div>
 
-    <div class="report-viewer" v-show="viewer.show">
+    <div class="report-viewer" :class="{ 'is-fullscreen': viewer.isFullscreen }" v-show="viewer.show">
       <div class="viewer-header">
         <h3 id="reportTitle">{{ viewer.filename }}</h3>
         <div class="viewer-actions">
+          <button
+            class="viewer-icon-btn"
+            @click="toggleFullscreen"
+            :disabled="viewer.isLoading"
+            :title="viewer.isFullscreen ? '退出全屏（Esc）' : '全屏查看（Esc 退出）'"
+            :aria-label="viewer.isFullscreen ? '退出全屏' : '全屏查看'"
+          >
+            <Minimize2 v-if="viewer.isFullscreen" :size="18" />
+            <Maximize2 v-else :size="18" />
+          </button>
           <button class="viewer-icon-btn" @click="download(viewer.filename)" :disabled="viewer.isLoading" title="下载">
             <Download :size="18" />
           </button>
@@ -52,6 +62,8 @@
           :srcdoc="viewer.content" 
           class="html-report-frame"
           sandbox="allow-same-origin"
+          ref="reportFrame"
+          @load="attachFrameKeyboardHandler"
         ></iframe>
         <div v-else class="markdown-body" v-html="renderedContent"></div>
       </div>
@@ -60,9 +72,9 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { marked } from 'marked'
-import { Download, X } from 'lucide-vue-next'
+import { Download, Maximize2, Minimize2, X } from 'lucide-vue-next'
 import { API } from '../../services/api.js'
 import { showToast } from '../../store.js'
 
@@ -73,13 +85,15 @@ const props = defineProps({
 const reports = ref([])
 const isLoading = ref(false)
 const errorMsg = ref('')
+const reportFrame = ref(null)
 
 const viewer = reactive({
   show: false,
   filename: '',
   content: '',
   isLoading: false,
-  error: ''
+  error: '',
+  isFullscreen: false
 })
 
 const renderedContent = computed(() => {
@@ -108,9 +122,16 @@ const fetchReports = async () => {
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', handleKeydown)
   fetchReports().then(() => {
     if (props.initialReportFilename) openViewer(props.initialReportFilename)
   })
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  detachFrameKeyboardHandler()
+  exitFullscreen()
 })
 
 const openViewer = async (filename) => {
@@ -131,9 +152,40 @@ const openViewer = async (filename) => {
 }
 
 const closeViewer = () => {
+  exitFullscreen()
   viewer.show = false
   viewer.filename = ''
   viewer.content = ''
+}
+
+const toggleFullscreen = () => {
+  viewer.isFullscreen ? exitFullscreen() : enterFullscreen()
+}
+
+const enterFullscreen = () => {
+  viewer.isFullscreen = true
+  document.body.classList.add('report-viewer-fullscreen-open')
+}
+
+const exitFullscreen = () => {
+  viewer.isFullscreen = false
+  document.body.classList.remove('report-viewer-fullscreen-open')
+}
+
+const handleKeydown = (event) => {
+  if (event.key === 'Escape' && viewer.isFullscreen) {
+    event.preventDefault()
+    exitFullscreen()
+  }
+}
+
+const detachFrameKeyboardHandler = () => {
+  reportFrame.value?.contentWindow?.removeEventListener('keydown', handleKeydown)
+}
+
+const attachFrameKeyboardHandler = () => {
+  detachFrameKeyboardHandler()
+  reportFrame.value?.contentWindow?.addEventListener('keydown', handleKeydown)
 }
 
 const download = (filename) => {
@@ -199,6 +251,21 @@ const formatDate = (dateStr) => {
   background: #fafaf9;
 }
 
+.report-viewer.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  transform: none;
+  border: none;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
 .viewer-header {
   display: flex;
   justify-content: space-between;
@@ -212,6 +279,10 @@ const formatDate = (dateStr) => {
   font-weight: 600;
   color: var(--text-primary);
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .viewer-actions {
@@ -253,6 +324,13 @@ const formatDate = (dateStr) => {
   padding: 20px 28px;
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
+}
+
+.report-viewer.is-fullscreen .viewer-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 28px;
 }
 
 .viewer-content:hover {
@@ -453,5 +531,16 @@ const formatDate = (dateStr) => {
   border: none;
   border-radius: 8px;
   background: white;
+}
+
+.report-viewer.is-fullscreen .html-report-frame {
+  display: block;
+  height: 100%;
+  min-height: 100%;
+  border-radius: 0;
+}
+
+:global(body.report-viewer-fullscreen-open) {
+  overflow: hidden;
 }
 </style>

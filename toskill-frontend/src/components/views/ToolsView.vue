@@ -108,10 +108,11 @@
         <div v-if="execution.resultData" class="execution-result">
           <div class="execution-status" :class="{ failed: !executionSucceeded }">
             <span class="status-icon" aria-hidden="true">{{ executionSucceeded ? '✓' : '!' }}</span>
-            <div>
+            <p class="status-line">
               <strong>{{ executionSucceeded ? '执行完成' : '执行未完成' }}</strong>
-              <p>{{ executionStatusText }}</p>
-            </div>
+              <span aria-hidden="true"> · </span>
+              <span>{{ executionStatusText }}</span>
+            </p>
           </div>
 
           <div class="result-structured">
@@ -123,12 +124,20 @@
 
             <div v-if="executionCategory === 'info_collection'" class="result-report-section information-output">
               <h4>收集结果</h4>
-              <dl v-if="executionInformationItems.length" class="information-list">
-                <div v-for="item in executionInformationItems" :key="item.label" class="result-row">
-                  <dt class="result-label">{{ item.label }}</dt>
-                  <dd class="result-value">{{ item.value }}</dd>
-                </div>
-              </dl>
+              <div v-if="executionInformationGroups.length" class="information-groups">
+                <section v-for="group in executionInformationGroups" :key="group.title || 'default'" class="information-group">
+                  <h5 v-if="group.title">{{ group.title }}</h5>
+                  <dl class="information-list">
+                    <div v-for="item in group.items" :key="`${group.title}-${item.label}`" class="result-row">
+                      <dt class="result-label">{{ item.label }}</dt>
+                      <dd class="result-value">
+                        <a v-if="item.href" :href="item.href" target="_blank" rel="noopener noreferrer">{{ item.value }}</a>
+                        <span v-else>{{ item.value }}</span>
+                      </dd>
+                    </div>
+                  </dl>
+                </section>
+              </div>
               <p v-else class="result-empty">本次执行完成，工具未返回可展示的信息。</p>
             </div>
 
@@ -156,9 +165,9 @@
           <button class="close-btn" @click="closeNewToolModal">×</button>
         </div>
 
-        <div class="tool-type-picker">
-          <span>工具类型</span>
+        <div class="tool-type-picker" role="group" aria-label="工具类型">
           <button v-for="option in toolTypeOptions" :key="option.value"
+            type="button"
             :class="{ active: newToolModal.category === option.value }"
             @click="newToolModal.category = option.value">{{ option.label }}</button>
         </div>
@@ -249,6 +258,7 @@ import { API } from '../../services/api.js'
 import { showToast } from '../../store.js'
 import { marked } from 'marked'
 import { ws } from '../../services/websocket.js'
+import { formatInformationResult } from '../../utils/informationResultFormatter.js'
 
 marked.setOptions({ breaks: true, gfm: true })
 
@@ -691,10 +701,13 @@ const executionToolDescription = computed(() => {
   return description ? `${categoryLabel} · ${description}` : categoryLabel
 })
 
-const executionInformationItems = computed(() => {
-  const items = execution.resultData?.information_summary
-  return Array.isArray(items) ? items : []
-})
+const executionInformationGroups = computed(() =>
+  formatInformationResult(execution.toolName, execution.resultData)
+)
+
+const executionInformationItemsCount = computed(() =>
+  executionInformationGroups.value.reduce((total, group) => total + group.items.length, 0)
+)
 
 const executionSucceeded = computed(() => execution.resultData?.success !== false)
 
@@ -703,8 +716,9 @@ const executionStatusText = computed(() => {
     return execution.resultData?.error || '工具未能完成本次执行，请检查目标或稍后重试。'
   }
   if (executionCategory.value === 'info_collection') {
-    const count = executionInformationItems.value.length
-    return count ? `已收集到 ${count} 项可展示信息` : '工具已完成执行'
+    const count = executionInformationItemsCount.value
+    const label = execution.toolName === 'baseinfo_scan' ? '基础信息' : '信息'
+    return count ? `已收集 ${count} 项${label}` : '工具已完成执行'
   }
   return '扫描已完成，请查看分析结果'
 })
@@ -782,11 +796,11 @@ const runTool = async () => {
 .create-tool-btn {
   flex-shrink: 0;
   padding-inline: 18px;
-  background: #10B981;
+  background: var(--primary-color);
 }
 
 .create-tool-btn:hover {
-  background: #059669;
+  background: var(--primary-hover);
 }
 
 .tools-controls {
@@ -807,7 +821,8 @@ const runTool = async () => {
   gap: 4px;
   padding: 4px;
   border-radius: 10px;
-  background: #F3F4F6;
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
   flex-shrink: 0;
 }
 
@@ -824,13 +839,14 @@ const runTool = async () => {
 
 .source-switch-btn:hover {
   color: #047857;
+  background: #FFFFFF;
 }
 
 .source-switch-btn.active {
-  background: #FFFFFF;
-  color: #047857;
-  border-color: #A7F3D0;
-  box-shadow: 0 1px 2px rgba(16, 185, 129, 0.12);
+  background: #047857;
+  color: #FFFFFF;
+  border-color: #047857;
+  box-shadow: none;
 }
 
 .filter-btn span {
@@ -863,8 +879,8 @@ const runTool = async () => {
 
 .tool-category {
   color: #047857;
-  background: #ECFDF5;
-  border: 1px solid #A7F3D0;
+  background: #FFFFFF;
+  border: 1px solid #047857;
   border-radius: 999px;
 }
 
@@ -917,13 +933,15 @@ const runTool = async () => {
   font-size: 12px;
   padding: 3px 9px;
   border-radius: 999px;
-  color: #047857;
-  background: #ECFDF5;
+  color: #4B5563;
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
 }
 
 .tool-source.custom {
-  color: #047857;
-  background: #D1FAE5;
+  color: #FFFFFF;
+  background: #047857;
+  border-color: #047857;
 }
 
 .tool-created {
@@ -1000,14 +1018,26 @@ const runTool = async () => {
   box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
 }
 
+.execution-form input:-webkit-autofill,
+.form-group input[type="text"]:-webkit-autofill {
+  -webkit-text-fill-color: #111827;
+  box-shadow: 0 0 0 1000px #FFFFFF inset;
+  caret-color: #111827;
+}
+
 .execute-tool-btn {
   min-width: 78px;
   padding-inline: 18px;
-  background: #10B981;
+  background: var(--primary-color);
 }
 
 .execute-tool-btn:hover:not(:disabled) {
-  background: #059669;
+  background: var(--primary-hover);
+}
+
+.execute-tool-btn:disabled {
+  background: var(--primary-disabled);
+  color: var(--primary-disabled-text);
 }
 
 .execution-pending,
@@ -1083,15 +1113,19 @@ const runTool = async () => {
   background: #EF4444;
 }
 
-.execution-status strong,
-.execution-status p {
-  display: block;
-}
-
-.execution-status p {
-  margin: 2px 0 0;
+.status-line {
+  min-width: 0;
+  margin: 0;
   color: inherit;
   line-height: 1.5;
+}
+
+.execution-status:not(.failed) .status-line {
+  white-space: nowrap;
+}
+
+.status-line strong {
+  font-weight: 700;
 }
 
 .result-meta {
@@ -1202,6 +1236,18 @@ const runTool = async () => {
 }
 .information-list { margin: 0; }
 .information-list dd { margin: 0; overflow-wrap: anywhere; }
+.information-group + .information-group { margin-top: 22px; }
+.information-group h5 {
+  margin: 0 0 2px;
+  color: #374151;
+  font-size: 14px;
+  font-weight: 600;
+}
+.result-value a {
+  color: #047857;
+  text-decoration: none;
+}
+.result-value a:hover { text-decoration: underline; }
 .result-empty {
   margin: 12px 0 0;
   padding: 14px;
@@ -1396,36 +1442,41 @@ const runTool = async () => {
 }
 
 .tool-type-picker {
-  display: grid;
-  grid-template-columns: auto 1fr 1fr;
+  display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px;
-  margin-bottom: 18px;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: #f8fafc;
-}
-
-.tool-type-picker > span {
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
+  justify-content: center;
+  gap: 8px;
+  margin: 2px 0 24px;
 }
 
 .tool-type-picker button {
-  padding: 9px 12px;
-  border: 1px solid var(--border-color);
+  flex: 0 1 210px;
+  min-height: 44px;
+  padding: 10px 18px;
+  border: 1px solid #D1D5DB;
   border-radius: 8px;
-  background: #fff;
-  color: var(--text-secondary);
+  background: #FFFFFF;
+  color: #4B5563;
+  font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+
+.tool-type-picker button:hover:not(.active) {
+  color: #047857;
+  border-color: #047857;
 }
 
 .tool-type-picker button.active {
-  border-color: #A7F3D0;
-  color: #047857;
-  background: #ECFDF5;
+  border-color: #047857;
+  color: #FFFFFF;
+  background: #047857;
+}
+
+.tool-type-picker button:focus-visible {
+  outline: 3px solid rgba(16, 185, 129, 0.22);
+  outline-offset: 2px;
 }
 
 .option-card {
@@ -1501,6 +1552,7 @@ const runTool = async () => {
   font-size: 14px;
   outline: none;
   transition: border-color 0.2s;
+  background: #FFFFFF;
 }
 
 .form-group input[type="text"]:focus,
@@ -1530,6 +1582,7 @@ const runTool = async () => {
   line-height: 1.6;
   resize: vertical;
   outline: none;
+  background: #FFFFFF;
 }
 
 .char-count {
@@ -1616,8 +1669,11 @@ const runTool = async () => {
   }
 
   .tool-type-picker {
-    grid-template-columns: 1fr;
+    align-items: stretch;
+    flex-direction: column;
   }
+
+  .tool-type-picker button { flex-basis: auto; }
 
   .new-tool-options {
     flex-direction: column;
@@ -1666,15 +1722,21 @@ const runTool = async () => {
 }
 
 .filter-btn:hover {
-  border-color: #A7F3D0;
+  border-color: #047857;
   color: #047857;
-  background: #F0FDF4;
+  background: #FFFFFF;
 }
 
 .filter-btn.active {
-  background: #ECFDF5;
-  color: #047857;
-  border-color: #A7F3D0;
+  background: #047857;
+  color: #FFFFFF;
+  border-color: #047857;
+}
+
+.filter-btn:focus-visible,
+.source-switch-btn:focus-visible {
+  outline: 3px solid rgba(16, 185, 129, 0.22);
+  outline-offset: 2px;
 }
 
 /* 弹窗尺寸覆盖 — 覆盖全局 style.css 中的 500px / 300px 限制 */

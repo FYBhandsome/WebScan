@@ -120,7 +120,6 @@
             >
               <span class="task-dot" :class="task.status"></span>
               <span class="task-name">{{ task.name }}</span>
-              <span class="task-elapsed">{{ task.elapsed || 'N/A' }}</span>
               <span class="task-badge" :class="task.status">{{ badgeText(task.status) }}</span>
               <span v-if="canOpenTaskResult(task)" class="task-result-action">查看结果</span>
             </button>
@@ -162,24 +161,6 @@
           </div>
 
           <div class="results-content" id="resultsContent">
-            <div class="result-section" v-if="informationResults.length > 0">
-              <h4>收集到的信息 ({{ informationResults.length }} 类)</h4>
-              <div class="information-result-grid">
-                <article class="information-result-card" v-for="item in informationResults" :key="item.tool">
-                  <div class="information-result-head">
-                    <strong>{{ item.title || formatTaskName(item.tool) }}</strong>
-                    <span>{{ item.tool }}</span>
-                  </div>
-                  <dl>
-                    <div v-for="field in item.items || []" :key="field.label">
-                      <dt>{{ field.label }}</dt>
-                      <dd>{{ field.value }}</dd>
-                    </div>
-                  </dl>
-                </article>
-              </div>
-            </div>
-
             <div class="result-section" v-if="resultsData.vulnerabilities?.length > 0">
               <h4>发现的漏洞 ({{ resultsData.vulnerabilities.length }})</h4>
               <div
@@ -200,36 +181,33 @@
               </div>
             </div>
 
-            <div class="result-section" v-if="htmlReportLoading">
-              <h4>HTML 安全报告</h4>
-              <div class="report-loading">报告生成完成，正在加载 HTML 内容...</div>
-            </div>
-
-            <div class="result-section" v-else-if="htmlReportError">
-              <h4>HTML 安全报告</h4>
-              <div class="report-error">{{ htmlReportError }}</div>
-            </div>
-
-            <div class="result-section" v-else-if="htmlReportContent">
-              <h4>HTML 安全报告</h4>
-              <iframe
-                :srcdoc="htmlReportContent"
-                class="html-report-frame"
-                sandbox="allow-same-origin"
-              ></iframe>
-            </div>
-
-            <div class="result-section" v-if="resultsData.report && !htmlReportContent">
-              <h4>扫描报告</h4>
-              <div class="code-block">{{ resultsData.report }}</div>
-            </div>
-
             <div class="result-section" v-if="resultsData.errors?.length > 0">
               <h4>错误信息</h4>
               <div class="result-item" v-for="(err, i) in resultsData.errors" :key="i" style="color: var(--error-color);">
                 {{ err }}
               </div>
             </div>
+
+            <section v-if="hasReportLinks" class="report-entry-section" aria-label="扫描报告">
+              <div>
+                <h4>扫描报告已生成</h4>
+                <p>完整报告已保存至报告页面，可按格式查看或下载。</p>
+              </div>
+              <div class="report-entry-actions">
+                <button
+                  v-if="htmlReportFilename"
+                  type="button"
+                  class="report-entry-btn primary"
+                  @click="openReport(resultsData.html_report_url)"
+                >查看 HTML 报告</button>
+                <button
+                  v-if="markdownReportFilename"
+                  type="button"
+                  class="report-entry-btn secondary"
+                  @click="openReport(resultsData.report_url)"
+                >查看 Markdown 报告</button>
+              </div>
+            </section>
 
             <div class="result-section" v-if="isResultEmpty()">
               <p>{{ emptyResultMessage }}</p>
@@ -246,11 +224,16 @@
     <Transition name="modal-slide">
       <div v-if="taskModal.show" class="task-modal-panel">
         <div class="task-modal-header">
-          <h3>任务结果: {{ formatTaskName(taskModal.taskName) }}</h3>
+          <h3>执行总结: {{ taskModal.title }}</h3>
           <button class="task-modal-close" @click="closeTaskResultModal">&times;</button>
         </div>
         <div class="task-modal-content">
-          <div class="task-modal-report markdown-body" v-html="renderedTaskResult"></div>
+          <dl class="task-summary-list">
+            <div v-for="field in taskModal.items" :key="field.label">
+              <dt>{{ field.label }}</dt>
+              <dd>{{ field.value }}</dd>
+            </div>
+          </dl>
         </div>
       </div>
     </Transition>
@@ -259,13 +242,9 @@
 
 <script setup>
 import { reactive, ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { API } from '../../services/api.js'
 import { ws } from '../../services/websocket.js'
 import { storageService } from '../../services/storageService.js'
 import { showToast, globalState, addScanHistory, getScanHistory } from '../../store.js'
-import { marked } from 'marked'
-
-marked.setOptions({ breaks: true, gfm: true })
 
 const scanModes = [
   { value: 'info', name: '信息收集', desc: 'WHOIS、DNS、子域名、端口扫描等基础信息', badge: '轻量·快速' },
@@ -285,12 +264,10 @@ const resultsData = ref({})
 const scanHistory = ref([])
 const currentTool = ref('')
 const currentToolProgress = ref('')
-const htmlReportContent = ref('')
-const htmlReportLoading = ref(false)
-const htmlReportError = ref('')
 const activeRunId = ref('')
 const cancelRequested = ref(false)
 let persistTimer = null
+const emit = defineEmits(['open-report'])
 
 const selectedReportType = computed(() => {
   if (resultsData.value.report_type) return resultsData.value.report_type
@@ -300,6 +277,10 @@ const selectedReportType = computed(() => {
 const informationResults = computed(() => Array.isArray(resultsData.value.information_results)
   ? resultsData.value.information_results
   : [])
+
+const htmlReportFilename = computed(() => extractReportFilename(resultsData.value.html_report_url))
+const markdownReportFilename = computed(() => extractReportFilename(resultsData.value.report_url))
+const hasReportLinks = computed(() => Boolean(htmlReportFilename.value || markdownReportFilename.value))
 
 const showVulnerabilityResults = computed(() => selectedReportType.value !== 'info_collection')
 
@@ -322,7 +303,8 @@ const emptyResultMessage = computed(() => selectedReportType.value === 'info_col
 const taskModal = reactive({
   show: false,
   taskName: '',
-  result: ''
+  title: '',
+  items: []
 })
 
 const restoreScanState = () => {
@@ -431,40 +413,30 @@ const upsertInformationResult = (tool, items = []) => {
 }
 
 const openTaskResultModal = (taskName) => {
+  const summary = informationResults.value.find(item => item.tool === taskName)
+  if (!summary) return
   taskModal.taskName = taskName
-  const res = resultsData.value.tool_results?.[taskName]
-  if (res !== undefined && res !== null) {
-    if (typeof res === 'string') {
-      taskModal.result = res
-    } else {
-      taskModal.result = JSON.stringify(res, null, 2)
-    }
-  } else {
-    taskModal.result = '*该任务无可用结果数据*'
-  }
+  taskModal.title = summary.title || formatTaskName(taskName)
+  taskModal.items = Array.isArray(summary.items) ? summary.items : []
   taskModal.show = true
 }
 
 const canOpenTaskResult = (task) => {
   if (!showResults.value || task?.status !== 'completed' || !task?.name) return false
-  return Object.prototype.hasOwnProperty.call(resultsData.value.tool_results || {}, task.name)
+  return informationResults.value.some(item => item.tool === task.name && item.items?.length)
 }
 
 const closeTaskResultModal = () => {
   taskModal.show = false
   taskModal.taskName = ''
-  taskModal.result = ''
+  taskModal.title = ''
+  taskModal.items = []
 }
 
 const formatTaskName = (name) => {
   if (!name) return ''
   return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
-
-const renderedTaskResult = computed(() => {
-  if (!taskModal.result) return ''
-  return marked.parse(taskModal.result)
-})
 
 const formatElapsed = (ms) => {
   // Date.now() has millisecond resolution, so very fast tools can otherwise
@@ -487,9 +459,6 @@ const initProgress = () => {
   resultsData.value = {}
   currentTool.value = ''
   currentToolProgress.value = ''
-  htmlReportContent.value = ''
-  htmlReportLoading.value = false
-  htmlReportError.value = ''
   activeRunId.value = ''
 }
 
@@ -545,6 +514,10 @@ const payloadDurationMs = (payload) => {
   return null
 }
 
+const taskDurationMs = (state, taskName) => {
+  return Number(state?.task_metadata?.[taskName]?.duration_ms)
+}
+
 const payloadOf = (data) => data?.payload || {}
 
 const isAutomaticEvent = (data) => {
@@ -564,33 +537,22 @@ const extractReportFilename = (reportUrl) => {
   }
 }
 
-const loadHtmlReport = async (reportUrl) => {
-  const filename = extractReportFilename(reportUrl)
-  if (!filename) return
-
-  htmlReportLoading.value = true
-  htmlReportError.value = ''
-  try {
-    const result = await API.getReportContent(filename)
-    htmlReportContent.value = result.data?.content || result.data || ''
-    if (!htmlReportContent.value) htmlReportError.value = '报告内容为空'
-  } catch (error) {
-    htmlReportError.value = `HTML 报告加载失败: ${error.message}`
-  } finally {
-    htmlReportLoading.value = false
-  }
-}
-
 const mergeResultPayload = (data) => {
   const payload = data?.payload || data?.data || data || {}
   resultsData.value = { ...resultsData.value, ...payload }
-  if (payload.html_report_url) loadHtmlReport(payload.html_report_url)
   return payload
+}
+
+const openReport = (reportUrl) => {
+  const filename = extractReportFilename(reportUrl)
+  if (filename) emit('open-report', filename)
 }
 
 const handleScanResult = (data) => {
   const payload = mergeResultPayload(data)
-  ;(payload.completed_tasks || []).forEach(task => updateTaskStatus(task, 'completed'))
+  ;(payload.completed_tasks || []).forEach(task => {
+    updateTaskStatus(task, 'completed', taskDurationMs(payload, task))
+  })
   isScanning.value = false
   cancelRequested.value = false
   progress.value = 100
@@ -632,8 +594,12 @@ const applyRunState = (state) => {
 
   tasks.value = []
   ;(state.planned_tasks || []).forEach(task => addTask(task, 'pending'))
-  ;(state.completed_tasks || []).forEach(task => updateTaskStatus(task, 'completed'))
-  ;(state.failed_tasks || []).forEach(task => updateTaskStatus(task, 'error'))
+  ;(state.completed_tasks || []).forEach(task => {
+    updateTaskStatus(task, 'completed', taskDurationMs(state, task))
+  })
+  ;(state.failed_tasks || []).forEach(task => {
+    updateTaskStatus(task, 'error', taskDurationMs(state, task))
+  })
   currentTool.value = state.current_tool || state.current_task || ''
   progress.value = Number(state.progress) || progress.value
   resultsData.value = {
@@ -654,8 +620,6 @@ const applyRunState = (state) => {
     report_id: state.report_id || resultsData.value.report_id || '',
     html_report_url: state.html_report_url || resultsData.value.html_report_url || ''
   }
-  if (state.html_report_url) loadHtmlReport(state.html_report_url)
-
   if (state.cancelled || state.scan_status === 'cancelled') {
     handleScanCancelled({ payload: resultsData.value })
   } else if (state.is_complete) {
@@ -775,21 +739,21 @@ const handleWSMessage = (data) => {
 
     case 'report_generation_started':
       progress.value = Math.max(progress.value, 85)
-      statusText.value = '正在生成 HTML 安全报告...'
+      statusText.value = '正在生成扫描报告...'
       break
 
     case 'report_generated':
       mergeResultPayload(data)
       progress.value = Math.max(progress.value, 95)
-      statusText.value = 'HTML 报告已生成，正在加载...'
+      statusText.value = '扫描报告已生成'
       break
 
-    case 'report_error':
-      htmlReportLoading.value = false
-      htmlReportError.value = payload.error || 'HTML 报告生成失败'
+    case 'report_error': {
+      const reportError = payload.error || '扫描报告生成失败'
       statusText.value = '报告生成失败'
-      showToast(htmlReportError.value, 'error')
+      showToast(reportError, 'error')
       break
+    }
 
     case 'scan_completed':
       handleScanResult(data)
@@ -832,9 +796,6 @@ onMounted(() => {
   ready
     .then(() => ws.sendGetStatus())
     .catch(() => {})
-  if (resultsData.value.html_report_url) {
-    loadHtmlReport(resultsData.value.html_report_url)
-  }
 })
 
 onUnmounted(() => {
@@ -1139,24 +1100,6 @@ select:focus {
   white-space: nowrap;
 }
 
-.report-loading,
-.report-error {
-  padding: 16px;
-  color: var(--text-secondary);
-}
-
-.report-error {
-  color: var(--error-color, #ff3b30);
-}
-
-.html-report-frame {
-  display: block;
-  width: 100%;
-  min-height: 720px;
-  border: 1px solid var(--border-light, #e5e7eb);
-  background: #fff;
-}
-
 .task-list {
   display: flex;
   flex-direction: column;
@@ -1237,13 +1180,6 @@ select:focus {
   white-space: nowrap;
 }
 
-.task-elapsed {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-}
-
 .task-badge {
   font-size: 11px;
   padding: 1px 8px;
@@ -1272,7 +1208,7 @@ select:focus {
 }
 
 .task-result-action {
-  color: var(--primary-color, #165dff);
+  color: var(--primary-color, #047857);
   font-size: 12px;
   flex-shrink: 0;
 }
@@ -1315,11 +1251,11 @@ select:focus {
 }
 
 .summary-stat.info {
-  border-color: rgba(22, 93, 255, 0.28);
+  border-color: rgba(4, 120, 87, 0.35);
 }
 
 .summary-stat.info .stat-number {
-  color: var(--primary-color, #165dff);
+  color: var(--primary-color, #047857);
 }
 
 .stat-number {
@@ -1347,66 +1283,6 @@ select:focus {
 .result-section:nth-child(4) { animation-delay: 0.15s; }
 .result-section:nth-child(5) { animation-delay: 0.2s; }
 .result-section:nth-child(6) { animation-delay: 0.25s; }
-
-.information-result-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.information-result-card {
-  border: 1px solid rgba(22, 93, 255, 0.22);
-  background: #f8faff;
-  padding: 16px;
-}
-
-.information-result-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.information-result-head strong {
-  color: var(--text-primary);
-}
-
-.information-result-head span {
-  color: var(--primary-color, #165dff);
-  font: 12px Consolas, monospace;
-  white-space: nowrap;
-}
-
-.information-result-card dl {
-  margin: 0;
-}
-
-.information-result-card dl > div {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  gap: 10px;
-  padding: 7px 0;
-  border-top: 1px dashed var(--border-light);
-}
-
-.information-result-card dl > div:first-child {
-  padding-top: 0;
-  border-top: 0;
-}
-
-.information-result-card dt {
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
-.information-result-card dd {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
 
 .vulnerability-card {
   border: 1px solid rgba(255, 149, 0, 0.2);
@@ -1482,6 +1358,65 @@ select:focus {
   font-family: 'SF Mono', 'Consolas', monospace;
 }
 
+.report-entry-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 20px;
+  padding: 20px;
+  border: 1px solid color-mix(in srgb, var(--primary-color, #047857) 28%, transparent);
+  background: color-mix(in srgb, var(--primary-color, #047857) 5%, #fff);
+}
+
+.report-entry-section h4 {
+  margin: 0 0 6px;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.report-entry-section p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.report-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.report-entry-btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--primary-color, #047857);
+  border-radius: 0;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.report-entry-btn.primary {
+  background: var(--primary-color, #047857);
+  color: #fff;
+}
+
+.report-entry-btn.primary:hover {
+  background: color-mix(in srgb, var(--primary-color, #047857) 86%, #000);
+}
+
+.report-entry-btn.secondary {
+  background: transparent;
+  color: var(--primary-color, #047857);
+}
+
+.report-entry-btn.secondary:hover {
+  background: color-mix(in srgb, var(--primary-color, #047857) 10%, transparent);
+}
+
 .task-modal-overlay {
   position: fixed;
   inset: 0;
@@ -1549,11 +1484,37 @@ select:focus {
   padding: 24px 28px;
 }
 
-.task-modal-report {
+.task-summary-list {
   background: var(--card-bg, #ffffff);
   border: 1px solid var(--border-color, #e5e7eb);
   border-radius: 8px;
-  padding: 24px 28px;
+  margin: 0;
+  padding: 12px 20px;
+}
+
+.task-summary-list > div {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.32fr) minmax(0, 1fr);
+  gap: 16px;
+  padding: 13px 0;
+  border-top: 1px dashed var(--border-light);
+}
+
+.task-summary-list > div:first-child {
+  border-top: 0;
+}
+
+.task-summary-list dt {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.task-summary-list dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .modal-fade-enter-active,
@@ -1640,7 +1601,7 @@ select:focus {
 }
 
 .markdown-body :deep(blockquote) {
-  border-left: 4px solid var(--primary-color, #1677ff);
+  border-left: 4px solid var(--primary-color, #047857);
   padding: 8px 16px;
   margin: 12px 0;
   background: #f8fafc;
@@ -1710,6 +1671,19 @@ select:focus {
     flex: 1 1 calc(50% - 8px);
   }
 
+  .report-entry-section {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .report-entry-actions {
+    width: 100%;
+  }
+
+  .report-entry-btn {
+    flex: 1 1 180px;
+  }
+
   .task-modal-panel {
     width: 95vw;
   }
@@ -1722,8 +1696,14 @@ select:focus {
     padding: 16px 20px;
   }
 
-  .task-modal-report {
-    padding: 16px;
+  .task-summary-list {
+    padding: 10px 16px;
+  }
+
+  .task-summary-list > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+    padding: 11px 0;
   }
 }
 

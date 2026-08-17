@@ -25,7 +25,7 @@
           v-show="currentPage === 'console'"
           @open-report="openReportPage"
         />
-        <ScanView v-if="currentPage === 'scan'" />
+        <ScanView v-if="currentPage === 'scan'" @open-report="openReportPage" />
         <ToolsView v-if="currentPage === 'tools'" />
         <ReportsView
           v-if="currentPage === 'reports'"

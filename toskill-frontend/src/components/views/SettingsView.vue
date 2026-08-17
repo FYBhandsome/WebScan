@@ -2,11 +2,17 @@
   <div id="page-settings" class="page active">
     <div class="page-header">
       <h2>系统设置</h2>
-      <p class="page-subtitle">配置服务器连接与扫描参数</p>
+      <div class="page-header-meta">
+        <p class="page-subtitle">配置服务器连接与扫描参数</p>
+        <span class="autosave-status" :class="{ 'is-saving': autosaveState === 'saving' }">
+          <Check :size="14" />
+          {{ autosaveMessage }}
+        </span>
+      </div>
     </div>
 
     <div class="settings-container">
-      <div class="settings-card">
+      <div class="settings-card settings-card--connection">
         <div class="card-header">
           <Server :size="20" class="card-icon" />
           <span class="card-title">服务器连接</span>
@@ -52,7 +58,7 @@
         </div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card settings-card--scan">
         <div class="card-header">
           <Clock :size="20" class="card-icon" />
           <span class="card-title">扫描配置</span>
@@ -78,7 +84,7 @@
         </div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card settings-card--wide">
         <div class="card-header">
           <Database :size="20" class="card-icon" />
           <span class="card-title">RAG 知识库</span>
@@ -140,24 +146,27 @@
         </div>
       </div>
 
-      <div class="settings-card">
+      <div class="settings-card settings-card--wide">
         <div class="card-header">
           <Database :size="20" class="card-icon" />
           <span class="card-title">数据管理</span>
         </div>
         <div class="card-body">
-          <div class="field-row data-info-row">
-            <div class="data-info-item">
-              <span class="data-info-label">记忆数据占用</span>
-              <span class="data-info-value">{{ storageUsage.label }}</span>
+          <div class="data-management-layout">
+            <div class="data-info-row">
+              <div class="data-info-item">
+                <span class="data-info-label">记忆数据占用</span>
+                <span class="data-info-value">{{ storageUsage.label }}</span>
+              </div>
+              <div class="data-info-item">
+                <span class="data-info-label">会话数量</span>
+                <span class="data-info-value">{{ conversationState.conversations.length }} / 20</span>
+              </div>
             </div>
-            <div class="data-info-item">
-              <span class="data-info-label">会话数量</span>
-              <span class="data-info-value">{{ conversationState.conversations.length }} / 20</span>
-            </div>
-          </div>
-          <p class="data-hint">记忆数据包括：会话记录、扫描状态、界面偏好（不含服务器配置与脚本历史）。超过 24 小时的数据将自动清理。</p>
-          <div class="card-footer-actions">
+            <p class="data-hint">
+              <span>记忆数据包括：会话记录、扫描状态、界面偏好（不含服务器配置与脚本历史）。</span>
+              <span>超过 24 小时的数据将自动清理。</span>
+            </p>
             <button class="btn-clear-memory" @click="confirmClearMemory">
               <Trash2 :size="14" />
               清除所有记忆数据
@@ -165,22 +174,13 @@
           </div>
         </div>
       </div>
-
-      <div class="settings-card">
-        <div class="card-body card-body--action">
-          <button class="btn-save" @click="save">
-            <Save :size="16" />
-            保存设置
-          </button>
-        </div>
-      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { reactive, ref, onMounted } from 'vue'
-import { Server, Globe, Radio, Clock, Save, Wifi, Loader, Database, Trash2, RefreshCw, AlertCircle } from 'lucide-vue-next'
+import { reactive, ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { Server, Globe, Radio, Clock, Check, Wifi, Loader, Database, Trash2, RefreshCw, AlertCircle } from 'lucide-vue-next'
 import { API } from '../../services/api.js'
 import { ws } from '../../services/websocket.js'
 import { showToast, showModal, conversationState, clearAllMemoryData, getStorageUsage } from '../../store.js'
@@ -216,6 +216,10 @@ const ragStatus = ref(null)
 const ragLoading = ref(false)
 const rebuilding = ref(false)
 const ragError = ref('')
+const autosaveState = ref('saved')
+const autosaveMessage = ref('更改将自动保存')
+let autosaveTimer = null
+let reconnectAfterAutosave = false
 
 const refreshStorageUsage = () => {
   storageUsage.value = getStorageUsage()
@@ -226,7 +230,8 @@ onMounted(() => {
   refreshRagStatus()
 })
 
-const save = () => {
+const persistSettings = () => {
+  autosaveTimer = null
   API.setBaseUrl(settings.apiUrl)
   ws.setUrl(settings.wsUrl)
 
@@ -236,11 +241,34 @@ const save = () => {
     timeout: settings.timeout
   }))
 
-  showToast('设置已成功保存！', 'success')
-
-  ws.disconnect()
-  ws.connect()
+  if (reconnectAfterAutosave) {
+    ws.disconnect()
+    void ws.connect().catch(() => {})
+    reconnectAfterAutosave = false
+  }
+  autosaveState.value = 'saved'
+  autosaveMessage.value = '已自动保存'
 }
+
+const scheduleAutoSave = (current, previous) => {
+  autosaveState.value = 'saving'
+  autosaveMessage.value = '正在自动保存…'
+  reconnectAfterAutosave ||= current[0] !== previous[0] || current[1] !== previous[1]
+  clearTimeout(autosaveTimer)
+  autosaveTimer = setTimeout(persistSettings, 600)
+}
+
+watch(
+  () => [settings.apiUrl, settings.wsUrl, settings.timeout],
+  scheduleAutoSave
+)
+
+onBeforeUnmount(() => {
+  if (autosaveTimer) {
+    clearTimeout(autosaveTimer)
+    persistSettings()
+  }
+})
 
 const testConn = async () => {
   connState.value = 'testing'
@@ -327,13 +355,25 @@ const confirmClearMemory = () => {
 <style scoped>
 .page-header {
   margin-bottom: 32px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
 }
 
 .page-header h2 {
   font-size: 24px;
   font-weight: 600;
   color: #000000;
-  margin-bottom: 6px;
+  margin: 0;
+}
+
+.page-header-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px 18px;
 }
 
 .page-subtitle {
@@ -342,16 +382,34 @@ const confirmClearMemory = () => {
   margin: 0;
 }
 
+.autosave-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #059669;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.autosave-status.is-saving {
+  color: #71717A;
+}
+
 .settings-container {
-  max-width: 640px;
-  display: flex;
-  flex-direction: column;
+  width: 100%;
+  max-width: 1180px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(360px, 1fr);
   gap: 20px;
 }
 
 .settings-card {
   background: #FAFAFA;
   border: 1px solid #EAEAEA;
+}
+
+.settings-card--wide {
+  grid-column: 1 / -1;
 }
 
 .card-header {
@@ -374,10 +432,6 @@ const confirmClearMemory = () => {
 
 .card-body {
   padding: 20px 24px 24px;
-}
-
-.card-body--action {
-  padding: 20px 24px;
 }
 
 .field-row {
@@ -456,19 +510,34 @@ const confirmClearMemory = () => {
   white-space: nowrap;
 }
 
+.settings-card--scan .field-row {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.settings-card--scan .field-hint {
+  flex-basis: 100%;
+  margin-left: 0px;
+  white-space: normal;
+}
+
 .rag-status-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
 .rag-status-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 14px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 72px;
+  padding: 10px 12px;
   border: 1px solid #E4E4E7;
   background: #FFFFFF;
+  text-align: center;
 }
 
 .rag-status-label {
@@ -700,34 +769,17 @@ const confirmClearMemory = () => {
   transform: translateX(-8px);
 }
 
-.btn-save {
-  display: inline-flex;
+.data-management-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(320px, 1.5fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 12px 28px;
-  font-size: 14px;
-  font-weight: 500;
-  font-family: inherit;
-  color: #FFFFFF;
-  background: #000000;
-  border: none;
-  cursor: pointer;
-  transition: background 0.15s ease, transform 0.15s ease;
-}
-
-.btn-save:hover {
-  background: #10B981;
-}
-
-.btn-save:active {
-  transform: scale(0.98);
+  gap: 24px;
 }
 
 /* 数据管理卡片样式 */
 .data-info-row {
-  flex-wrap: wrap;
+  display: flex;
   gap: 24px;
-  margin-bottom: 12px;
 }
 
 .data-info-item {
@@ -751,11 +803,15 @@ const confirmClearMemory = () => {
 }
 
 .data-hint {
-  margin: 0 0 16px;
+  margin: 0;
   font-size: 12px;
   color: #A1A1AA;
   line-height: 1.6;
   text-align: left;
+}
+
+.data-hint span {
+  display: block;
 }
 
 .btn-clear-memory {
@@ -782,9 +838,38 @@ const confirmClearMemory = () => {
   transform: scale(0.97);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
   .settings-container {
     max-width: 100%;
+    grid-template-columns: 1fr;
+  }
+
+  .settings-card--wide {
+    grid-column: auto;
+  }
+
+  .rag-status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .data-management-layout {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .data-hint {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 768px) {
+  .page-header {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .page-header-meta {
+    justify-content: flex-start;
   }
 
   .card-header {
@@ -792,10 +877,6 @@ const confirmClearMemory = () => {
   }
 
   .card-body {
-    padding: 16px;
-  }
-
-  .card-body--action {
     padding: 16px;
   }
 
@@ -813,6 +894,10 @@ const confirmClearMemory = () => {
     white-space: normal;
   }
 
+  .settings-card--scan .field-hint {
+    margin-left: 0;
+  }
+
   .timeout-field {
     flex: 1;
   }
@@ -824,6 +909,16 @@ const confirmClearMemory = () => {
 
   .rag-status-grid {
     grid-template-columns: 1fr;
+  }
+
+  .data-management-layout {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .data-hint {
+    grid-column: auto;
+    grid-row: auto;
   }
 
   .rag-unavailable {
@@ -850,15 +945,9 @@ const confirmClearMemory = () => {
     justify-content: center;
   }
 
-  .btn-save {
+  .btn-clear-memory {
     width: 100%;
     justify-content: center;
-  }
-}
-
-@media (min-width: 1200px) {
-  .settings-container {
-    max-width: 680px;
   }
 }
 </style>
