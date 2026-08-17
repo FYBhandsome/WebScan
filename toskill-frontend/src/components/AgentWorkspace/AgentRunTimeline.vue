@@ -60,7 +60,13 @@
                 </template>
               </dl>
 
-              <div v-if="step.interaction.type === 'input'" class="interaction-fields">
+              <GeneratedScriptEditor
+                v-if="step.interaction.type === 'script_preview'"
+                :interaction="step.interaction"
+                @action="(key, label) => $emit('action', step.interaction, key, label)"
+              />
+
+              <div v-else-if="step.interaction.type === 'input'" class="interaction-fields">
                 <label v-for="field in step.interaction.fields" :key="field.field" class="interaction-field">
                   <span>{{ field.label }}<em v-if="field.required"> *</em></span>
                   <select v-if="field.options?.length" v-model="field.value">
@@ -141,6 +147,7 @@
 
 <script setup>
 import { marked } from 'marked'
+import GeneratedScriptEditor from './GeneratedScriptEditor.vue'
 
 defineProps({ run: { type: Object, required: true } })
 defineEmits(['action', 'submit-input', 'open-report'])

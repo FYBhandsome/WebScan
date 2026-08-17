@@ -9,6 +9,7 @@ import { API } from '../services/api.js'
 import { storageService } from '../services/storageService.js'
 import { addLog } from './useLogBus.js'
 import { createScanConfirmationIdentity, shouldRouteWaitingInputToInteraction } from './scanRequestState.js'
+import { generateLocalScript } from '../utils/localScriptGenerator.js'
 import {
   appendLogWithoutChangingStepStatus,
   normalizeRunLogPayload,
@@ -34,6 +35,7 @@ export function useAgentChat() {
   const scriptQueue = ref([])
   const currentScriptIndex = ref(0)
   const scriptLoopActive = ref(false)
+  const scriptLoopResumeState = ref(null)
   const overallPlan = ref(null)
   const pendingUploadScript = ref(false)
   const pendingGenerateScript = ref(false)
@@ -65,6 +67,15 @@ export function useAgentChat() {
       : '输入扫描目标或用自然语言与 Agent 对话...'
   ))
   let persistTimer = null
+
+  // A custom script can be executed while a backend-managed workflow is
+  // waiting for the next tool.  The local script queue must never be allowed
+  // to complete that workflow on its own.
+  const hasActiveBackendWorkflow = () => workspaceBlocks.value.some(block => (
+    block.type === 'agent_run' &&
+    !block.provisional &&
+    !['completed', 'failed', 'cancelled'].includes(block.status)
+  ))
 
   const getPauseStorageKey = (conversationId = conversationState.currentId) => (
     conversationId ? `${SCAN_PAUSE_STORAGE_PREFIX}${conversationId}` : ''
@@ -1121,6 +1132,8 @@ export function useAgentChat() {
     scriptQueue.value = scripts.map(s => ({ tool_name: s, status: 'pending', target }))
     currentScriptIndex.value = 0
     scriptLoopActive.value = true
+    scanStatus.value = 'scanning'
+    scanProgress.value = { current: 0, total: scripts.length, activeTool: '' }
     setTimeout(() => triggerScriptConfirm(), 500)
   }
 
@@ -1128,9 +1141,32 @@ export function useAgentChat() {
     if (!scriptLoopActive.value) return
     if (currentScriptIndex.value >= scriptQueue.value.length) {
       scriptLoopActive.value = false
-      scanActive.value = false
       isTyping.value = false
-      addBlock('agent_text', { content: '## 所有脚本执行完毕\n\n扫描流程已完成。如需查看详细报告，请前往**报告页面**。' })
+      scanProgress.value.activeTool = ''
+
+      if (hasActiveBackendWorkflow()) {
+        // The server remains the source of truth for workflow completion and
+        // report generation.  Keep the run active so it can dispatch its
+        // remaining tools or request another user decision.
+        if (scriptLoopResumeState.value) {
+          scanStatus.value = scriptLoopResumeState.value.status
+          scanActive.value = scriptLoopResumeState.value.active
+        }
+        scriptLoopResumeState.value = null
+        addInfoBlock('本地脚本队列已处理完毕，扫描工作流仍在继续。')
+        return
+      }
+
+      // A standalone local queue has no server-side report lifecycle.  Its
+      // completion must be explicit about that instead of sending users to a
+      // report page that may not exist.
+      scanActive.value = false
+      scanStatus.value = 'completed'
+      scriptLoopResumeState.value = null
+      updateRun({}, {
+        status: 'completed',
+        summary: '本地脚本队列已执行完毕。未生成扫描报告。'
+      })
       return
     }
     const script = scriptQueue.value[currentScriptIndex.value]
@@ -1247,16 +1283,205 @@ export function useAgentChat() {
         required: true,
         validation: 'text',
         options: [],
-        value: ''
+        value: request.script_description || ''
       }],
       resolved: false,
       context: 'generate_script',
+      // Every console generation entry uses the reviewed local template.
+      // Keep a backend interaction ID only for display identity; never use it
+      // to send the prompt back to the server for an ai_gen_* script.
       sourceInteraction: block
     })
   }
 
+  const showGeneratedScriptPreview = ({ generated, requestDescription, target }) => {
+    const interactionId = `generated-script:${Date.now()}`
+    return attachRunInteraction({ target, step_id: `script-preview:${generated.toolName}` }, {
+      type: 'script_preview',
+      actionSource: 'generated_script_preview',
+      interactionId,
+      stepId: `script-preview:${generated.toolName}`,
+      stepTitle: '本地生成脚本',
+      title: '审阅并决定下一步',
+      description: generated.description,
+      scriptName: generated.toolName,
+      scriptCategory: generated.category,
+      scriptCode: generated.scriptCode,
+      requestDescription,
+      target,
+      isRegistering: false,
+      error: '',
+      resolved: false
+    })
+  }
+
+  const validateGeneratedScriptPreview = (interaction) => {
+    const name = String(interaction.scriptName || '').trim()
+    const code = String(interaction.scriptCode || '')
+    if (!name) return '脚本名称不能为空'
+    if (name.length > 64) return '脚本名称不能超过 64 个字符'
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) return '脚本名称仅支持字母、数字、下划线和连字符'
+    if (!code.trim()) return '脚本内容不能为空'
+    if (!/def\s+run\s*\(\s*target(\s*:\s*str)?\s*\)/.test(code)) return '脚本必须包含 def run(target: str) 函数'
+    if (!/return\s*\{/.test(code)) return '脚本必须返回 Dict 类型结果'
+    return ''
+  }
+
+  const continueAfterGeneratedScript = () => {
+    if (scriptLoopActive.value && currentScriptIndex.value < scriptQueue.value.length) {
+      // The script that opened the generation dialog is still pending.  Do
+      // not advance the cursor here, otherwise saving or discarding a
+      // generated script silently skips that original tool.
+      setTimeout(() => triggerScriptConfirm(), 500)
+      return
+    }
+    waitingForChoice.value = false
+    isTyping.value = false
+    updateRun({}, { status: 'running' })
+  }
+
+  // The local script execution endpoint reports completion through
+  // `tool_execution_completed`, while the regular scan workflow uses
+  // `task_completed`. Keep both event types on the same queue lifecycle so a
+  // locally generated script cannot leave the console stuck in "running".
+  const settleQueuedScript = (toolName, {
+    status = 'completed',
+    message = '',
+    analysis = '',
+    rawResult = null
+  } = {}) => {
+    if (!scriptLoopActive.value || currentScriptIndex.value >= scriptQueue.value.length) return false
+
+    const script = scriptQueue.value[currentScriptIndex.value]
+    if (!script || (toolName && script.tool_name !== toolName)) return false
+
+    const stepId = `script:${currentScriptIndex.value}:${script.tool_name}`
+    script.status = status
+    upsertRunStep({
+      tool: script.tool_name,
+      target: script.target,
+      step_id: stepId
+    }, {
+      title: script.tool_name,
+      status,
+      message: message || (status === 'failed' ? '脚本执行失败' : '脚本执行完成'),
+      analysis,
+      rawResult,
+      completedAt: new Date().toISOString()
+    })
+
+    // An attempted script, including a failed one, is no longer pending and
+    // must advance the visible queue progress before asking about the next one.
+    scanProgress.value.current = Math.min(
+      scanProgress.value.total || scriptQueue.value.length,
+      (scanProgress.value.current || 0) + 1
+    )
+    scanProgress.value.activeTool = ''
+    currentScriptIndex.value++
+    isTyping.value = false
+    setTimeout(() => triggerScriptConfirm(), 800)
+    return true
+  }
+
+  const registerGeneratedScript = async (interaction, addToQueue) => {
+    const validationError = validateGeneratedScriptPreview(interaction)
+    if (validationError) {
+      interaction.error = validationError
+      return
+    }
+
+    interaction.error = ''
+    interaction.isRegistering = true
+    try {
+      const result = await API.registerCustomTool({
+        tool_name: String(interaction.scriptName).trim(),
+        script_content: interaction.scriptCode,
+        description: interaction.description || '本地生成的扫描脚本',
+        category: interaction.scriptCategory || 'info_collection',
+        creation_method: 'ai_generate',
+        include_in_default_scan: false
+      })
+      const registeredName = result.data?.tool?.name || String(interaction.scriptName).trim()
+      saveScriptHistory({
+        tool_name: registeredName,
+        description: interaction.description || '',
+        source: 'generate',
+        category: interaction.scriptCategory || 'info_collection',
+        script_content: interaction.scriptCode
+      })
+
+      if (addToQueue) {
+        const target = interaction.target || scriptQueue.value[currentScriptIndex.value]?.target || globalState.currentTarget || ''
+        const queuedScript = { tool_name: registeredName, status: 'pending', target }
+        if (scriptLoopActive.value && currentScriptIndex.value < scriptQueue.value.length) {
+          // Run the generated script first, but retain the tool whose
+          // confirmation opened this dialog immediately after it.
+          scriptQueue.value.splice(currentScriptIndex.value, 0, queuedScript)
+          scanProgress.value.total = (scanProgress.value.total || 0) + 1
+          resolveRunInteraction(interaction, '已加入本次扫描队列')
+          setTimeout(() => triggerScriptConfirm(), 500)
+        } else {
+          const resumesBackendWorkflow = hasActiveBackendWorkflow()
+          scriptLoopResumeState.value = resumesBackendWorkflow
+            ? { status: scanStatus.value, active: scanActive.value }
+            : null
+          scriptQueue.value = [queuedScript]
+          currentScriptIndex.value = 0
+          scriptLoopActive.value = true
+          scanActive.value = true
+          scanStatus.value = 'scanning'
+          scanProgress.value.total = (scanProgress.value.total || 0) + 1
+          resolveRunInteraction(interaction, '已加入本次扫描队列')
+          setTimeout(() => triggerScriptConfirm(), 500)
+        }
+        showToast(`脚本“${registeredName}”已加入本次扫描队列`, 'success')
+      } else {
+        resolveRunInteraction(interaction, '已保存到工具库')
+        showToast(`脚本“${registeredName}”已保存到工具库`, 'success')
+        continueAfterGeneratedScript()
+      }
+    } catch (error) {
+      interaction.error = `安全审查或注册失败：${error.message || '请检查脚本内容后重试'}`
+    } finally {
+      interaction.isRegistering = false
+    }
+  }
+
+  const handleGeneratedScriptAction = (interaction, choiceKey) => {
+    if (interaction.isRegistering) return
+    if (choiceKey === 'queue') {
+      registerGeneratedScript(interaction, true)
+      return
+    }
+    if (choiceKey === 'save') {
+      registerGeneratedScript(interaction, false)
+      return
+    }
+    if (choiceKey === 'regenerate') {
+      resolveRunInteraction(interaction, '重新填写需求')
+      const form = showGenerateScriptForm({
+        default_category: interaction.scriptCategory,
+        script_description: interaction.requestDescription || ''
+      })
+      pendingGenerateScript.value = true
+      pendingInputRequest.value = form
+      waitingForChoice.value = true
+      isTyping.value = false
+      updateRun({}, { status: 'waiting' })
+      return
+    }
+    if (choiceKey === 'discard') {
+      resolveRunInteraction(interaction, '放弃并继续扫描')
+      pendingGenerateScript.value = false
+      waitingForChoice.value = false
+      showToast('已放弃该脚本，继续原扫描队列', 'info')
+      continueAfterGeneratedScript()
+    }
+  }
+
   const handleStop = () => {
     if (scriptLoopActive.value) scriptLoopActive.value = false
+    scriptLoopResumeState.value = null
     scanActive.value = false
     isTyping.value = false
     isThinking.value = false
@@ -1340,6 +1565,11 @@ export function useAgentChat() {
       return
     }
 
+    if (block.actionSource === 'generated_script_preview') {
+      handleGeneratedScriptAction(block, choiceKey)
+      return
+    }
+
     resolveRunInteraction(block, choiceLabel)
     isTyping.value = true
     updateRun({}, { status: 'running' })
@@ -1347,6 +1577,20 @@ export function useAgentChat() {
     if (block.actionSource === 'scan_confirm') {
       if (choiceKey === 'cancel') handleScanCancel(block)
       else handleScanConfirm(block, choiceKey)
+      return
+    }
+
+    // Script generation is intentionally local so it remains available even
+    // when the scanning WebSocket is unavailable.
+    if (block.actionSource === 'script_confirm' && choiceKey === 'generate_script') {
+      pendingGenerateScript.value = true
+      waitingForChoice.value = true
+      const generateBlock = showGenerateScriptForm({
+        default_category: block.default_category || 'info_collection'
+      })
+      pendingInputRequest.value = generateBlock
+      isTyping.value = false
+      updateRun({}, { status: 'waiting' })
       return
     }
 
@@ -1375,8 +1619,15 @@ export function useAgentChat() {
         if (choiceKey === 'execute') {
           const script = scriptQueue.value[currentScriptIndex.value]
           script.status = 'running'
+          scanStatus.value = 'scanning'
+          scanActive.value = true
+          scanProgress.value.activeTool = script.tool_name
           isTyping.value = true
-          upsertRunStep({ tool: script.tool_name, target: script.target }, {
+          upsertRunStep({
+            tool: script.tool_name,
+            target: script.target,
+            step_id: `script:${currentScriptIndex.value}:${script.tool_name}`
+          }, {
             title: script.tool_name,
             status: 'running',
             message: `正在执行脚本：${script.tool_name}`
@@ -1403,10 +1654,8 @@ export function useAgentChat() {
           waitingForChoice.value = false
           updateRun({}, { status: 'running' })
         } else if (choiceKey === 'generate_script') {
-          pendingGenerateScript.value = true
-          // 表单由后端返回的 script_generate_request 创建，避免重复收集描述。
-          waitingForChoice.value = false
-          updateRun({}, { status: 'running' })
+          // This path is handled before the WebSocket availability check.
+          return
         }
         break
     }
@@ -1446,19 +1695,33 @@ export function useAgentChat() {
         })
         return
       } else if (block.context === 'generate_script') {
-        pendingGenerateScript.value = false
-        waitingForChoice.value = false
         const description = fields.find(f => f.field === 'script_description')?.value || ''
         const toolCategory = fields.find(f => f.field === 'tool_category')?.value || ''
-        isTyping.value = true
-        isThinking.value = true
-        currentThinking.value = 'AI 正在生成扫描脚本，请稍候…'
-        addInfoBlock('AI 正在生成扫描脚本…')
-        ws.send('script_description', {
-          description: description,
-          tool_category: toolCategory,
-          interaction_id: block.interactionId
+
+        pendingGenerateScript.value = false
+        waitingForChoice.value = false
+        const generated = generateLocalScript({
+          placement: 'console',
+          description,
+          category: toolCategory || 'info_collection'
         })
+        scriptGenerationProgress.value = {
+          stage: 'completed',
+          progress: 100,
+          message: '脚本已在本地生成'
+        }
+        isTyping.value = false
+        isThinking.value = false
+        currentThinking.value = ''
+        const target = scriptQueue.value[currentScriptIndex.value]?.target || globalState.currentTarget || ''
+        const preview = showGeneratedScriptPreview({
+          generated,
+          requestDescription: description,
+          target
+        })
+        pendingInputRequest.value = preview
+        waitingForChoice.value = true
+        showToast('脚本已在本地生成，请审阅后选择下一步', 'success')
         return
       }
 
@@ -1593,7 +1856,13 @@ export function useAgentChat() {
 
       case 'interaction_required': {
         isTyping.value = false
-        const interactionId = data.payload?.interaction_id || data.interaction_id
+        // A workflow can legitimately return to the same next_task after a
+        // custom script runs.  The interaction ID identifies the actual
+        // decision event, while next_task is only display data.  Reusing the
+        // task name as the step ID would overwrite the earlier card and make
+        // the new decision appear above the uploaded/generated script.
+        const interactionId = data.payload?.interaction_id || data.interaction_id ||
+          `interaction-required:${data.payload?.sequence ?? Date.now()}`
         const pausePending = scanPause.status === 'pausing' || scanPause.status === 'paused'
         waitingForChoice.value = !pausePending
         closeStaleInteractions(data.payload || {}, interactionId)
@@ -1615,7 +1884,7 @@ export function useAgentChat() {
           type: 'actions',
           actionSource: 'interaction_required',
           interactionId,
-          stepId: `decision:${data.payload?.next_task || interactionId}`,
+          stepId: `decision:${interactionId}`,
           stepTitle: data.payload?.next_task ? `下一步：${data.payload.next_task}` : '等待用户操作',
           title: '需要进一步指令',
           description: `目标: ${data.payload.target} | 规划节点: ${data.payload.next_task}`,
@@ -1690,6 +1959,7 @@ export function useAgentChat() {
         })
         break
 
+      case 'workflow_completed':
       case 'scan_completed':
         if (!acceptRunEvent(data.payload || {})) break
         resetScanPause()
@@ -1800,12 +2070,12 @@ export function useAgentChat() {
           rawResult: data.payload?.raw_result || {},
           completedAt: data.payload?.timestamp || new Date().toISOString()
         })
-        if (scriptLoopActive.value && currentScriptIndex.value < scriptQueue.value.length) {
-          const script = scriptQueue.value[currentScriptIndex.value]
-          script.status = 'completed'
-          currentScriptIndex.value++
-          setTimeout(() => triggerScriptConfirm(), 800)
-        }
+        settleQueuedScript(data.payload?.tool, {
+          status: 'completed',
+          message,
+          analysis: data.payload?.tool_category === 'info_collection' ? '' : analysis,
+          rawResult: data.payload?.raw_result || {}
+        })
         break
 
       case 'task_analysis_updated':
@@ -1949,11 +2219,43 @@ export function useAgentChat() {
         break
 
       case 'tool_execution_started':
-        addInfoBlock(`工具执行开始: ${data.payload?.tool_name || '-'}`)
+        {
+          const toolName = data.payload?.tool_name || ''
+          const script = scriptQueue.value[currentScriptIndex.value]
+          if (scriptLoopActive.value && script?.tool_name === toolName) {
+            scanStatus.value = 'scanning'
+            scanActive.value = true
+            scanProgress.value.activeTool = toolName
+            isTyping.value = true
+            upsertRunStep({
+              tool: toolName,
+              target: script.target,
+              step_id: `script:${currentScriptIndex.value}:${toolName}`
+            }, {
+              title: toolName,
+              status: 'running',
+              message: `正在执行脚本：${toolName}`,
+              startedAt: data.payload?.timestamp || new Date().toISOString()
+            })
+          }
+          addInfoBlock(`工具执行开始: ${toolName || '-'}`)
+        }
         break
 
       case 'tool_execution_completed':
-        addInfoBlock(`工具执行完成: ${data.payload?.tool_name || '-'}`)
+        {
+          const payload = data.payload || {}
+          const toolName = payload.tool_name || ''
+          const resultSummary = payload.result_summary || '脚本执行完成'
+          const settled = settleQueuedScript(toolName, {
+            status: 'completed',
+            message: resultSummary,
+            rawResult: payload.result || {}
+          })
+          isTyping.value = false
+          addInfoBlock(`工具执行完成: ${toolName || '-'}`)
+          if (settled) updateRun({}, { status: 'running' })
+        }
         break
 
       case 'direct_tool_started':
@@ -2150,7 +2452,14 @@ export function useAgentChat() {
         })
         if (pendingUploadScript.value) {
           const target = scriptQueue.value[currentScriptIndex.value]?.target || ''
-          scriptQueue.value.splice(currentScriptIndex.value + 1, 0, { tool_name: regToolName, status: 'pending', target })
+          if (scriptLoopActive.value && currentScriptIndex.value < scriptQueue.value.length) {
+            // Keep the originally pending tool in the queue after the custom
+            // script instead of treating it as already handled.
+            scriptQueue.value.splice(currentScriptIndex.value, 0, { tool_name: regToolName, status: 'pending', target })
+            scanProgress.value.total = (scanProgress.value.total || 0) + 1
+            setTimeout(() => triggerScriptConfirm(), 500)
+          }
+          pendingUploadScript.value = false
           addInfoBlock(`新脚本 "${regToolName}" 已加入执行队列`)
         }
         break
@@ -2234,11 +2543,13 @@ export function useAgentChat() {
         currentThinking.value = ''
         if (pendingGenerateScript.value && !isGeneratedPreview) {
           const target = scriptQueue.value[currentScriptIndex.value]?.target || ''
-          scriptQueue.value.splice(currentScriptIndex.value + 1, 0, { tool_name: genToolName, status: 'pending', target })
-          addInfoBlock(`新脚本 "${genToolName}" 已加入执行队列，继续循环`)
+          if (scriptLoopActive.value && currentScriptIndex.value < scriptQueue.value.length) {
+            scriptQueue.value.splice(currentScriptIndex.value, 0, { tool_name: genToolName, status: 'pending', target })
+            scanProgress.value.total = (scanProgress.value.total || 0) + 1
+            addInfoBlock(`新脚本 "${genToolName}" 已加入执行队列，继续循环`)
+            setTimeout(() => triggerScriptConfirm(), 500)
+          }
           pendingGenerateScript.value = false
-          currentScriptIndex.value++
-          setTimeout(() => triggerScriptConfirm(), 500)
         }
         break
 
@@ -2386,6 +2697,22 @@ export function useAgentChat() {
         isTyping.value = false
         isThinking.value = false
         const errorPayload = data.payload || {}
+        const failedToolName = errorPayload.tool_name || errorPayload.details?.tool_name || ''
+        const errorMessage = errorPayload.message || errorPayload.error || '脚本执行失败'
+        if (failedToolName && settleQueuedScript(failedToolName, {
+          status: 'failed',
+          message: errorMessage,
+          analysis: errorPayload.suggestion || ''
+        })) {
+          addErrorBlock(errorMessage, {
+            code: errorPayload.code,
+            source: errorPayload.source || 'backend',
+            category: errorPayload.category || 'execution',
+            suggestion: errorPayload.suggestion,
+            details: errorPayload.details
+          })
+          break
+        }
         const errorCode = String(errorPayload.code || '').toUpperCase()
         const isPauseProtocolError = /^(PAUSE|RESUME|STALE_INTERACTION|STALE_PAUSE)/.test(errorCode)
         if (isPauseProtocolError) {

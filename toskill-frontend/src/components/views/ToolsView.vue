@@ -159,13 +159,14 @@
 
     <!-- 新建自定义工具弹窗 -->
     <Transition name="panel-slide">
-      <div v-if="newToolModal.show" class="tool-execution new-tool-modal">
-        <div class="execution-header">
+      <div v-if="newToolModal.show" class="tool-execution new-tool-modal"
+        :class="{ 'generated-preview-modal': isGeneratedPreview }">
+        <div v-if="!isGeneratedPreview" class="execution-header">
           <h3>新建自定义工具</h3>
           <button class="close-btn" @click="closeNewToolModal">×</button>
         </div>
 
-        <div class="tool-type-picker" role="group" aria-label="工具类型">
+        <div v-if="!isGeneratedPreview" class="tool-type-picker" role="group" aria-label="工具类型">
           <button v-for="option in toolTypeOptions" :key="option.value"
             type="button"
             :class="{ active: newToolModal.category === option.value }"
@@ -211,7 +212,7 @@
         </div>
 
         <!-- 步骤 2b：生成脚本表单 -->
-        <div v-if="newToolModal.step === 'generate'" class="new-tool-form">
+        <div v-if="newToolModal.step === 'generate' && !isGeneratedPreview" class="new-tool-form">
           <div class="form-group">
             <label>功能描述 <span class="required">*</span></label>
             <textarea v-model="generateForm.description" class="desc-input"
@@ -229,36 +230,57 @@
           </div>
           <div v-if="generateForm.statusMsg" class="form-status"
             :class="generateForm.statusType">{{ generateForm.statusMsg }}</div>
-
-          <!-- 生成预览 -->
-          <div v-if="generateForm.generatedCode" class="generated-preview">
-            <div class="preview-header">
-              <h4>生成结果预览：{{ generateForm.generatedToolName }}</h4>
-              <p class="preview-desc">{{ generateForm.generatedDesc }}</p>
-            </div>
-            <textarea v-model="generateForm.generatedCode" class="script-editor"
-              rows="12" spellcheck="false"></textarea>
-            <div class="form-actions">
-              <button class="secondary-btn" @click="resetGenerateForm">重新生成</button>
-              <button class="primary-btn" @click="confirmGeneratedScript"
-                :disabled="generateForm.confirming">
-                {{ generateForm.confirming ? '确认中...' : '确认并注册' }}
-              </button>
-            </div>
-          </div>
         </div>
+
+        <section v-else-if="isGeneratedPreview" class="generated-script-preview">
+          <header class="generated-preview-header">
+            <div>
+              <h3>AI 生成脚本</h3>
+              <p class="generated-preview-state">
+                <span class="generated-type-badge">{{ generatedToolCategoryLabel }}</span>
+                <span>已生成，等待确认注册</span>
+              </p>
+            </div>
+            <button class="close-btn" aria-label="关闭脚本预览" @click="closeNewToolModal">×</button>
+          </header>
+
+          <div class="generated-script-summary">
+            <h4>{{ generateForm.generatedToolName }}</h4>
+            <p v-if="generateForm.generatedDesc">{{ generateForm.generatedDesc }}</p>
+          </div>
+
+          <p v-if="generateForm.statusType === 'error'" class="generated-preview-error">
+            {{ generateForm.statusMsg }}
+          </p>
+
+          <div class="generated-code-panel">
+            <div class="generated-code-panel-header">
+              <span>脚本代码</span>
+              <span>可编辑</span>
+            </div>
+            <textarea v-model="generateForm.generatedCode" class="script-editor generated-code-editor"
+              spellcheck="false" aria-label="生成的脚本代码"></textarea>
+          </div>
+
+          <footer class="generated-preview-actions">
+            <button class="secondary-btn" @click="returnToGenerateForm" :disabled="generateForm.confirming">重新生成</button>
+            <button class="primary-btn" @click="confirmGeneratedScript" :disabled="generateForm.confirming">
+              {{ generateForm.confirming ? '确认中...' : '确认并注册' }}
+            </button>
+          </footer>
+        </section>
       </div>
     </Transition>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { API } from '../../services/api.js'
 import { showToast } from '../../store.js'
 import { marked } from 'marked'
-import { ws } from '../../services/websocket.js'
 import { formatInformationResult } from '../../utils/informationResultFormatter.js'
+import { generateLocalScript } from '../../utils/localScriptGenerator.js'
 
 marked.setOptions({ breaks: true, gfm: true })
 
@@ -315,70 +337,13 @@ const generateForm = reactive({
   generatedDesc: ''
 })
 
-// === WebSocket 连接管理 ===
-const ensureWsConnected = async () => {
-  if (ws.isConnected()) return true
-  try {
-    await ws.connect()
-    return true
-  } catch (e) {
-    showToast('WebSocket 连接失败，请检查后端服务', 'error')
-    return false
-  }
-}
+const isGeneratedPreview = computed(() =>
+  newToolModal.step === 'generate' && Boolean(generateForm.generatedCode)
+)
 
-// AI 生成仍通过 WebSocket 获取实时进度与预览；正式注册统一走 REST。
-const wsHandlers = {
-  scriptGenerated: null,
-  scriptError: null
-}
-
-const setupWsHandlers = () => {
-  wsHandlers.scriptGenerated = (payload) => {
-    if (!generateForm.submitting) return
-    generateForm.submitting = false
-    generateForm.generatedToolName = payload.tool_name || ''
-    generateForm.generatedCode = payload.script_code || ''
-    generateForm.generatedDesc = payload.description || ''
-    generateForm.statusMsg = ''
-    showToast('脚本生成成功，请预览确认', 'success')
-  }
-  ws.on('script_generated', wsHandlers.scriptGenerated)
-
-  wsHandlers.scriptError = (payload) => {
-    const errMsg = payload?.error || payload?.message || '未知错误'
-    if (uploadForm.submitting) {
-      uploadForm.submitting = false
-      uploadForm.statusMsg = `上传失败: ${errMsg}`
-      uploadForm.statusType = 'error'
-      showToast('脚本上传失败', 'error')
-    }
-    if (generateForm.submitting) {
-      generateForm.submitting = false
-      generateForm.statusMsg = `生成失败: ${errMsg}`
-      generateForm.statusType = 'error'
-      showToast('脚本生成失败', 'error')
-    }
-    if (generateForm.confirming) {
-      generateForm.confirming = false
-      generateForm.statusMsg = `注册失败: ${errMsg}`
-      generateForm.statusType = 'error'
-      showToast('脚本注册失败', 'error')
-    }
-  }
-  ws.on('script_error', wsHandlers.scriptError)
-}
-
-const teardownWsHandlers = () => {
-  if (wsHandlers.scriptGenerated) {
-    ws.off('script_generated', wsHandlers.scriptGenerated)
-    wsHandlers.scriptGenerated = null
-  }
-  if (wsHandlers.scriptError) {
-    ws.off('script_error', wsHandlers.scriptError)
-    wsHandlers.scriptError = null
-  }
-}
+const generatedToolCategoryLabel = computed(() =>
+  toolTypeOptions.find(option => option.value === newToolModal.category)?.label || '自定义脚本'
+)
 
 // === 弹窗控制 ===
 const openNewToolModal = () => {
@@ -479,27 +444,27 @@ const validateGenerateForm = () => {
   return valid
 }
 
-const submitGenerateScript = async () => {
+const submitGenerateScript = () => {
   if (!validateGenerateForm()) return
-  if (!await ensureWsConnected()) return
 
   generateForm.submitting = true
-  generateForm.statusMsg = 'AI 正在生成脚本...'
+  generateForm.statusMsg = '正在本地生成脚本...'
   generateForm.statusType = 'info'
   generateForm.generatedCode = ''
   generateForm.generatedToolName = ''
 
-  const sent = ws.send('script_description', {
-    description: generateForm.description.trim(),
-    tool_category: newToolModal.category,
-    preview_only: true
+  const generated = generateLocalScript({
+    placement: 'tools',
+    description: generateForm.description,
+    category: newToolModal.category
   })
-
-  if (!sent) {
-    generateForm.submitting = false
-    generateForm.statusMsg = '发送失败，WebSocket 未连接'
-    generateForm.statusType = 'error'
-  }
+  generateForm.submitting = false
+  generateForm.generatedToolName = generated.toolName
+  generateForm.generatedCode = generated.scriptCode
+  generateForm.generatedDesc = generated.description
+  generateForm.statusMsg = '脚本已在本地生成，请预览后确认注册'
+  generateForm.statusType = 'success'
+  showToast('脚本已在本地生成，请预览确认', 'success')
 }
 
 const confirmGeneratedScript = async () => {
@@ -552,6 +517,16 @@ const resetGenerateForm = () => {
   generateForm.generatedDesc = ''
 }
 
+const returnToGenerateForm = () => {
+  generateForm.errors = { description: '' }
+  generateForm.confirming = false
+  generateForm.statusMsg = ''
+  generateForm.statusType = ''
+  generateForm.generatedCode = ''
+  generateForm.generatedToolName = ''
+  generateForm.generatedDesc = ''
+}
+
 // === 核心数据加载 ===
 const loadTools = async () => {
   isLoading.value = true
@@ -568,15 +543,9 @@ const loadTools = async () => {
   }
 }
 
-// 页面挂载时拉取数据并初始化 WebSocket
+// 页面挂载时拉取工具数据
 onMounted(() => {
   loadTools()
-  setupWsHandlers()
-})
-
-// 页面销毁时清理 WebSocket 监听器
-onBeforeUnmount(() => {
-  teardownWsHandlers()
 })
 
 // === 计算属性：动态过滤工具列表 ===
@@ -1521,6 +1490,17 @@ const runTool = async () => {
   flex: 1;
 }
 
+.new-tool-modal.generated-preview-modal {
+  width: min(1180px, 94vw) !important;
+  max-width: 94vw !important;
+  height: min(780px, 90vh);
+  max-height: 90vh;
+  padding: 0 !important;
+  overflow: hidden !important;
+  display: flex;
+  flex-direction: column;
+}
+
 /* 新建工具表单 */
 .new-tool-form {
   display: flex;
@@ -1627,25 +1607,140 @@ const runTool = async () => {
   border: 1px solid #ffccc7;
 }
 
-/* 生成预览 */
-.generated-preview {
-  margin-top: 16px;
-  padding: 16px;
-  background: #fafbfc;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+/* AI 脚本预览 */
+.generated-script-preview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: 26px 30px 22px;
 }
 
-.preview-header h4 {
-  font-size: 15px;
-  color: var(--text-primary);
-  margin-bottom: 4px;
+.generated-preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #E5E7EB;
 }
 
-.preview-desc {
+.generated-preview-header h3 {
+  margin: 0;
+  color: #111827;
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+.generated-preview-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 0;
+  color: #6B7280;
   font-size: 13px;
-  color: var(--text-secondary);
-  margin-bottom: 12px;
+}
+
+.generated-type-badge {
+  padding: 3px 8px;
+  border: 1px solid #047857;
+  border-radius: 999px;
+  color: #047857;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.generated-script-summary {
+  padding: 18px 0 14px;
+}
+
+.generated-script-summary h4 {
+  margin: 0;
+  color: #111827;
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+.generated-script-summary p {
+  margin: 5px 0 0;
+  color: #6B7280;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.generated-preview-error {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid #FECACA;
+  border-radius: 8px;
+  color: #B91C1C;
+  background: #FEF2F2;
+  font-size: 13px;
+}
+
+.generated-code-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #D1D5DB;
+  border-radius: 10px;
+  background: #F9FAFB;
+}
+
+.generated-code-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid #E5E7EB;
+  color: #374151;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.generated-code-panel-header span:last-child {
+  color: #047857;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.generated-code-editor {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: #F9FAFB;
+  resize: none;
+  overflow: auto;
+}
+
+.generated-code-editor:focus {
+  box-shadow: inset 0 0 0 2px #047857;
+}
+
+.generated-preview-actions {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 18px;
+}
+
+.generated-preview-actions .secondary-btn {
+  margin-left: 0;
+  background: #FFFFFF;
+  border: 1px solid #047857;
+  color: #047857;
+}
+
+.generated-preview-actions .secondary-btn:hover:not(:disabled) {
+  background: #FFFFFF;
+  color: #065F46;
+  border-color: #065F46;
 }
 
 /* 响应式 */
@@ -1674,6 +1769,16 @@ const runTool = async () => {
   }
 
   .tool-type-picker button { flex-basis: auto; }
+
+  .new-tool-modal.generated-preview-modal {
+    width: 95vw !important;
+    max-width: 95vw !important;
+    height: 92vh;
+    max-height: 92vh;
+  }
+
+  .generated-script-preview { padding: 20px 18px 16px; }
+  .generated-preview-state { align-items: flex-start; flex-direction: column; gap: 6px; }
 
   .new-tool-options {
     flex-direction: column;

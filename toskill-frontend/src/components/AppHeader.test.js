@@ -3,11 +3,11 @@ import { mount } from '@vue/test-utils'
 
 import AppHeader from './AppHeader.vue'
 
-const mountHeader = (scanStatus, total = 15) => mount(AppHeader, {
+const mountHeader = (scanStatus, total = 15, activeTool = '') => mount(AppHeader, {
   props: {
     showScanProgress: true,
     scanStatus,
-    scanProgress: { current: 0, total, activeTool: '' }
+    scanProgress: { current: 0, total, activeTool }
   }
 })
 
@@ -25,4 +25,11 @@ describe('AppHeader scan progress', () => {
     expect(wrapper.find('.header-scan-progress').exists()).toBe(true)
     expect(wrapper.text()).toContain('0 / 15')
   })
+})
+
+it('shows the active queued script while it is executing', () => {
+  const wrapper = mountHeader('scanning', 16, 'console_http_headers_demo')
+
+  expect(wrapper.text()).toContain('正在执行：console_http_headers_demo')
+  expect(wrapper.text()).toContain('0 / 16')
 })

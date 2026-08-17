@@ -96,6 +96,48 @@ const viewer = reactive({
   isFullscreen: false
 })
 
+const FRAME_SCROLL_STYLE_ID = 'toskill-report-scrollbar-style'
+const FRAME_SCROLL_ACTIVE_DURATION = 650
+let detachFrameScrollHandler = null
+
+const frameScrollbarStyles = `
+  html, body {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(39, 48, 61, 0.06) transparent;
+    scrollbar-gutter: stable;
+  }
+
+  html::-webkit-scrollbar, body::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  html::-webkit-scrollbar-track, body::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
+    min-height: 28px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: rgba(39, 48, 61, 0.07);
+    background-clip: content-box;
+    transition: background-color 180ms ease;
+  }
+
+  html:hover::-webkit-scrollbar-thumb, body:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(39, 48, 61, 0.14);
+  }
+
+  html.is-scrolling::-webkit-scrollbar-thumb, body.is-scrolling::-webkit-scrollbar-thumb {
+    background-color: rgba(39, 48, 61, 0.36);
+  }
+
+  html::-webkit-scrollbar-thumb:active, body::-webkit-scrollbar-thumb:active {
+    background-color: rgba(39, 48, 61, 0.48);
+  }
+`
+
 const renderedContent = computed(() => {
   if (!viewer.content) return ''
   if (viewer.filename && viewer.filename.endsWith('.html')) {
@@ -181,11 +223,43 @@ const handleKeydown = (event) => {
 
 const detachFrameKeyboardHandler = () => {
   reportFrame.value?.contentWindow?.removeEventListener('keydown', handleKeydown)
+  detachFrameScrollHandler?.()
+  detachFrameScrollHandler = null
 }
 
 const attachFrameKeyboardHandler = () => {
   detachFrameKeyboardHandler()
-  reportFrame.value?.contentWindow?.addEventListener('keydown', handleKeydown)
+  const frameWindow = reportFrame.value?.contentWindow
+  const frameDocument = reportFrame.value?.contentDocument
+  if (!frameWindow || !frameDocument) return
+
+  frameWindow.addEventListener('keydown', handleKeydown)
+
+  let style = frameDocument.getElementById(FRAME_SCROLL_STYLE_ID)
+  if (!style) {
+    style = frameDocument.createElement('style')
+    style.id = FRAME_SCROLL_STYLE_ID
+    style.textContent = frameScrollbarStyles
+    ;(frameDocument.head || frameDocument.documentElement).appendChild(style)
+  }
+
+  let scrollTimer = null
+  const markScrolling = () => {
+    frameDocument.documentElement.classList.add('is-scrolling')
+    window.clearTimeout(scrollTimer)
+    scrollTimer = window.setTimeout(() => {
+      frameDocument.documentElement.classList.remove('is-scrolling')
+    }, FRAME_SCROLL_ACTIVE_DURATION)
+  }
+
+  frameWindow.addEventListener('scroll', markScrolling, { passive: true })
+  frameDocument.addEventListener('scroll', markScrolling, { passive: true, capture: true })
+  detachFrameScrollHandler = () => {
+    window.clearTimeout(scrollTimer)
+    frameDocument.documentElement.classList.remove('is-scrolling')
+    frameWindow.removeEventListener('scroll', markScrolling)
+    frameDocument.removeEventListener('scroll', markScrolling, true)
+  }
 }
 
 const download = (filename) => {

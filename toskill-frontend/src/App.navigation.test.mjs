@@ -5,6 +5,7 @@ import test from 'node:test'
 const appSource = await readFile(new URL('./App.vue', import.meta.url), 'utf8')
 const agentChatSource = await readFile(new URL('./composables/useAgentChat.js', import.meta.url), 'utf8')
 const timelineSource = await readFile(new URL('./components/AgentWorkspace/AgentRunTimeline.vue', import.meta.url), 'utf8')
+const reportsViewSource = await readFile(new URL('./components/views/ReportsView.vue', import.meta.url), 'utf8')
 
 test('sidebar navigation keeps ConsoleView mounted', () => {
   assert.match(appSource, /<ConsoleView[\s\S]*?v-show="currentPage === 'console'"[\s\S]*?\/>/)
@@ -26,4 +27,10 @@ test('console report completion exposes both saved report formats', () => {
 test('console scan summary is rendered as Markdown', () => {
   assert.match(timelineSource, /v-html="renderMarkdown\(run\.summary\)"/)
   assert.match(timelineSource, /marked\.parse\(text \|\| '', \{ breaks: true, gfm: true \}\)/)
+})
+
+test('HTML report iframe uses an unobtrusive scrolling state', () => {
+  assert.match(reportsViewSource, /FRAME_SCROLL_ACTIVE_DURATION = 650/)
+  assert.match(reportsViewSource, /html\.is-scrolling::\-webkit-scrollbar-thumb/)
+  assert.match(reportsViewSource, /frameDocument\.addEventListener\('scroll', markScrolling/)
 })

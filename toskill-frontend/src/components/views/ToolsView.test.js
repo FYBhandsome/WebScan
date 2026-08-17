@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { generateLocalScript } from '../../utils/localScriptGenerator.js'
 
 const tools = [
   { name: 'port_scan', description: '端口扫描', category: 'info_collection', source: 'system', creation_method: 'builtin' },
@@ -85,7 +86,7 @@ describe('ToolsView', () => {
     wrapper.unmount()
   })
 
-  it('keeps generated code as preview until explicit confirmation', async () => {
+  it('generates a local preview without using WebSocket until explicit confirmation', async () => {
     apiMock.registerCustomTool.mockResolvedValue({
       data: { tool: { name: 'ai_probe', category: 'info_collection', source: 'custom' } }
     })
@@ -95,25 +96,38 @@ describe('ToolsView', () => {
     await wrapper.get('.desc-input').setValue('收集页面标题')
     await wrapper.get('.new-tool-form > .form-actions .primary-btn').trigger('click')
 
-    expect(wsMock.send).toHaveBeenCalledWith('script_description', expect.objectContaining({
-      preview_only: true,
-      tool_category: 'info_collection',
-    }))
+    expect(wrapper.get('.generated-script-preview').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('功能描述')
+    expect(wrapper.get('.generated-code-editor').element.value).toContain('def run(target: str)')
+    expect(wsMock.send).not.toHaveBeenCalled()
     expect(apiMock.registerCustomTool).not.toHaveBeenCalled()
 
-    wsMock.handlers.get('script_generated')({
-      tool_name: 'ai_probe',
-      script_code: "def run(target):\n    return {'success': True, 'data': {}}",
-      description: '收集页面标题',
-    })
-    await wrapper.vm.$nextTick()
-    await wrapper.get('.generated-preview .primary-btn').trigger('click')
+    await wrapper.get('.generated-preview-actions .primary-btn').trigger('click')
     await flushPromises()
     expect(apiMock.registerCustomTool).toHaveBeenCalledTimes(1)
     expect(apiMock.registerCustomTool).toHaveBeenCalledWith(expect.objectContaining({
       creation_method: 'ai_generate',
     }))
     wrapper.unmount()
+  })
+
+  it('uses distinct safe templates for console and tools generation', () => {
+    const consoleScript = generateLocalScript({ placement: 'console', description: '收集响应头' })
+    const toolsScript = generateLocalScript({ placement: 'tools', description: '收集页面标题' })
+
+    expect(consoleScript.scriptCode).not.toBe(toolsScript.scriptCode)
+    expect(consoleScript.toolName).toBe('technology_fingerprint')
+    expect(toolsScript.toolName).toBe('page_metadata_summary')
+    expect(consoleScript.description).toBe('识别目标页面暴露的服务端与前端技术特征。')
+    expect(toolsScript.description).toBe('快速采集页面标题、描述、链接数量和表单数量。')
+    for (const script of [consoleScript.scriptCode, toolsScript.scriptCode]) {
+      expect(script).toContain('def run(target: str)')
+      expect(script).toContain('return {')
+      expect(script).not.toContain('import os')
+      expect(script).not.toContain('import subprocess')
+      expect(script).not.toContain('eval(')
+      expect(script).not.toContain('exec(')
+    }
   })
 
   it('shows collected fields instead of vulnerability analysis for information tools', async () => {
