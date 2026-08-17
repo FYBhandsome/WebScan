@@ -174,7 +174,9 @@ class ConfidenceAssessor:
         return f"""你是等保2.0{self.mlps_level}评估专家和资深渗透测试工程师。
 
 ## 评估任务
-基于以下扫描结果，参照等保2.0（GB/T 22239-2019）{self.mlps_level}标准，评估本次安全评估的置信度。
+基于以下扫描结果，参照等保2.0（GB/T 22239-2019）{self.mlps_level}技术要求主题，评估本次自动化扫描技术证据的置信度。
+
+该置信度只描述证据是否完整、可复核及适用于已测试范围，不是目标安全分、等保符合度或正式测评结论。
 
 ## 扫描信息
 - 目标: {target}
@@ -196,17 +198,18 @@ class ConfidenceAssessor:
 {confidence_rules or '（规则检索无结果，请参照以下标准）'}
 
 ## 评估维度（每项0-100分）
-1. 漏洞检测准确性（权重30%）：工具覆盖度、交叉验证、证据充分性
-2. 等保控制项映射准确度（权重25%）：漏洞→等保条款语义匹配度、RAG检索相似度
-3. 风险等级判定一致性（权重25%）：与标准等级偏差、CVSS一致性
-4. 整改方案合规性（权重20%）：修复建议对等保条款针对性、可操作性
+1. 证据完整性（权重35%）：目标、入口、请求条件、响应或配置值、时间和工具状态是否齐全
+2. 可重复性（权重25%）：是否稳定复现并排除超时、随机响应、WAF拦截和外部数据源异常
+3. 工具适用性与范围覆盖（权重25%）：按应测入口和检测项评价，不得按工具数量直接给分
+4. 映射可追溯性（权重15%）：映射理由、适用条件、知识来源和未评估项是否明确；RAG相似度不得直接换算为分数
 
 ## 等级标准
 - >=80 高置信度(high) | 60-79 中置信度(mid) | <60 低置信度(low)
 
 ## 输出要求
+禁止输出等保符合度百分比；必须列出已评估范围、未评估范围和人工复核要求。
 严格输出以下JSON格式，不要包含markdown代码块或其他文字：
-{{"overall_score": 87, "level": "high", "standard_text": "基于等保2.0三级标准", "dimensions": [{{"label": "漏洞检测准确性", "value": 92}}, {{"label": "等保控制项映射准确度", "value": 88}}, {{"label": "风险等级判定一致性", "value": 85}}, {{"label": "整改方案合规性", "value": 82}}], "compliance_estimate": 72, "compliance_margin": "±5%", "kb_refs": "15_mlps_standard,16_mlps_vuln_mapping", "note": "评估说明文字"}}"""
+{{"overall_score": 78, "level": "mid", "standard_text": "参照等保2.0三级技术要求的证据辅助分析，非测评结论", "assessment_scope": "授权Web入口的自动化技术检测证据", "dimensions": [{{"label": "证据完整性", "value": 82}}, {{"label": "可重复性", "value": 75}}, {{"label": "工具适用性与范围覆盖", "value": 70}}, {{"label": "映射可追溯性", "value": 88}}], "evidence_coverage": "partial", "assessed_scope": ["已执行工具的直接检测项"], "unassessed_scope": ["业务逻辑", "内部配置", "管理控制"], "failed_or_blocked_tools": [], "review_required": true, "kb_refs": "15_mlps_standard,16_mlps_vuln_mapping", "note": "该分值仅描述技术证据可信程度，不构成等保测评结论。"}}"""
 
     # ==================== 数据摘要辅助 ====================
 
@@ -284,12 +287,15 @@ class ConfidenceAssessor:
         return {
             "overall_score": 0,
             "level": "info",
-            "standard_text": "基于等保2.0（GB/T 22239-2019）三级标准",
+            "standard_text": "参照等保2.0三级技术要求的证据辅助分析，非测评结论",
             "dimensions": [],
-            "compliance_estimate": 0,
-            "compliance_margin": "",
+            "evidence_coverage": "unknown",
+            "assessed_scope": [],
+            "unassessed_scope": [],
+            "failed_or_blocked_tools": [],
+            "review_required": True,
             "kb_refs": "",
-            "note": "置信度评估结果解析失败，请人工复核",
+            "note": "技术证据置信度解析失败，请人工复核；本结果不构成等保测评结论。",
         }
 
 

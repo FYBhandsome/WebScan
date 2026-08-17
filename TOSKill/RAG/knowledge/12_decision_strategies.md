@@ -15,8 +15,8 @@
 1. baseinfo_scan → 获取HTTP头、Server信息、技术栈
 2. port_scan → 发现开放端口和服务
 3. subdomain_scan → 发现子域名（如果目标是域名）
-4. dir_scan → 发现敏感目录和文件
-5. waf_detect → 检测WAF/防护设备
+4. dir_brute → 发现公开目录和文件线索
+5. waf_detect_scan → 检测WAF/防护设备
 ```
 
 **决策依据**:
@@ -31,7 +31,7 @@
 **端口驱动决策**:
 | 开放端口 | 推荐检测工具 | 原因 |
 |---------|-------------|------|
-| 80/443/8080/8443 | xss_scan, sqli_scan, dir_scan | Web服务，常见漏洞 |
+| 80/443/8080/8443 | xss_scan, sqli_scan, dir_brute | Web服务，常见漏洞 |
 | 3306/5432/27017 | weakpass_scan, sqli_scan | 数据库服务，弱口令风险 |
 | 6379 | weakpass_scan | Redis未授权访问 |
 | 21 | weakpass_scan | FTP弱口令 |
@@ -149,7 +149,7 @@ Reason: 继续扫描无意义，需要用户介入
 |---------|---------|
 | sqli_scan | xss_scan, cmdi_scan |
 | xss_scan | csrf_scan |
-| fileupload_scan | dir_scan |
+| fileupload_scan | dir_brute |
 | ssrf_scan | csrf_scan |
 
 ### 异常3: 认证失效

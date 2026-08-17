@@ -35,13 +35,6 @@
       </main>
     </div>
 
-    <footer class="app-footer">
-      <div class="target-bar">
-        <span class="target-label">当前目标:</span>
-        <span class="target-value">{{ globalState.currentTarget || '未设置' }}</span>
-      </div>
-    </footer>
-
     <!-- 全局 Modal 弹窗 -->
     <div class="modal-overlay" :class="{ show: globalState.modal.show }" @click.self="closeModal">
       <div class="modal-box">

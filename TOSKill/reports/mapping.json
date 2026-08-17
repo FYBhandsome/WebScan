@@ -32731,6 +32731,7 @@
     },
     "vulnerabilities": []
   },
+<<<<<<< HEAD
   "e93b79a2": {
     "report_id": "scan_report_e93b79a2_20260814_110510",
     "session_id": "e93b79a2",
@@ -165724,10 +165725,62 @@
     "vulnerabilities_count": 17,
     "raw_vulnerabilities_count": 164,
     "vulnerability_evidence_count": 95,
+=======
+  "64b66086": {
+    "report_id": "scan_report_64b66086_20260814_112752",
+    "session_id": "64b66086",
+    "report_file": "scan_report_64b66086_20260814_112752.html",
+    "target": "http://testasp.vulnweb.com",
+    "created_at": "2026-08-14 11:27:52",
+    "download_url": "/api/reports/download/scan_report_64b66086_20260814_112752.html",
+    "format": "html",
+    "report_type": "info_collection",
+    "vulnerabilities_count": 0,
+    "tool_results": {
+      "baseinfo_scan": {
+        "success": true,
+        "data": {
+          "code": 200,
+          "msg": "查询成功",
+          "domain": "testasp.vulnweb.com",
+          "server": "Microsoft-IIS/8.5",
+          "language": "ASP.NET",
+          "ip": [
+            "44.238.29.244 (物理地址: United States,Oregon,Portland,AS16509 Amazon.com, Inc.)  "
+          ],
+          "os": "Windows Server",
+          "register": "http://whois.chinaz.com/testasp.vulnweb.com",
+          "metadata": {
+            "tool": "baseinfo",
+            "target": "testasp.vulnweb.com",
+            "domain": "testasp.vulnweb.com",
+            "server": "Microsoft-IIS/8.5",
+            "os": "Windows Server"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-14T10:36:43.386995"
+      }
+    },
+    "vulnerabilities": []
+  },
+  "d7de6b06": {
+    "report_id": "scan_report_d7de6b06_20260814_123625",
+    "session_id": "d7de6b06",
+    "report_file": "scan_report_d7de6b06_20260814_123625.html",
+    "target": "http://testphp.vulnweb.com",
+    "created_at": "2026-08-14 12:36:25",
+    "download_url": "/api/reports/download/scan_report_d7de6b06_20260814_123625.html",
+    "format": "html",
+    "report_type": "vuln_scan",
+    "vulnerabilities_count": 0,
+>>>>>>> 51e8af5 (改了rag知识文档)
     "tool_results": {
       "sqli_scan": {
         "success": true,
         "data": {
+<<<<<<< HEAD
           "target": "http://testasp.vulnweb.com",
           "vulnerabilities": [],
           "vulnerability_count": 0,
@@ -165802,6 +165855,15 @@
               "error": null
             }
           ],
+=======
+          "target": "http://testphp.vulnweb.com",
+          "vulnerabilities": [],
+          "vulnerability_count": 0,
+          "scan_duration": 10.026692390441895,
+          "requests_made": 1,
+          "tested_endpoints": [],
+          "request_response_log": [],
+>>>>>>> 51e8af5 (改了rag知识文档)
           "detailed_evidence": {},
           "metadata": {
             "message": "未发现可测试的注入点"
@@ -165809,6 +165871,7 @@
         },
         "error": null,
         "auth_info": null,
+<<<<<<< HEAD
         "timestamp": "2026-08-14T13:06:59.894553"
       },
       "weakpass_scan": {
@@ -165818,10 +165881,22 @@
           "vulnerabilities": [],
           "vulnerability_count": 0,
           "scan_duration": 11.137254476547241,
+=======
+        "timestamp": "2026-08-14T12:33:46.979309"
+      },
+      "xss_scan": {
+        "success": true,
+        "data": {
+          "target": "http://testphp.vulnweb.com",
+          "vulnerabilities": [],
+          "vulnerability_count": 0,
+          "scan_duration": 10.014361381530762,
+>>>>>>> 51e8af5 (改了rag知识文档)
           "requests_made": 0,
           "tested_endpoints": [],
           "request_response_log": [
             {
+<<<<<<< HEAD
               "timestamp": "2026-08-14T13:07:08.570743",
               "method": "GET",
               "url": "http://testasp.vulnweb.com",
@@ -165841,10 +165916,137 @@
               "response_body": "\r\n<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\" \"http://www.w3.org/TR/html4/loose.dtd\">\r\n<html><!-- InstanceBegin template=\"/Templates/MainTemplate.dwt.asp\" codeOutsideHTMLIsLocked=\"false\" -->\r\n<head>\r\n<!-- InstanceBeginEditable name=\"doctitle\" -->\r\n<title>acuforum forums</title>\r\n<!-- InstanceEndEditable -->\r\n<meta http-equiv=\"Content-Type\" content=\"text/html; charset=iso-8859-1\">\r\n<!-- InstanceBeginEditable name=\"head\" -->\r\n<!-- InstanceEndEditable -->\r\n<link href=\"styles.css\" rel=\"stylesheet\" type=\"text/css\">\r\n</head>\r\n<body> \r\n<table width=\"100%\"  border=\"0\" cellpadding=\"10\" cellspacing=\"0\"> \r\n  <tr bgcolor=\"#008F00\"> \r\n    <td width=\"306px\"><a href=\"https://www.acunetix.com/\"><img src=\"Images/logo.gif\" width=\"306\" height=\"38\" border=\"0\" alt=\"Acunetix website security\"></a></td> \r\n    <td align=\"right\" valign=\"middle\" bgcolor=\"#008F00\" class=\"disclaimer\">TEST and Demonstration site for <a href=\"https://www.acunetix.com/vulnerability-scanner/\">Acunetix Web Vulnerability Scanner</a></td> \r\n  </tr> \r\n  <tr> \r\n    <td colspan=\"2\"><div class=\"menubar\"><a href=\"Templatize.asp?item=html/about.html\" class=\"menu\">about</a> - <a href=\"Default.asp\" class=\"menu\">forums</a> - <a href=\"Search.asp\" class=\"menu\">search</a> \r\n     - <a href=\"./Login.asp?RetURL=%2FDefault%2Easp%3F\" class=\"menu\">login</a> - <a href=\"./Register.asp?RetURL=%2FDefault%2Easp%3F\" class=\"menu\">register</a> \r\n\t- <a href=\"https://www.acunetix.com/vulnerability-scanner/sql-injection/\" class=\"menu\">SQL scanner</a> - <a href=\"https://www.acunetix.com/websitesecurity/sql-injection/\" class=\"menu\">SQL vuln help</a>\r\n    </div></td> \r\n  </tr> \r\n  <tr> \r\n    <td colspan=\"2\"><!-- InstanceBeginEditable name=\"MainContentLeft\" -->\r\n\t<table width=\"100%\" border=\"0\" cellspacing=\"0\" cellpadding=\"5\">\r\n      <tr>\r\n        <td class=\"tableheader\">Forum</td>\r\n        <td class=\"tableheader\">Threads</td>\r\n        <td class=\"tableheader\">Posts</td>\r\n        <td class=\"tableheader\">Last Post</td>\r\n      </tr>  ",
               "duration": null,
               "error": null
+=======
+              "timestamp": "2026-08-14T12:33:56.996956",
+              "method": "GET",
+              "url": "http://testphp.vulnweb.com",
+              "request_headers": null,
+              "request_body": null,
+              "response_status": null,
+              "response_headers": null,
+              "response_body": null,
+              "duration": null,
+              "error": "HTTPConnectionPool(host='testphp.vulnweb.com', port=80): Max retries exceeded with url: / (Caused by ConnectTimeoutError(<HTTPConnection(host='testphp.vulnweb.com', port=80) at 0x1a959112be0>, 'Connection to testphp.vulnweb.com timed out. (connect timeout=10)'))"
+>>>>>>> 51e8af5 (改了rag知识文档)
             }
           ],
           "detailed_evidence": {},
           "metadata": {
+<<<<<<< HEAD
+=======
+            "message": "未发现可测试的注入点"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-14T12:33:56.997693"
+      },
+      "csrf_scan": {
+        "success": true,
+        "data": {
+          "target": "http://testphp.vulnweb.com",
+          "vulnerabilities": [],
+          "vulnerability_count": 0,
+          "scan_duration": 15.010047912597656,
+          "requests_made": 0,
+          "metadata": {
+            "tool": "csrf_scan",
+            "target": "http://testphp.vulnweb.com",
+            "plugin_name": "csrf_scanner",
+            "vulnerability_count": 0
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-14T12:34:12.016822"
+      },
+      "fileupload_scan": {
+        "success": true,
+        "data": {
+          "target": "http://testphp.vulnweb.com",
+          "vulnerabilities": [],
+          "vulnerability_count": 0,
+          "scan_duration": 21.071529150009155,
+          "metadata": {
+            "upload_points_found": 0,
+            "tests_performed": 0,
+            "uploaded_files": 0,
+            "request_responses": []
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-14T12:34:33.094382"
+      },
+      "cmdi_scan": {
+        "success": true,
+        "data": {
+          "target": "http://testphp.vulnweb.com",
+          "vulnerabilities": [],
+          "vulnerability_count": 0,
+          "scan_duration": 21.034069538116455,
+          "metadata": {
+            "injection_points_found": 0,
+            "payloads_tested": 0,
+            "authenticated": false,
+            "delay_threshold": 4.5,
+            "sleep_time": 5
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-14T12:34:54.136942"
+      },
+      "ssrf_scan": {
+        "success": true,
+        "data": {
+          "target": "http://testphp.vulnweb.com",
+          "vulnerabilities": [],
+          "vulnerability_count": 0,
+          "scan_duration": 21.047301530838013,
+          "metadata": {
+            "tool": "ssrf_scan",
+            "target": "http://testphp.vulnweb.com",
+            "plugin_name": "ssrf",
+            "vulnerability_count": 0
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-14T12:35:15.192211"
+      },
+      "lfi_scan": {
+        "success": true,
+        "data": {
+          "target": "http://testphp.vulnweb.com",
+          "vulnerabilities": [],
+          "vulnerability_count": 0,
+          "scan_duration": 21.065834045410156,
+          "metadata": {
+            "injection_points_found": 0,
+            "payloads_tested": 0,
+            "tested_payloads": [],
+            "authentication_used": false,
+            "scanner_version": "2.0.0"
+          }
+        },
+        "error": null,
+        "auth_info": null,
+        "timestamp": "2026-08-14T12:35:36.265237"
+      },
+      "weakpass_scan": {
+        "success": true,
+        "data": {
+          "target": "http://testphp.vulnweb.com",
+          "vulnerabilities": [],
+          "vulnerability_count": 0,
+          "scan_duration": 21.06010389328003,
+          "requests_made": 0,
+          "tested_endpoints": [],
+          "request_response_log": [],
+          "detailed_evidence": {},
+          "metadata": {
+>>>>>>> 51e8af5 (改了rag知识文档)
             "login_points_found": 0,
             "usernames_tested": 20,
             "passwords_tested": 30,
@@ -165860,6 +166062,7 @@
         },
         "error": null,
         "auth_info": null,
+<<<<<<< HEAD
         "timestamp": "2026-08-14T13:07:18.955247"
       },
       "fileupload_scan": {
@@ -173962,5 +174165,32 @@
         ]
       }
     ]
+=======
+        "timestamp": "2026-08-14T12:35:57.342518"
+      },
+      "http_security_headers_scan": {
+        "success": false,
+        "data": {},
+        "error": "<urlopen error timed out>",
+        "auth_info": null,
+        "timestamp": "2026-08-14T12:36:05.500047"
+      },
+      "cookie_security_scan": {
+        "success": false,
+        "data": {},
+        "error": "<urlopen error timed out>",
+        "auth_info": null,
+        "timestamp": "2026-08-14T12:36:13.630417"
+      },
+      "cors_misconfiguration_scan": {
+        "success": false,
+        "data": {},
+        "error": "<urlopen error timed out>",
+        "auth_info": null,
+        "timestamp": "2026-08-14T12:36:21.771658"
+      }
+    },
+    "vulnerabilities": []
+>>>>>>> 51e8af5 (改了rag知识文档)
   }
 }

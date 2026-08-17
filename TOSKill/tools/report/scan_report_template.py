@@ -226,7 +226,7 @@ def _risk_section(vulnerabilities: List[Dict[str, Any]], ai_analysis: Optional[D
 
 def _confidence_section(confidence: Optional[Dict[str, Any]]) -> str:
     if not confidence:
-        return f'<section class="card confidence-module"><h2 class="module-title">{_icon()}AI 等保评估置信度</h2><p class="confidence-placeholder">本次未生成置信度数据。</p></section>'
+        return f'<section class="card confidence-module"><h2 class="module-title">{_icon()}AI 技术证据置信度</h2><p class="confidence-placeholder">本次未生成技术证据置信度数据。</p></section>'
     try:
         score = max(0, min(100, float(confidence.get("overall_score", 0))))
     except (TypeError, ValueError):
@@ -241,9 +241,9 @@ def _confidence_section(confidence: Optional[Dict[str, Any]]) -> str:
         except (TypeError, ValueError):
             value = 0
         items.append(f'<div class="confidence-item"><span class="item-label">{_safe(item.get("label"), "评估维度")}</span><span class="item-bar-track"><span class="item-bar-fill" style="width:{value:.1f}%"></span></span><span class="item-value">{value:.0f}%</span></div>')
-    note = _safe(confidence.get("note"), "置信度基于本次扫描的结构化结果生成，建议结合业务实际进行人工复核。")
-    return f'''<section class="card confidence-module"><h2 class="module-title">{_icon()}AI 等保评估置信度</h2>
-      <div class="confidence-layout"><div class="confidence-summary"><p class="confidence-kicker">{_safe(confidence.get("standard_text"), "基于等保 2.0 三级标准")}</p><span class="confidence-number">{score:.0f}%</span><span class="confidence-label">综合评估置信度</span><br><span class="confidence-badge">{labels.get(level, labels["info"])}</span><p class="confidence-note">{note}</p></div><div class="confidence-details">{"".join(items) or '<p class="text-tip">暂无分项置信度数据。</p>'}</div></div>
+    note = _safe(confidence.get("note"), "该分值仅描述自动化扫描技术证据的可信程度，不构成等保测评结论，必须人工复核。")
+    return f'''<section class="card confidence-module"><h2 class="module-title">{_icon()}AI 技术证据置信度</h2>
+      <div class="confidence-layout"><div class="confidence-summary"><p class="confidence-kicker">{_safe(confidence.get("standard_text"), "参照等保 2.0 三级技术要求的证据辅助分析，非测评结论")}</p><span class="confidence-number">{score:.0f}%</span><span class="confidence-label">技术证据置信度</span><br><span class="confidence-badge">{labels.get(level, labels["info"])}</span><p class="confidence-note">{note}</p></div><div class="confidence-details">{"".join(items) or '<p class="text-tip">暂无分项置信度数据。</p>'}</div></div>
     </section>'''
 
 

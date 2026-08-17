@@ -127,7 +127,9 @@ def get_confidence_rules() -> str:
     if not engine.retriever:
         return ""
     try:
-        nodes = engine.retriever.retrieve("置信度评判规则 评分标准 等级阈值 评估维度权重 误差范围")
+        nodes = engine.retriever.retrieve(
+            "技术证据置信度 证据完整性 可重复性 工具适用性 范围覆盖 映射可追溯性 人工复核"
+        )
         if not nodes:
             return ""
         parts = []

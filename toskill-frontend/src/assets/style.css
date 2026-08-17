@@ -776,31 +776,6 @@ body, #app {
     line-height: 1.8;
 }
 
-.app-footer {
-    height: 48px;
-    background: var(--card-bg);
-    border-top: 1px solid var(--border-color);
-    display: flex;
-    align-items: center;
-    padding: 0 24px;
-}
-
-.target-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-}
-
-.target-label {
-    color: var(--text-secondary);
-}
-
-.target-value {
-    color: var(--primary-color);
-    font-weight: 500;
-}
-
 .modal-overlay {
     position: fixed;
     top: 0;

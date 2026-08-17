@@ -5,21 +5,25 @@
 ### Phase 1: 信息收集（Recon）
 **目的**: 了解目标攻击面，指导后续漏洞扫描策略
 
-1. 基础信息收集（baseinfo）: HTTP头、服务器类型、SSL证书
-2. CMS/框架识别（whatcms）: 确定技术栈
-3. CDN检测（cdnexist）: 判断是否有CDN，决定是否需要绕过
-4. WAF检测（waf）: 了解防护策略，调整Payload策略
-5. 子域名扫描（subdomain）: 扩大攻击面
-6. 端口扫描（portscan）: 发现非Web服务
-7. 目录扫描（dirscan）: 发现隐藏路径、备份文件
-8. 信息泄露（infoleak）: 敏感文件泄露检测
+1. 基础信息收集（`baseinfo_scan`）: HTTP头、服务器类型和技术栈线索
+2. 端口扫描（`port_scan`）: 发现授权目标暴露的服务
+3. 子域名扫描（`subdomain_scan`）: 补充授权范围内的资产
+4. 目录扫描（`dir_brute`）: 发现公开路径和备份文件线索
+5. WAF检测（`waf_detect_scan`）: 识别防护设备并调整请求频率
+6. CDN检测（`cdn_detect_scan`）: 解释解析和访问路径差异
+7. CMS识别（`cms_detect_scan`）: 确定CMS或框架线索
+8. 信息泄露（`infoleak_scan`）: 检测敏感信息泄露
+9. 资产补充：`ip_locate_scan`、`webside_query_scan`、`web_weight_scan`
+10. Web入口收集：`crawler_scan`、`public_metadata_scan`
+11. 协议配置收集：`tls_certificate_scan`、`http_methods_scan`
 
 ### Phase 2: 漏洞扫描（Vulnerability Assessment）
 **目的**: 发现Web应用层漏洞
 
-1. **快速扫描(fast)**: XSS + SQL注入（应急/初筛）
-2. **深度扫描(deep)**: 全部8项漏洞检测
-3. **完整扫描(full)**: Phase1全部 + Phase2深度
+1. **快速策略(fast)**: XSS + SQL注入（用于人机交互式初筛）
+2. **深度策略(deep)**: 核心8项Web漏洞检测（用于人机交互式决策）
+3. **漏洞扫描(vuln_scan)**: 当前11个漏洞扫描工具（用于全自动扫描）
+4. **完整扫描(full_scan)**: 当前15个信息收集工具 + 11个漏洞扫描工具
 
 ### Phase 3: 结果分析（Analysis）
 1. 聚类去重: 同类型漏洞合并
@@ -40,13 +44,13 @@
 ```
 用户输入
     │
-    ├── "快速" / "简单" → [web_vuln_scan mode=fast]
+    ├── "快速" / "简单" → [策略标签 fast，执行 xss_scan + sqli_scan]
     │
-    ├── "深度" / "全面" → [web_vuln_scan mode=deep]
+    ├── "深度" / "全面" → [策略标签 deep，执行核心漏洞工具]
     │
     ├── "完整" / "全" / "渗透测试" → 
-    │        [info_collection tools=all]
-    │        → [web_vuln_scan mode=deep]
+    │        [全自动模式 full_scan]
+    │        → 先 info_collection，再 vuln_scan
     │
     ├── "先收集信息" / "信息收集" →
     │        [info_collection]

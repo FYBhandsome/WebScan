@@ -202,7 +202,10 @@ class HTMLReportGenerator:
         return ConfidenceData(
             overall_score=max(0.0, min(100.0, overall)),
             level=level,
-            standard_text=str(confidence.get("standard_text", "基于等保2.0（GB/T 22239-2019）三级标准")),
+            standard_text=str(confidence.get(
+                "standard_text",
+                "参照等保2.0三级技术要求的证据辅助分析，非测评结论",
+            )),
             kb_version=str(confidence.get("kb_version", "")),
             dimensions=dimensions,
             compliance_estimate=max(0.0, min(100.0, compliance)),

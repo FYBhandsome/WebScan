@@ -9,20 +9,20 @@
 ### 标准信息收集链
 
 ```
-baseinfo_scan → port_scan → subdomain_scan → dir_scan → waf_detect
+baseinfo_scan → port_scan → subdomain_scan → dir_brute → waf_detect_scan
 ```
 
 **执行顺序原因**:
 1. baseinfo_scan: 获取基础信息，确定技术栈
 2. port_scan: 发现开放端口，确定攻击面
 3. subdomain_scan: 扩大攻击范围
-4. dir_scan: 发现敏感文件和目录
-5. waf_detect: 检测防护设备，调整策略
+4. dir_brute: 发现公开文件和目录线索
+5. waf_detect_scan: 检测防护设备，调整扫描强度
 
 ### 快速信息收集链
 
 ```
-baseinfo_scan → port_scan → waf_detect
+baseinfo_scan → port_scan → waf_detect_scan
 ```
 
 **适用场景**: 用户要求快速扫描，时间有限
@@ -30,7 +30,7 @@ baseinfo_scan → port_scan → waf_detect
 ### 深度信息收集链
 
 ```
-baseinfo_scan → port_scan → subdomain_scan → dir_scan → waf_detect → cdn_detect → cms_detect
+baseinfo_scan → port_scan → subdomain_scan → dir_brute → waf_detect_scan → cdn_detect_scan → cms_detect_scan
 ```
 
 **适用场景**: 渗透测试，需要全面信息
@@ -78,7 +78,7 @@ xss_scan → sqli_scan → cmdi_scan → fileupload_scan → ssrf_scan → weakp
 | 21 | weakpass_scan |
 | 22 | weakpass_scan |
 | 3389 | weakpass_scan |
-| 80/443/8080 | xss_scan → sqli_scan → dir_scan |
+| 80/443/8080 | xss_scan → sqli_scan → dir_brute |
 
 ### 技术栈触发
 
@@ -107,7 +107,7 @@ xss_scan → sqli_scan → cmdi_scan → fileupload_scan → ssrf_scan → weakp
 ### WAF绕过链
 
 ```
-waf_detect → [编码绕过] → [分块传输] → [大小写混合]
+waf_detect_scan → [识别拦截特征] → [降低请求频率] → [保留未完成项]
 ```
 
 **具体策略**:
@@ -172,8 +172,8 @@ ssrf_scan(发现) → [内网探测] → [云元数据] → [敏感服务访问]
 ```
 baseinfo_scan ──┬── port_scan ────┬── weakpass_scan
                 │                 ├── sqli_scan
-                │                 └── dir_scan
-                ├── waf_detect ───┴── [调整Payload策略]
+                │                 └── dir_brute
+                ├── waf_detect_scan ──┴── [调整扫描强度]
                 └── subdomain_scan
 
 xss_scan ──────────┬── csrf_scan
@@ -186,7 +186,7 @@ fileupload_scan ───┴── cmdi_scan
 | 工具 | 建议前置 | 原因 |
 |-----|---------|------|
 | sqli_scan | baseinfo_scan | 了解技术栈选择Payload |
-| xss_scan | waf_detect | 根据WAF调整策略 |
+| xss_scan | waf_detect_scan | 根据WAF结果控制频率并解释拦截 |
 | weakpass_scan | port_scan | 确认服务端口开放 |
 | fileupload_scan | baseinfo_scan | 了解服务器类型 |
 
@@ -206,7 +206,7 @@ fileupload_scan ───┴── cmdi_scan
 |---------|----------|----------|---------|
 | sqli_scan | xss_scan | cmdi_scan | 跳过 |
 | xss_scan | csrf_scan | - | 跳过 |
-| fileupload_scan | dir_scan | - | 跳过 |
+| fileupload_scan | dir_brute | - | 跳过 |
 | weakpass_scan | baseinfo_scan | - | 跳过 |
 | ssrf_scan | csrf_scan | - | 跳过 |
 
@@ -229,7 +229,7 @@ fileupload_scan ───┴── cmdi_scan
 ### 串行执行场景
 
 **必须串行**:
-- waf_detect 必须在漏洞检测前执行
+- waf_detect_scan 应在需要解释拦截结果时优先执行
 - port_scan 结果影响 weakpass_scan 选择
 - baseinfo_scan 结果影响后续工具选择
 

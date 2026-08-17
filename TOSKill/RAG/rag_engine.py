@@ -42,8 +42,18 @@ TOOL_KNOWLEDGE_MAP = {
     "baseinfo_scan": ["信息收集", "资产发现", "HTTP头", "SSL证书", "技术栈识别"],
     "port_scan": ["端口扫描", "服务识别", "Nmap", "开放端口", "服务指纹"],
     "subdomain_scan": ["子域名", "DNS", "资产发现", "域名枚举", "子域名接管"],
-    "dir_scan": ["目录扫描", "敏感文件", "路径遍历", "备份文件", "信息泄露"],
-    "waf_detect": ["WAF检测", "防火墙绕过", "安全设备", "云WAF", "防护策略"],
+    "dir_brute": ["目录扫描", "敏感文件", "路径枚举", "备份文件", "信息泄露"],
+    "waf_detect_scan": ["WAF检测", "防火墙识别", "安全设备", "云WAF", "防护策略"],
+    "cdn_detect_scan": ["CDN检测", "内容分发网络", "资产边界", "域名解析"],
+    "cms_detect_scan": ["CMS检测", "内容管理系统", "指纹识别", "技术栈识别"],
+    "infoleak_scan": ["信息泄露", "敏感文件", "错误信息", "公开信息"],
+    "ip_locate_scan": ["IP定位", "地理位置", "运营商", "资产归属"],
+    "webside_query_scan": ["网站备案", "ICP备案", "备案主体", "站点归属"],
+    "web_weight_scan": ["网站权重", "搜索引擎权重", "公开情报", "站点影响面"],
+    "crawler_scan": ["Web爬虫", "站点地图", "链接", "表单", "参数", "脚本"],
+    "tls_certificate_scan": ["TLS证书", "HTTPS", "证书有效期", "SAN", "加密协议"],
+    "http_methods_scan": ["HTTP方法", "OPTIONS", "危险方法", "状态码", "重定向"],
+    "public_metadata_scan": ["robots.txt", "sitemap.xml", "security.txt", "公开元数据"],
     "sqli_scan": ["SQL注入", "数据库攻击", "OWASP", "盲注", "Union注入", "时间盲注"],
     "xss_scan": ["XSS", "跨站脚本", "前端安全", "DOM型", "反射型", "存储型"],
     "cmdi_scan": ["命令注入", "RCE", "管道符", "命令执行", "远程代码执行"],
@@ -52,8 +62,12 @@ TOOL_KNOWLEDGE_MAP = {
     "weakpass_scan": ["弱口令", "暴力破解", "默认密码", "字典攻击", "凭证猜测"],
     "lfi_scan": ["文件包含", "目录遍历", "路径穿越", "本地文件", "日志注入"],
     "csrf_scan": ["CSRF", "跨站请求伪造", "表单提交", "Token验证"],
-    "cdn_detect": ["CDN检测", "内容分发网络", "真实IP", "绕过CDN"],
-    "cms_detect": ["CMS检测", "内容管理系统", "指纹识别", "版本探测"],
+    "http_security_headers_scan": ["HTTP安全响应头", "CSP", "HSTS", "X-Frame-Options", "安全配置"],
+    "cookie_security_scan": ["Cookie安全", "Secure", "HttpOnly", "SameSite", "会话保护"],
+    "cors_misconfiguration_scan": ["CORS配置", "Origin反射", "跨域", "凭证请求", "访问控制"],
+    "thinkphp_rce_scan": ["ThinkPHP", "远程代码执行", "框架漏洞", "POC验证", "授权检测"],
+    "struts2_scan": ["Struts2", "远程代码执行", "框架漏洞", "POC验证", "授权检测"],
+    "weblogic_scan": ["WebLogic", "中间件漏洞", "远程代码执行", "POC验证", "授权检测"],
 }
 
 VULN_TYPE_MAP = {
@@ -78,27 +92,30 @@ SCENARIO_KEYWORDS = {
 }
 
 MLPS_VULN_MAPPING = {
-    "sqli": ["SQL注入", "8.1.3.2", "访问控制", "数据库安全", "注入防护"],
-    "xss": ["XSS", "8.1.3.3", "安全审计", "跨站脚本", "输入过滤"],
-    "rce": ["命令注入", "8.1.3.1", "身份鉴别", "远程代码执行", "权限控制"],
-    "fileupload": ["文件上传", "8.1.3.2", "访问控制", "WebShell", "文件类型校验"],
-    "ssrf": ["SSRF", "8.1.1.2", "通信传输", "服务端请求", "内网隔离"],
+    "sqli": ["SQL注入", "8.1.3.2", "访问控制", "8.1.3.4", "入侵防范", "证据映射"],
+    "xss": ["XSS", "8.1.3.4", "入侵防范", "跨站脚本", "证据映射"],
+    "rce": ["命令注入", "8.1.3.4", "入侵防范", "远程代码执行", "证据映射"],
+    "fileupload": ["文件上传", "8.1.3.2", "访问控制", "8.1.3.4", "入侵防范"],
+    "ssrf": ["SSRF", "安全区域边界", "入侵防范", "服务端请求", "证据映射"],
     "weakpass": ["弱口令", "8.1.3.1", "身份鉴别", "密码策略", "暴力破解防护"],
     "lfi": ["文件包含", "8.1.3.2", "访问控制", "路径穿越", "文件读取"],
     "csrf": ["CSRF", "8.1.3.2", "访问控制", "跨站请求", "Token验证"],
     "info_leak": ["信息泄露", "8.1.3.3", "安全审计", "敏感信息", "错误处理"],
     "infoleak": ["信息泄露", "8.1.3.3", "安全审计", "敏感信息", "错误处理"],
     "auth_bypass": ["认证绕过", "8.1.3.1", "身份鉴别", "未授权访问", "权限控制"],
+    "security_headers": ["HTTP安全响应头", "安全通信网络", "安全配置", "支持性线索"],
+    "cookie_security": ["Cookie安全属性", "身份鉴别", "安全通信网络", "会话保护"],
+    "cors": ["CORS错误配置", "访问控制", "安全区域边界", "跨域凭证"],
 }
 
 MLPS_SCENARIO_KEYWORDS = {
     "confidence_assessment": [
-        "等保2.0", "置信度评估", "风险等级判定", "合规性评估",
-        "控制项映射", "评估依据", "置信度评判规则",
+        "等保2.0", "技术证据置信度", "证据完整性", "可重复性",
+        "控制项映射", "评估依据", "人工复核", "未评估范围",
     ],
     "compliance_check": [
-        "等保三级", "符合度", "安全计算环境", "安全区域边界",
-        "安全通信网络", "安全管理中心",
+        "等保三级", "技术证据", "安全计算环境", "安全区域边界",
+        "安全通信网络", "安全管理中心", "不构成测评结论",
     ],
 }
 
@@ -795,10 +812,10 @@ class TOSKillRAGEngine:
         vulnerabilities: List[Dict[str, Any]],
         tool_results: Dict[str, Any]
     ) -> str:
-        """检索等保评估上下文（标准条款+漏洞映射+历史案例）
+        """检索等保技术证据上下文（要求主题+证据映射+评估案例）
 
-        供置信度评估器调用，返回等保2.0标准条款、漏洞→控制项映射、
-        历史评估案例等知识库内容。
+        供置信度评估器调用，返回等保2.0要求主题、漏洞→控制项证据映射、
+        评估案例及人工复核边界。
 
         Args:
             target: 扫描目标URL
@@ -871,7 +888,7 @@ class TOSKillRAGEngine:
         vulnerabilities: List[Dict[str, Any]],
         tool_results: Dict[str, Any]
     ) -> str:
-        """构建等保评估检索查询"""
+        """构建等保技术证据评估检索查询"""
         query_parts = []
         query_parts.extend(MLPS_SCENARIO_KEYWORDS["confidence_assessment"])
         query_parts.extend(MLPS_SCENARIO_KEYWORDS["compliance_check"])
@@ -883,14 +900,14 @@ class TOSKillRAGEngine:
 
         tool_count = len(tool_results)
         if tool_count >= 8:
-            query_parts.append("多工具交叉验证 置信度高 全覆盖")
+            query_parts.append("多工具技术证据 范围覆盖 执行状态 未评估项")
         elif tool_count >= 5:
-            query_parts.append("多工具检测 交叉验证 置信度")
+            query_parts.append("多工具检测 证据完整性 可重复性")
         elif tool_count <= 2:
-            query_parts.append("单工具检测 置信度评估 误报风险 覆盖度不足")
+            query_parts.append("单工具检测 有限范围 禁止外推 人工复核")
 
         if not query_parts:
-            query_parts = ["等保2.0三级标准 置信度评估 风险等级判定 合规性评估"]
+            query_parts = ["等保2.0三级 技术证据置信度 控制项映射 未评估范围 人工复核"]
 
         return " ".join(query_parts)
 
