@@ -65,7 +65,12 @@ from TOSKill.tools.vuln_scan.cors_misconfiguration import cors_misconfiguration_
 from TOSKill.tools.poc.thinkphp import thinkphp_rce
 from TOSKill.tools.poc.struts2 import struts2_s2_032
 from TOSKill.tools.poc.weblogic import weblogic_cve_2020_2551
-from TOSKill.utils.target import normalize_scan_target
+from TOSKill.utils.target import (
+    is_non_public_target,
+    is_public_domain_target,
+    normalize_scan_target,
+    target_host,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +288,19 @@ def wrap_tool_result(
         error=error,
         auth_info=auth_info,
         timestamp=datetime.now().isoformat()
+    )
+
+
+def not_applicable_result(target: str, message: str, **data: Any) -> ToolResult:
+    """Return a successful, neutral result for an inapplicable public-data lookup."""
+    return wrap_tool_result(
+        success=True,
+        data={
+            "result_status": "not_applicable",
+            "status_message": message,
+            "target_host": target_host(target),
+            **data,
+        },
     )
 
 
@@ -564,14 +582,11 @@ def baseinfo_scan(target: str) -> ToolResult:
         >>> result["success"]
         True
     """
-    t = clean_target(target)
+    t = normalize_scan_target(target)
     logger.info(f"[+] 执行基础信息收集：{t}")
     try:
         raw_result = baseinfo(t)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"基础信息收集失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -642,9 +657,17 @@ def subdomain_scan(target: str) -> ToolResult:
             - error: 错误信息（如有）
             - timestamp: 执行时间戳
     """
-    t = clean_target(target)
+    t = target_host(target)
     logger.info(f"[+] 执行子域名扫描：{t}")
     try:
+        if not is_public_domain_target(target):
+            return not_applicable_result(
+                target,
+                "本地、内网或 IP 目标不适用公网子域名枚举。",
+                subdomains=[],
+                total_count=0,
+                collection_status="not_applicable",
+            )
         raw_result = subdomain(t)
         return normalize_scanner_result(raw_result)
     except Exception as e:
@@ -735,11 +758,15 @@ def cdn_detect_scan(target: str) -> ToolResult:
     t = clean_target(target)
     logger.info(f"[+] 执行CDN检测：{t}")
     try:
+        if is_non_public_target(target):
+            return not_applicable_result(
+                target,
+                "本地或非公网目标不经过公共 CDN，本项无需检测。",
+                cdn_detected=False,
+                collection_status="not_applicable",
+            )
         raw_result = cdn_detect(t)
-        return wrap_tool_result(
-            success=True,
-            data=raw_result if isinstance(raw_result, dict) else {"result": raw_result}
-        )
+        return normalize_scanner_result(raw_result)
     except Exception as e:
         logger.error(f"CDN检测失败: {e}")
         return wrap_tool_result(success=False, data={}, error=str(e))
@@ -841,6 +868,13 @@ def ip_locate_scan(target: str) -> ToolResult:
         return wrap_tool_result(success=False, data={}, error=str(e))
     logger.info(f"[+] 执行IP定位：{t}")
     try:
+        if not ipaddress.ip_address(t).is_global:
+            return not_applicable_result(
+                target,
+                f"IP {t} 属于本地、内网或保留地址，不提供公网地理归属信息。",
+                ip=t,
+                query_status="not_applicable",
+            )
         raw_result = ip_locate(t)
         return normalize_scanner_result(raw_result)
     except Exception as e:
@@ -916,9 +950,16 @@ def web_weight_scan(target: str) -> ToolResult:
             - error: 错误信息（如有）
             - timestamp: 执行时间戳
     """
-    t = clean_target(target)
+    t = target_host(target)
     logger.info(f"[+] 执行权重查询：{t}")
     try:
+        if not is_public_domain_target(target):
+            return not_applicable_result(
+                target,
+                "本地、内网或 IP 目标没有公开搜索权重，本项无需查询。",
+                domain=t,
+                query_status="not_applicable",
+            )
         raw_result = web_weight(t)
         return normalize_scanner_result(raw_result)
     except Exception as e:
@@ -2007,10 +2048,53 @@ class ScriptManager:
         with self._registry_lock:
             self._ensure_registry_schema()
             with self._connect_registry() as conn:
-                exists = conn.execute(
-                    "SELECT 1 FROM custom_tools WHERE tool_name = ?", (script_name,)
+                existing_row = conn.execute(
+                    "SELECT * FROM custom_tools WHERE tool_name = ?", (script_name,)
                 ).fetchone()
-            if exists or script_name in TOOL_MAP or script_path.exists():
+
+            if existing_row:
+                same_registration = (
+                    existing_row["script_content"] == script_content
+                    and existing_row["category"] == normalized_category
+                    and existing_row["creation_method"] == normalized_method
+                )
+                if same_registration:
+                    existing_path = Path(existing_row["script_path"])
+                    try:
+                        existing_path.parent.mkdir(parents=True, exist_ok=True)
+                        if not existing_path.exists() or existing_path.read_text(encoding="utf-8") != script_content:
+                            existing_path.write_text(script_content, encoding="utf-8")
+                        if script_name not in TOOL_MAP:
+                            TOOL_MAP[script_name] = self._build_runtime_tool(
+                                existing_path,
+                                script_name,
+                                existing_row["description"],
+                            )
+                        metadata = self._metadata_from_row(existing_row)
+                        self._registered_scripts[script_name] = metadata
+                        logger.info(f"复用已注册的自定义工具: {script_name}")
+                        return {
+                            "success": True,
+                            "tool_name": script_name,
+                            "tool": TOOL_MAP[script_name],
+                            "metadata": metadata,
+                            "reused": True,
+                        }
+                    except Exception as exc:
+                        logger.error(f"恢复已注册工具失败: {script_name}: {exc}")
+                        return {
+                            "success": False,
+                            "error": str(exc),
+                            "error_code": "SCRIPT_REGISTER_FAILED",
+                        }
+
+                return {
+                    "success": False,
+                    "error": f"自定义工具 '{script_name}' 已存在且内容不同",
+                    "error_code": "CUSTOM_TOOL_NAME_CONFLICT",
+                }
+
+            if script_name in TOOL_MAP or script_path.exists():
                 return {
                     "success": False,
                     "error": f"自定义工具 '{script_name}' 已存在",
@@ -2057,6 +2141,7 @@ class ScriptManager:
                     "tool_name": script_name,
                     "tool": tool,
                     "metadata": metadata,
+                    "reused": False,
                 }
             except Exception as exc:
                 TOOL_MAP.pop(script_name, None)

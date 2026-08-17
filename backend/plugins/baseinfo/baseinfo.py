@@ -38,6 +38,7 @@
 import logging
 import socket
 import json
+import ipaddress
 from typing import List, Dict, Any
 import requests
 from requests.exceptions import (
@@ -54,8 +55,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from ..common.common import get_domain
 from ..randheader.randheader import get_ua
+from TOSKill.utils.target import is_public_domain_target, normalize_scan_target, target_host
 
 # 初始化requests会话(复用连接,提升效率)
 SESSION = requests.Session()
@@ -70,6 +71,12 @@ def get_ip_addr(ip: str) -> str:
     default_msg = " (未查询到物理地址)  "
     error_msg = " (IP查询接口异常)  "
     try:
+        try:
+            if not ipaddress.ip_address(ip).is_global:
+                return " (本地/内网地址，无公网归属信息)  "
+        except ValueError:
+            pass
+
         # 优先尝试socket解析(最快且稳定)
         try:
             ip_obj = socket.gethostbyname(ip)
@@ -188,23 +195,17 @@ def getbaseinfo(url: str) -> Dict[str, Any]:
         "register": None
     }
     
-    # 规范化URL（自动添加协议前缀）
-    from ..common.common import check_url
-    normalized_url = check_url(url)
-    if not normalized_url:
-        info["msg"] = "URL格式无效"
-        logger.error(f"URL {url} 格式无效")
-        return info
-    
-    # 提取域名
-    domain = get_domain(normalized_url)
-    if not domain:
-        info["msg"] = "域名提取失败"
-        logger.error(f"URL {url} 提取域名失败")
+    try:
+        normalized_url = normalize_scan_target(url)
+        domain = target_host(normalized_url)
+    except (TypeError, ValueError) as exc:
+        info["msg"] = str(exc)
+        logger.error(f"URL {url} 格式无效: {exc}")
         return info
     
     info["domain"] = domain
-    info["register"] = f"http://whois.chinaz.com/{domain}"  # WHOIS链接
+    if is_public_domain_target(normalized_url):
+        info["register"] = f"http://whois.chinaz.com/{domain}"
     
     # 发起HTTP请求(使用规范化后的URL)
     try:

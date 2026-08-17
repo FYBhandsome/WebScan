@@ -11,6 +11,7 @@ _HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"
 )
+_NON_PUBLIC_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".test", ".invalid", ".example")
 
 
 def normalize_scan_target(value: str) -> str:
@@ -53,4 +54,31 @@ def normalize_scan_target(value: str) -> str:
 
     normalized = candidate.rstrip("/")
     return normalized
+
+
+def target_host(value: str) -> str:
+    """Extract the normalized hostname from a scan target."""
+    parsed = urlparse(normalize_scan_target(value))
+    return (parsed.hostname or "").lower().rstrip(".")
+
+
+def is_non_public_target(value: str) -> bool:
+    """Return whether a target is local, internal, or otherwise non-public."""
+    host = target_host(value)
+    try:
+        return not ipaddress.ip_address(host).is_global
+    except ValueError:
+        return host == "localhost" or host.endswith(_NON_PUBLIC_HOST_SUFFIXES) or "." not in host
+
+
+def is_public_domain_target(value: str) -> bool:
+    """Return whether public domain data sources can meaningfully query it."""
+    host = target_host(value)
+    if is_non_public_target(value):
+        return False
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return "." in host
+    return False
 

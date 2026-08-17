@@ -363,6 +363,8 @@ const badgeText = (status) => {
     case 'pending': return '等待中'
     case 'running': return '执行中'
     case 'completed': return '已完成'
+    case 'not_applicable': return '不适用'
+    case 'skipped': return '已跳过'
     case 'error': return '失败'
     default: return status
   }
@@ -422,7 +424,7 @@ const openTaskResultModal = (taskName) => {
 }
 
 const canOpenTaskResult = (task) => {
-  if (!showResults.value || task?.status !== 'completed' || !task?.name) return false
+  if (!showResults.value || !['completed', 'not_applicable'].includes(task?.status) || !task?.name) return false
   return informationResults.value.some(item => item.tool === task.name && item.items?.length)
 }
 
@@ -482,7 +484,7 @@ const updateTaskStatus = (taskName, status, durationMs = null) => {
   const task = tasks.value.find(t => t.name === taskName) || addTask(taskName, status)
   if (task && task.status !== status) {
     task.status = status
-    if (status === 'completed' || status === 'error') {
+    if (['completed', 'not_applicable', 'skipped', 'error'].includes(status)) {
       const measuredDuration = Number(durationMs)
       task.elapsed = formatElapsed(
         Number.isFinite(measuredDuration) && measuredDuration >= 0
@@ -551,7 +553,8 @@ const openReport = (reportUrl) => {
 const handleScanResult = (data) => {
   const payload = mergeResultPayload(data)
   ;(payload.completed_tasks || []).forEach(task => {
-    updateTaskStatus(task, 'completed', taskDurationMs(payload, task))
+    const status = payload.task_metadata?.[task]?.status === 'not_applicable' ? 'not_applicable' : 'completed'
+    updateTaskStatus(task, status, taskDurationMs(payload, task))
   })
   isScanning.value = false
   cancelRequested.value = false
@@ -595,7 +598,8 @@ const applyRunState = (state) => {
   tasks.value = []
   ;(state.planned_tasks || []).forEach(task => addTask(task, 'pending'))
   ;(state.completed_tasks || []).forEach(task => {
-    updateTaskStatus(task, 'completed', taskDurationMs(state, task))
+    const status = state.task_metadata?.[task]?.status === 'not_applicable' ? 'not_applicable' : 'completed'
+    updateTaskStatus(task, status, taskDurationMs(state, task))
   })
   ;(state.failed_tasks || []).forEach(task => {
     updateTaskStatus(task, 'error', taskDurationMs(state, task))
@@ -709,7 +713,8 @@ const handleWSMessage = (data) => {
       {
         const toolName = payload.tool_name || payload.tool
         const toolResult = payload.raw_result ?? payload.result
-        updateTaskStatus(toolName, 'completed', payloadDurationMs(payload))
+        const completedStatus = payload.result_status === 'not_applicable' ? 'not_applicable' : 'completed'
+        updateTaskStatus(toolName, completedStatus, payloadDurationMs(payload))
         if (toolName && toolResult !== undefined) {
           resultsData.value.tool_results = { ...(resultsData.value.tool_results || {}), [toolName]: toolResult }
         }
@@ -720,7 +725,7 @@ const handleWSMessage = (data) => {
       break
 
     case 'task_skipped':
-      updateTaskStatus(payload.tool, 'error')
+      updateTaskStatus(payload.tool, 'skipped')
       showToast('任务跳过: ' + (payload.reason || ''), 'warning')
       break
 
@@ -1161,6 +1166,11 @@ select:focus {
   background: var(--success-color);
 }
 
+.task-dot.not_applicable,
+.task-dot.skipped {
+  background: var(--text-secondary);
+}
+
 .task-dot.error {
   background: var(--error-color);
 }
@@ -1200,6 +1210,12 @@ select:focus {
 .task-badge.completed {
   color: var(--success-color);
   border: 1px solid var(--success-color);
+}
+
+.task-badge.not_applicable,
+.task-badge.skipped {
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
 }
 
 .task-badge.error {

@@ -17,6 +17,215 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 
+def _script_waiting_state(session_id: str):
+    from TOSKill.AI.state import create_initial_state, update_state
+
+    return update_state(
+        create_initial_state(
+            target="https://example.com",
+            task_id=session_id,
+            mode="vuln_scan",
+        ),
+        websocket_session_id=session_id,
+        planned_tasks=["sqli_scan", "fileupload_scan", "cmdi_scan"],
+        completed_tasks=["sqli_scan"],
+        next_task="fileupload_scan",
+        current_task="fileupload_scan",
+        script_origin={
+            "next_task": "fileupload_scan",
+            "planned_tasks": ["sqli_scan", "fileupload_scan", "cmdi_scan"],
+            "completed_tasks": ["sqli_scan"],
+        },
+        script_operation="generate",
+        script_operation_status="waiting",
+    )
+
+
+CUSTOM_TOOL_SCRIPT = """def run(target: str):
+    return {"success": True, "data": {"target": target}, "error": None}
+"""
+
+
+def _isolated_script_manager(tmp_path):
+    from TOSKill.AI.tools import ScriptManager
+
+    manager = ScriptManager()
+    manager._scripts_dir = tmp_path / "custom"
+    manager._db_path = tmp_path / "registry.db"
+    manager._registered_scripts = {}
+    return manager
+
+
+def test_identical_custom_tool_registration_is_reused(tmp_path):
+    from TOSKill.AI.tools import TOOL_MAP
+
+    manager = _isolated_script_manager(tmp_path)
+    name = "test_idempotent_ai_tool"
+    try:
+        first = manager.register_script_as_tool(
+            CUSTOM_TOOL_SCRIPT, name, "AI generated tool", "vuln_scan", "ai_generate"
+        )
+        second = manager.register_script_as_tool(
+            CUSTOM_TOOL_SCRIPT, name, "AI generated tool", "vuln_scan", "ai_generate"
+        )
+
+        assert first["success"] is True
+        assert first["reused"] is False
+        assert second["success"] is True
+        assert second["reused"] is True
+        assert second["metadata"]["category"] == "vuln_scan"
+        assert second["metadata"]["source"] == "custom"
+    finally:
+        TOOL_MAP.pop(name, None)
+
+
+def test_different_custom_tool_registration_still_conflicts(tmp_path):
+    from TOSKill.AI.tools import TOOL_MAP
+
+    manager = _isolated_script_manager(tmp_path)
+    name = "test_conflicting_ai_tool"
+    try:
+        first = manager.register_script_as_tool(
+            CUSTOM_TOOL_SCRIPT, name, "AI generated tool", "vuln_scan", "ai_generate"
+        )
+        second = manager.register_script_as_tool(
+            CUSTOM_TOOL_SCRIPT.replace("target},", "str(target)},"),
+            name,
+            "Changed AI generated tool",
+            "vuln_scan",
+            "ai_generate",
+        )
+
+        assert first["success"] is True
+        assert second["success"] is False
+        assert second["error_code"] == "CUSTOM_TOOL_NAME_CONFLICT"
+    finally:
+        TOOL_MAP.pop(name, None)
+
+
+@pytest.mark.asyncio
+async def test_registered_generated_script_is_inserted_before_original_task(clean_memory_store):
+    from TOSKill.AI.graph import script_generate_process
+
+    state = _script_waiting_state("registered-script-resume")
+    generated = AsyncMock()
+
+    with patch("TOSKill.AI.graph.interrupt", return_value={
+        "description": "识别站点技术栈",
+        "tool_category": "vuln_scan",
+        "script_action": "use_registered",
+        "registered_tool_name": "technology_fingerprint",
+        "script_code": "def run(target): return {'success': True}",
+    }), patch(
+        "TOSKill.AI.tools.script_manager.get_registered_scripts",
+        return_value={
+            "technology_fingerprint": {
+                "description": "识别站点技术栈",
+                "category": "vuln_scan",
+                "creation_method": "ai_generate",
+            }
+        },
+    ), patch(
+        "TOSKill.AI.tools.script_manager.generate_script_with_ai",
+        generated,
+    ):
+        result = await script_generate_process(state)
+
+    generated.assert_not_awaited()
+    assert result["planned_tasks"] == [
+        "sqli_scan",
+        "technology_fingerprint",
+        "fileupload_scan",
+        "cmdi_scan",
+    ]
+    assert result["next_task"] == "technology_fingerprint"
+    assert result["script_operation_status"] == "registered"
+    assert result["script_origin"] == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("script_action", "expected_status"),
+    [("save_registered", "saved"), ("discard", "discarded")],
+)
+async def test_non_queued_script_action_returns_to_original_task(
+    clean_memory_store,
+    script_action,
+    expected_status,
+):
+    from TOSKill.AI.graph import script_generate_process
+
+    state = _script_waiting_state(f"script-action-{script_action}")
+    payload = {
+        "description": "识别站点技术栈",
+        "tool_category": "vuln_scan",
+        "script_action": script_action,
+    }
+    if script_action == "save_registered":
+        payload["registered_tool_name"] = "technology_fingerprint"
+
+    with patch("TOSKill.AI.graph.interrupt", return_value=payload), patch(
+        "TOSKill.AI.tools.script_manager.get_registered_scripts",
+        return_value={
+            "technology_fingerprint": {
+                "description": "识别站点技术栈",
+                "category": "vuln_scan",
+                "creation_method": "ai_generate",
+            }
+        },
+    ):
+        result = await script_generate_process(state)
+
+    assert result["planned_tasks"] == ["sqli_scan", "fileupload_scan", "cmdi_scan"]
+    assert result["next_task"] == "fileupload_scan"
+    assert result["workflow_node"] == "user_interact"
+    assert result["scan_status"] == "waiting_user"
+    assert result["script_operation_status"] == expected_status
+    assert result["script_origin"] == {}
+
+
+@pytest.mark.asyncio
+async def test_chat_replan_uses_a_fresh_interaction_id(clean_memory_store):
+    from TOSKill.AI.graph import user_interact
+    from TOSKill.AI.state import create_initial_state, update_state
+
+    session_id = "chat-replan-interaction"
+    base_state = update_state(
+        create_initial_state(
+            target="https://example.com",
+            task_id=session_id,
+            mode="vuln_scan",
+        ),
+        websocket_session_id=session_id,
+        next_task="waf_detect_scan",
+        current_task="waf_detect_scan",
+        planned_tasks=["baseinfo_scan", "waf_detect_scan"],
+        completed_tasks=["baseinfo_scan"],
+    )
+    callback = AsyncMock()
+    clean_memory_store.set_websocket_callback(session_id, callback)
+
+    pause_id = f"{session_id}:pause:pause-abc123"
+    with patch("TOSKill.AI.graph.interrupt", return_value={
+        "choice": "resume_after_chat",
+        "action": "resume_after_chat",
+        "pause_id": pause_id,
+        "decision_context_version": 2,
+    }):
+        replanned_state = await user_interact(base_state)
+    original_id = callback.await_args.args[0]["interaction_id"]
+
+    callback.reset_mock()
+    with patch("TOSKill.AI.graph.interrupt", return_value={"choice": "1"}):
+        await user_interact(replanned_state)
+    replanned_id = callback.await_args.args[0]["interaction_id"]
+
+    assert original_id == f"{session_id}:interaction:waf_detect_scan:1"
+    assert replanned_id == f"{original_id}:replan:pause-abc123"
+    assert replanned_id != original_id
+    assert replanned_state["resume_pause_id"] == pause_id
+
+
 @pytest.mark.workflow
 class TestScanWorkflow:
     """扫描工作流测试"""

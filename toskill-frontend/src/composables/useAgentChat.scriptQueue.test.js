@@ -26,10 +26,30 @@ describe('generated-script queue lifecycle', () => {
     expect(source).toMatch(/case 'workflow_completed':\s*\n\s*case 'scan_completed':/)
   })
 
-  it('uses the fixed local template even when the form originated from the backend workflow', () => {
-    expect(source).not.toContain('workflowManaged: Boolean(request.interaction_id)')
-    expect(source).not.toContain("ws.send('script_description', {")
+  it('returns locally generated scripts to the backend workflow that requested them', () => {
+    expect(source).toContain('const workflowManaged = request.workflow_managed === true || block.workflowManaged === true')
+    expect(source).toContain('if (interaction.workflowManaged) {')
+    expect(source).toContain("ws.send('script_description', {")
+    expect(source).toContain('interaction_id: interaction.workflowInteractionId')
+    expect(source).toContain("script_action: action")
+    expect(source).toContain("script_action: 'discard'")
+    expect(source).toContain('registered_tool_name: registeredName')
+    expect(source).toContain('workflow_managed: true')
+  })
+
+  it('keeps the fixed local template for standalone generation', () => {
     expect(source).toContain("generateLocalScript({\n          placement: 'console'")
-    expect(source).toContain('never use it\n      // to send the prompt back to the server for an ai_gen_* script')
+  })
+
+  it('does not reopen or expire an interaction that the user already submitted', () => {
+    expect(source).toContain('interaction.submitted = true')
+    expect(source).toContain('const submittedState = existing.submitted === true || Boolean(existing.selectedChoice)')
+    expect(source).toContain('if (interaction.submitted || interaction.selectedChoice)')
+    expect(source).toContain("interaction.resolutionMessage === '该交互已过期'")
+  })
+
+  it('records generated scripts for the custom tools view', () => {
+    expect(source).toContain("focusCustomTool(registeredName, interaction.scriptCategory || 'info_collection')")
+    expect(source).toContain('已保存到自定义工具')
   })
 })

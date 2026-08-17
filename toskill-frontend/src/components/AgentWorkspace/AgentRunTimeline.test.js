@@ -55,4 +55,26 @@ describe('AgentRunTimeline script category field', () => {
     expect(completedDot.text()).not.toContain('✓')
     expect(wrapper.findAll('.step-dot.status-running')).toHaveLength(1)
   })
+
+  it('renders not-applicable collection results without a failure symbol', () => {
+    const wrapper = mount(AgentRunTimeline, {
+      props: {
+        run: {
+          status: 'completed',
+          steps: [{
+            stepId: 'tool:ip_locate_scan',
+            title: 'ip_locate_scan',
+            status: 'not_applicable',
+            message: '本地地址不提供公网地理归属信息'
+          }]
+        }
+      }
+    })
+
+    const step = wrapper.get('[data-step-id="tool:ip_locate_scan"]')
+    expect(step.text()).toContain('不适用')
+    expect(step.get('.step-dot').text()).toBe('−')
+    expect(step.text()).not.toContain('失败')
+    expect(step.text()).not.toContain('×')
+  })
 })

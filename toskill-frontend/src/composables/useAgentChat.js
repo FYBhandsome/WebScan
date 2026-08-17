@@ -4,7 +4,7 @@ import { showToast, globalState, scanProgressState, scanStatusState,
   conversationState, loadConversationIndex, createNewConversation,
   deleteConversation, renameConversation, updateConversationStatus,
   setCurrentConversation, saveConversationBlocks, loadConversationBlocks,
-  setConversationSessionId } from '../store.js'
+  setConversationSessionId, focusCustomTool } from '../store.js'
 import { API } from '../services/api.js'
 import { storageService } from '../services/storageService.js'
 import { addLog } from './useLogBus.js'
@@ -472,8 +472,18 @@ export function useAgentChat() {
     for (const run of runs) {
       for (const step of run.steps || []) {
         const interaction = step.interaction
-        if (!interaction || interaction.resolved || interaction.interactionId === activeInteractionId) continue
+        if (!interaction || interaction.interactionId === activeInteractionId) continue
         if (!['interaction_required', 'input_request'].includes(interaction.actionSource)) continue
+        if (interaction.submitted || interaction.selectedChoice) {
+          interaction.submitted = true
+          interaction.resolved = true
+          interaction.resolutionMessage = interaction.resolutionMessage === '该交互已过期'
+            ? ''
+            : (interaction.resolutionMessage || '已提交，扫描正在继续')
+          step.status = 'completed'
+          continue
+        }
+        if (interaction.resolved) continue
         interaction.resolved = true
         interaction.resolutionMessage = '该交互已过期'
         step.status = 'completed'
@@ -587,7 +597,18 @@ export function useAgentChat() {
       `local:${interaction.actionSource || interaction.type || 'action'}:${payload.step_id || payload.next_task || payload.tool || Date.now()}`
     const existing = findInteraction(interactionId)
     if (existing) {
+      const submittedState = existing.submitted === true || Boolean(existing.selectedChoice)
+        ? {
+            submitted: true,
+            resolved: true,
+            selectedChoice: existing.selectedChoice,
+            resolutionMessage: existing.resolutionMessage === '该交互已过期'
+              ? ''
+              : existing.resolutionMessage
+          }
+        : null
       Object.assign(existing, interaction)
+      if (submittedState) Object.assign(existing, submittedState)
       return existing
     }
 
@@ -613,7 +634,9 @@ export function useAgentChat() {
   const resolveRunInteraction = (interaction, choiceLabel = '') => {
     if (!interaction) return
     interaction.resolved = true
+    interaction.submitted = true
     interaction.selectedChoice = choiceLabel
+    interaction.resolutionMessage = ''
     for (const run of workspaceBlocks.value.filter(block => block.type === 'agent_run')) {
       const step = (run.steps || []).find(item => item.interaction === interaction)
       if (step) {
@@ -1254,6 +1277,7 @@ export function useAgentChat() {
   const showGenerateScriptForm = (block = {}) => {
     const request = block.payload || block
     const interactionId = request.interaction_id || block.interactionId || block.interaction_id || `generate-script:${Date.now()}`
+    const workflowManaged = request.workflow_managed === true || block.workflowManaged === true
     const defaultCategory = ['info_collection', 'vuln_scan'].includes(request.default_category)
       ? request.default_category
       : 'info_collection'
@@ -1287,14 +1311,21 @@ export function useAgentChat() {
       }],
       resolved: false,
       context: 'generate_script',
-      // Every console generation entry uses the reviewed local template.
-      // Keep a backend interaction ID only for display identity; never use it
-      // to send the prompt back to the server for an ai_gen_* script.
+      // A scan workflow must resume the exact backend interrupt that opened
+      // this form. Standalone/local generation continues to use the reviewed
+      // local template below.
+      workflowManaged,
       sourceInteraction: block
     })
   }
 
-  const showGeneratedScriptPreview = ({ generated, requestDescription, target }) => {
+  const showGeneratedScriptPreview = ({
+    generated,
+    requestDescription,
+    target,
+    workflowManaged = false,
+    workflowInteractionId = ''
+  }) => {
     const interactionId = `generated-script:${Date.now()}`
     return attachRunInteraction({ target, step_id: `script-preview:${generated.toolName}` }, {
       type: 'script_preview',
@@ -1309,6 +1340,8 @@ export function useAgentChat() {
       scriptCode: generated.scriptCode,
       requestDescription,
       target,
+      workflowManaged,
+      workflowInteractionId,
       isRegistering: false,
       error: '',
       resolved: false
@@ -1389,26 +1422,73 @@ export function useAgentChat() {
       interaction.error = validationError
       return
     }
+    if (interaction.workflowManaged && !ws.isConnected()) {
+      interaction.error = 'WebSocket 已断开，无法恢复原扫描工作流'
+      return
+    }
 
     interaction.error = ''
     interaction.isRegistering = true
     try {
-      const result = await API.registerCustomTool({
-        tool_name: String(interaction.scriptName).trim(),
-        script_content: interaction.scriptCode,
-        description: interaction.description || '本地生成的扫描脚本',
-        category: interaction.scriptCategory || 'info_collection',
-        creation_method: 'ai_generate',
-        include_in_default_scan: false
-      })
-      const registeredName = result.data?.tool?.name || String(interaction.scriptName).trim()
-      saveScriptHistory({
-        tool_name: registeredName,
-        description: interaction.description || '',
-        source: 'generate',
-        category: interaction.scriptCategory || 'info_collection',
-        script_content: interaction.scriptCode
-      })
+      let registeredName = interaction.registeredName || ''
+      if (!registeredName) {
+        const result = await API.registerCustomTool({
+          tool_name: String(interaction.scriptName).trim(),
+          script_content: interaction.scriptCode,
+          description: interaction.description || '本地生成的扫描脚本',
+          category: interaction.scriptCategory || 'info_collection',
+          creation_method: 'ai_generate',
+          include_in_default_scan: false
+        })
+        registeredName = result.data?.tool?.name || String(interaction.scriptName).trim()
+        interaction.registeredName = registeredName
+        saveScriptHistory({
+          tool_name: registeredName,
+          description: interaction.description || '',
+          source: 'generate',
+          category: interaction.scriptCategory || 'info_collection',
+          script_content: interaction.scriptCode
+        })
+      }
+      focusCustomTool(registeredName, interaction.scriptCategory || 'info_collection')
+
+      if (interaction.workflowManaged) {
+        if (!ws.isConnected()) {
+          interaction.error = 'WebSocket 已断开，无法恢复原扫描工作流'
+          return
+        }
+        const action = addToQueue ? 'use_registered' : 'save_registered'
+        const sent = ws.send('script_description', {
+          description: interaction.requestDescription || interaction.description || '本地生成的扫描脚本',
+          tool_category: interaction.scriptCategory || 'info_collection',
+          interaction_id: interaction.workflowInteractionId,
+          script_action: action,
+          registered_tool_name: registeredName,
+          script_code: interaction.scriptCode
+        })
+        if (!sent) {
+          interaction.error = '恢复原扫描工作流失败，请检查 WebSocket 连接'
+          return
+        }
+        pendingGenerateScript.value = false
+        waitingForChoice.value = false
+        isTyping.value = true
+        isThinking.value = true
+        currentThinking.value = addToQueue
+          ? '正在将生成脚本加入原扫描计划…'
+          : '正在保存脚本并恢复原扫描…'
+        resolveRunInteraction(
+          interaction,
+          addToQueue ? '已交回原扫描工作流' : '已保存到工具库，正在恢复扫描'
+        )
+        showToast(
+          addToQueue
+            ? `脚本“${registeredName}”已加入原扫描计划，并保存到自定义工具`
+            : `脚本“${registeredName}”已保存到自定义工具，正在恢复原扫描`,
+          'success'
+        )
+        return
+      }
 
       if (addToQueue) {
         const target = interaction.target || scriptQueue.value[currentScriptIndex.value]?.target || globalState.currentTarget || ''
@@ -1434,10 +1514,10 @@ export function useAgentChat() {
           resolveRunInteraction(interaction, '已加入本次扫描队列')
           setTimeout(() => triggerScriptConfirm(), 500)
         }
-        showToast(`脚本“${registeredName}”已加入本次扫描队列`, 'success')
+        showToast(`脚本“${registeredName}”已加入本次扫描队列，并保存到自定义工具`, 'success')
       } else {
         resolveRunInteraction(interaction, '已保存到工具库')
-        showToast(`脚本“${registeredName}”已保存到工具库`, 'success')
+        showToast(`脚本“${registeredName}”已保存到自定义工具`, 'success')
         continueAfterGeneratedScript()
       }
     } catch (error) {
@@ -1461,7 +1541,9 @@ export function useAgentChat() {
       resolveRunInteraction(interaction, '重新填写需求')
       const form = showGenerateScriptForm({
         default_category: interaction.scriptCategory,
-        script_description: interaction.requestDescription || ''
+        script_description: interaction.requestDescription || '',
+        interaction_id: interaction.workflowInteractionId || undefined,
+        workflow_managed: interaction.workflowManaged === true
       })
       pendingGenerateScript.value = true
       pendingInputRequest.value = form
@@ -1471,6 +1553,22 @@ export function useAgentChat() {
       return
     }
     if (choiceKey === 'discard') {
+      if (interaction.workflowManaged) {
+        if (!ws.isConnected()) {
+          interaction.error = 'WebSocket 已断开，无法恢复原扫描工作流'
+          return
+        }
+        const sent = ws.send('script_description', {
+          description: interaction.requestDescription || interaction.description || '放弃生成脚本',
+          tool_category: interaction.scriptCategory || 'info_collection',
+          interaction_id: interaction.workflowInteractionId,
+          script_action: 'discard'
+        })
+        if (!sent) {
+          interaction.error = '恢复原扫描工作流失败，请检查 WebSocket 连接'
+          return
+        }
+      }
       resolveRunInteraction(interaction, '放弃并继续扫描')
       pendingGenerateScript.value = false
       waitingForChoice.value = false
@@ -1717,7 +1815,9 @@ export function useAgentChat() {
         const preview = showGeneratedScriptPreview({
           generated,
           requestDescription: description,
-          target
+          target,
+          workflowManaged: block.workflowManaged === true,
+          workflowInteractionId: block.workflowManaged ? block.interactionId : ''
         })
         pendingInputRequest.value = preview
         waitingForChoice.value = true
@@ -2055,6 +2155,7 @@ export function useAgentChat() {
       case 'task_completed':
         if (!acceptRunEvent(data.payload || {})) break
         isTyping.value = false
+        const taskNotApplicable = data.payload?.result_status === 'not_applicable'
         const analysis = data.payload?.analysis || ''
         const resultSummary = data.payload?.result_summary || ''
         const infoItems = data.payload?.information_summary || []
@@ -2064,7 +2165,7 @@ export function useAgentChat() {
         const auth = data.payload?.auth_obtained ? ' | 已获取认证' : ''
         upsertRunStep(data.payload || {}, {
           title: data.payload?.tool || '扫描工具',
-          status: 'completed',
+          status: taskNotApplicable ? 'not_applicable' : 'completed',
           message: `${message}${auth}`,
           analysis: data.payload?.tool_category === 'info_collection' ? '' : analysis,
           rawResult: data.payload?.raw_result || {},
@@ -2273,7 +2374,7 @@ export function useAgentChat() {
         isTyping.value = false
         upsertRunStep(data.payload || {}, {
           title: data.payload?.tool || '直接工具',
-          status: 'completed',
+          status: data.payload?.result_status === 'not_applicable' ? 'not_applicable' : 'completed',
           message: data.payload?.formatted_result || '执行完成',
           analysis: data.payload?.tool_category === 'info_collection' ? '' : (data.payload?.analysis || ''),
           rawResult: data.payload?.raw_result || null
@@ -2349,7 +2450,7 @@ export function useAgentChat() {
         })
         completedTasks.forEach(tool => upsertRunStep({ ...snapshot, step_id: `tool:${tool}`, tool }, {
           title: tool,
-          status: 'completed',
+          status: snapshot.task_metadata?.[tool]?.status === 'not_applicable' ? 'not_applicable' : 'completed',
           rawResult: snapshot.tool_results?.[tool] || null
         }))
         failedTasks.forEach(tool => upsertRunStep({ ...snapshot, step_id: `tool:${tool}`, tool }, {
@@ -2584,7 +2685,11 @@ export function useAgentChat() {
           if (hasOpenInteraction(interactionId)) break
           isTyping.value = false
           waitingForChoice.value = true
-          const generateBlock = showGenerateScriptForm({ ...data.payload, interaction_id: interactionId })
+          const generateBlock = showGenerateScriptForm({
+            ...data.payload,
+            interaction_id: interactionId,
+            workflow_managed: true
+          })
           pendingInputRequest.value = generateBlock
           updateRun({}, { status: 'waiting' })
         }

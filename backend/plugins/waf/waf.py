@@ -38,6 +38,7 @@ import chardet
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib.parse import urljoin
+from TOSKill.utils.target import normalize_scan_target
 
 # === 配置项(集中管理,便于修改) ===
 # WAF检测规则(格式:WAF名|匹配对象|匹配属性|正则规则)
@@ -276,13 +277,11 @@ def is_valid_url(url: str) -> bool:
     :param url: 待校验URL
     :return: True(合法)/False(非法)
     """
-    if not isinstance(url, str) or not url.strip():
+    if not isinstance(url, str) or not re.match(r"^https?://", url.strip(), re.IGNORECASE):
         return False
-    url = url.strip()
-    # 校验是否以http/https开头,且包含至少一个域名段(如.com/.cn)
-    if not (url.startswith('https://') or url.startswith('http://')):
-        return False
-    if '.' not in url.split('//')[-1].split('/')[0]:
+    try:
+        normalize_scan_target(url)
+    except (TypeError, ValueError):
         return False
     return True
 
@@ -311,7 +310,7 @@ def get_waf(url: str) -> Dict[str, str]:
         logger.error(result["message"])
         return result
 
-    url = url.strip()
+    url = normalize_scan_target(url)
     # 2. 安全拼接Payload(避免//问题)
     full_url = urljoin(url, DETECT_PAYLOAD.lstrip('/'))
     logger.info(f"开始检测WAF | 目标URL:{url} | 拼接Payload后:{full_url}")

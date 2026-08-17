@@ -25,6 +25,7 @@ from TOSKill.tools.tool_categories import (
     information_summary_text,
     is_vulnerability_tool,
     tool_category,
+    tool_result_status,
 )
 
 
@@ -193,6 +194,7 @@ class AutoScanRunner:
                     state = update_state(state, **auth_info)
 
                 success = result.get("success", True) is not False
+                result_status = tool_result_status(result) if success else "failed"
                 current_vulnerabilities = self._extract_vulnerabilities(tool_name, result)
                 vulnerabilities.extend(current_vulnerabilities)
 
@@ -206,7 +208,7 @@ class AutoScanRunner:
 
                 task_metadata[tool_name] = {
                     **task_metadata.get(tool_name, {}),
-                    "status": "completed" if success else "failed",
+                    "status": result_status,
                     "duration_ms": duration_ms,
                 }
 
@@ -239,6 +241,7 @@ class AutoScanRunner:
                     "raw_result": result,
                     "vulnerabilities": current_vulnerabilities,
                     "information_summary": information_items(tool_name, result),
+                    "result_status": result_status,
                     # 信息收集结果是执行结果而非 AI 分析；使用独立字段，避免前端重复渲染。
                     "result_summary": information_summary_text(tool_name, result)
                     if is_information_collection else "",

@@ -25,12 +25,12 @@
         <button
           class="source-switch-btn"
           :class="{ active: currentSource === 'system' }"
-          @click="currentSource = 'system'"
+          @click="selectSource('system')"
         >系统工具 <span>{{ sourceCounts.system }}</span></button>
         <button
           class="source-switch-btn"
           :class="{ active: currentSource === 'custom' }"
-          @click="currentSource = 'custom'"
+          @click="selectSource('custom')"
         >自定义工具 <span>{{ sourceCounts.custom }}</span></button>
       </div>
     </div>
@@ -106,10 +106,10 @@
         </div>
 
         <div v-if="execution.resultData" class="execution-result">
-          <div class="execution-status" :class="{ failed: !executionSucceeded }">
-            <span class="status-icon" aria-hidden="true">{{ executionSucceeded ? '✓' : '!' }}</span>
+          <div class="execution-status" :class="{ failed: !executionSucceeded, neutral: executionNotApplicable }">
+            <span class="status-icon" aria-hidden="true">{{ executionNotApplicable ? '−' : (executionSucceeded ? '✓' : '!') }}</span>
             <p class="status-line">
-              <strong>{{ executionSucceeded ? '执行完成' : '执行未完成' }}</strong>
+              <strong>{{ executionNotApplicable ? '不适用' : (executionSucceeded ? '执行完成' : '执行未完成') }}</strong>
               <span aria-hidden="true"> · </span>
               <span>{{ executionStatusText }}</span>
             </p>
@@ -277,7 +277,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { API } from '../../services/api.js'
-import { showToast } from '../../store.js'
+import { consumeCustomToolFocus, showToast } from '../../store.js'
 import { marked } from 'marked'
 import { formatInformationResult } from '../../utils/informationResultFormatter.js'
 import { generateLocalScript } from '../../utils/localScriptGenerator.js'
@@ -545,6 +545,15 @@ const loadTools = async () => {
 
 // 页面挂载时拉取工具数据
 onMounted(() => {
+  const focus = consumeCustomToolFocus()
+  if (focus) {
+    currentCategory.value = focus.category || 'info_collection'
+    currentSource.value = 'custom'
+    highlightedTool.value = focus.name
+    setTimeout(() => {
+      if (highlightedTool.value === focus.name) highlightedTool.value = ''
+    }, 4000)
+  }
   loadTools()
 })
 
@@ -561,12 +570,8 @@ const categoryCounts = computed(() => ({
 }))
 
 const sourceCounts = computed(() => ({
-  system: toolsList.value.filter(tool =>
-    tool.category === currentCategory.value && tool.source === 'system'
-  ).length,
-  custom: toolsList.value.filter(tool =>
-    tool.category === currentCategory.value && tool.source === 'custom'
-  ).length
+  system: toolsList.value.filter(tool => tool.source === 'system').length,
+  custom: toolsList.value.filter(tool => tool.source === 'custom').length
 }))
 
 const deleteCustomTool = async (tool) => {
@@ -583,6 +588,17 @@ const deleteCustomTool = async (tool) => {
 // === 过滤器切换 ===
 const filterTools = (cat) => {
   currentCategory.value = cat
+}
+
+const selectSource = (source) => {
+  currentSource.value = source
+  const hasToolsInCurrentCategory = toolsList.value.some(tool =>
+    tool.category === currentCategory.value && tool.source === source
+  )
+  if (hasToolsInCurrentCategory) return
+
+  const fallback = toolsList.value.find(tool => tool.source === source)
+  if (fallback?.category) currentCategory.value = fallback.category
 }
 
 // === 格式化辅助方法 ===
@@ -679,10 +695,14 @@ const executionInformationItemsCount = computed(() =>
 )
 
 const executionSucceeded = computed(() => execution.resultData?.success !== false)
+const executionNotApplicable = computed(() => execution.resultData?.result_status === 'not_applicable')
 
 const executionStatusText = computed(() => {
   if (!executionSucceeded.value) {
     return execution.resultData?.error || '工具未能完成本次执行，请检查目标或稍后重试。'
+  }
+  if (executionNotApplicable.value) {
+    return execution.resultData?.result?.data?.status_message || '当前目标不需要执行此项公网信息查询。'
   }
   if (executionCategory.value === 'info_collection') {
     const count = executionInformationItemsCount.value
@@ -1065,6 +1085,11 @@ const runTool = async () => {
   background: #FFF1F0;
 }
 
+.execution-status.neutral {
+  color: #52525B;
+  background: #F4F4F5;
+}
+
 .status-icon {
   display: inline-flex;
   align-items: center;
@@ -1080,6 +1105,10 @@ const runTool = async () => {
 
 .execution-status.failed .status-icon {
   background: #EF4444;
+}
+
+.execution-status.neutral .status-icon {
+  background: #71717A;
 }
 
 .status-line {

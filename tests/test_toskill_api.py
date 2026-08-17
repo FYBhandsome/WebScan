@@ -859,5 +859,100 @@ class TestErrorHandling:
         assert response.status_code == 404
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "expected_message"),
+    [
+        ("subdomain_scan", "不适用公网子域名枚举"),
+        ("cdn_detect_scan", "不经过公共 CDN"),
+        ("web_weight_scan", "没有公开搜索权重"),
+    ],
+)
+def test_local_target_public_data_tools_are_not_applicable(tool_name, expected_message):
+    from TOSKill.AI.tools import get_tool_by_name
+
+    result = get_tool_by_name(tool_name).invoke("http://localhost:88")
+
+    assert result["success"] is True
+    assert result["error"] is None
+    assert result["data"]["result_status"] == "not_applicable"
+    assert expected_message in result["data"]["status_message"]
+
+
+def test_local_target_ip_location_skips_public_provider():
+    from TOSKill.AI.tools import ip_locate_scan
+
+    with patch("TOSKill.AI.tools.ip_locate") as locate:
+        result = ip_locate_scan.invoke("http://localhost:88")
+
+    locate.assert_not_called()
+    assert result["success"] is True
+    assert result["data"]["result_status"] == "not_applicable"
+    assert result["data"]["ip"] == "127.0.0.1"
+
+
+def test_local_target_baseinfo_preserves_url_and_runs_scanner():
+    from TOSKill.AI.tools import baseinfo_scan
+
+    scanner_result = {
+        "success": True,
+        "data": {"domain": "localhost", "server": "test-server"},
+        "error": None,
+    }
+    with patch("TOSKill.AI.tools.baseinfo", return_value=scanner_result) as scanner:
+        result = baseinfo_scan.invoke("http://localhost:88")
+
+    scanner.assert_called_once_with("http://localhost:88")
+    assert result["success"] is True
+    assert result["data"]["domain"] == "localhost"
+
+
+def test_local_target_waf_preserves_url_and_runs_scanner():
+    from TOSKill.AI.tools import waf_detect_scan
+
+    scanner_result = {
+        "success": True,
+        "data": {"has_waf": "no", "message": "未检测到已知WAF特征"},
+        "error": None,
+    }
+    with patch("TOSKill.AI.tools.waf_detect", return_value=scanner_result) as scanner:
+        result = waf_detect_scan.invoke("http://localhost:88")
+
+    scanner.assert_called_once_with("http://localhost:88")
+    assert result["success"] is True
+
+
+def test_local_target_legacy_baseinfo_accepts_port():
+    from backend.plugins.baseinfo.baseinfo import getbaseinfo
+
+    response = MagicMock()
+    response.headers = {"Server": "local-test", "X-Powered-By": "python"}
+    with patch("backend.plugins.baseinfo.baseinfo.SESSION.get", return_value=response) as request, patch(
+        "backend.plugins.baseinfo.baseinfo.get_ip_list",
+        return_value=["127.0.0.1 (本地/内网地址，无公网归属信息)"],
+    ), patch("backend.plugins.baseinfo.baseinfo.get_ua", return_value={"User-Agent": "test"}):
+        result = getbaseinfo("http://localhost:88")
+
+    request.assert_called_once()
+    assert request.call_args.args[0] == "http://localhost:88"
+    assert result["code"] == 200
+    assert result["domain"] == "localhost"
+    assert result["register"] is None
+
+
+def test_local_target_waf_url_validation_accepts_port():
+    from backend.plugins.waf.waf import is_valid_url
+
+    assert is_valid_url("http://localhost:88") is True
+    assert is_valid_url("http://127.0.0.1:88") is True
+    assert is_valid_url("http://") is False
+
+
+def test_local_target_detection_does_not_misclassify_public_ipv6():
+    from TOSKill.utils.target import is_non_public_target
+
+    assert is_non_public_target("http://[::1]:88") is True
+    assert is_non_public_target("https://[2001:4860:4860::8888]") is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short", "-m", "api"])

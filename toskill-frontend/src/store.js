@@ -16,6 +16,22 @@ export const globalState = reactive({
 export const scanProgressState = ref({ current: 0, total: 0, activeTool: '' })
 export const scanStatusState = ref('idle')
 
+// 控制台注册脚本后，工具页在下次打开时定位到对应的自定义工具。
+const pendingCustomToolFocus = reactive({ name: '', category: '' })
+
+export const focusCustomTool = (name, category) => {
+  pendingCustomToolFocus.name = name || ''
+  pendingCustomToolFocus.category = category || 'info_collection'
+}
+
+export const consumeCustomToolFocus = () => {
+  if (!pendingCustomToolFocus.name) return null
+  const focus = { ...pendingCustomToolFocus }
+  pendingCustomToolFocus.name = ''
+  pendingCustomToolFocus.category = ''
+  return focus
+}
+
 // 2. Toast 提示系统
 let toastIdCounter = 0
 export const showToast = (message, type = 'info') => {

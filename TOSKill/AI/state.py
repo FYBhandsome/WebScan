@@ -129,6 +129,7 @@ class ScanState(TypedDict, total=False):
     pause_info: NotRequired[Dict[str, Any]]
     decision_context: NotRequired[Dict[str, Any]]
     decision_context_version: NotRequired[int]
+    resume_pause_id: NotRequired[str]
     chat_mode: NotRequired[bool]
     # 自定义脚本操作上下文：用于脚本成功加入当前扫描队列，或失败后
     # 恢复到脚本操作前的用户交互节点。
@@ -178,6 +179,7 @@ def create_initial_state(target: str, task_id: str = None, mode: str = "info_col
             "updated_at": now,
         },
         decision_context_version=0,
+        resume_pause_id="",
         chat_mode=False,
         planned_tasks=[],
         completed_tasks=[],

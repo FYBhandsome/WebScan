@@ -47,6 +47,7 @@ from TOSKill.tools.tool_categories import (
     is_information_tool,
     is_vulnerability_tool,
     tool_category,
+    tool_result_status,
 )
 from TOSKill.tools.report.vulnerability_normalizer import (
     consolidate_vulnerabilities,
@@ -2120,6 +2121,7 @@ async def direct_tool_execute(state: ScanState) -> ScanState:
                         "analysis": "" if is_information_tool(tool_name) else formatted_result,
                         "vulnerable": is_vulnerability_tool(tool_name) and isinstance(result, dict) and result.get("vulnerable", False),
                         "information_summary": information_items(tool_name, result),
+                        "result_status": tool_result_status(result),
                         "auth_obtained": bool(auth_info),
                         "timestamp": datetime.now().isoformat()
                     }
@@ -2233,6 +2235,28 @@ def _restore_after_script_failure(state: ScanState, error: str) -> ScanState:
         scan_status="waiting_user",
         is_complete=False,
         errors=errors,
+        last_activity_time=datetime.now().isoformat(),
+    )
+
+
+def _restore_after_script_action(state: ScanState, status: str) -> ScanState:
+    """Resume confirmation of the original task after a non-queued script action."""
+    origin = state.get("script_origin", {}) or {}
+    original_task = origin.get("next_task") or state.get("next_task", "")
+    return update_state(
+        state,
+        next_task=original_task,
+        current_task=original_task or state.get("current_task", ""),
+        planned_tasks=list(origin.get("planned_tasks") or state.get("planned_tasks", [])),
+        user_choice="",
+        authorized_task="",
+        pending_action_type="",
+        script_origin={},
+        script_operation="",
+        script_operation_status=status,
+        workflow_node="user_interact",
+        scan_status="waiting_user",
+        is_complete=False,
         last_activity_time=datetime.now().isoformat(),
     )
 
@@ -2490,6 +2514,34 @@ async def script_generate_process(state: ScanState) -> ScanState:
     memory_store.clear_pending_interaction(session_id)
     description = desc_data.get("description", "")
     selected_category = _resolve_script_category(desc_data.get("tool_category"), state)
+    script_action = str(desc_data.get("script_action") or "").strip().lower()
+
+    if script_action == "discard":
+        return _restore_after_script_action(state, "discarded")
+
+    if script_action in {"use_registered", "save_registered"}:
+        registered_tool_name = str(desc_data.get("registered_tool_name") or "").strip()
+        registered = script_manager.get_registered_scripts().get(registered_tool_name)
+        if not registered:
+            error = f"已注册脚本不存在或已被删除: {registered_tool_name or '-'}"
+            if ws_callback:
+                await ws_callback({
+                    "type": "script_error",
+                    "payload": {"error": error, "error_code": "REGISTERED_SCRIPT_NOT_FOUND"},
+                })
+            return _restore_after_script_failure(state, error)
+
+        if script_action == "save_registered":
+            return _restore_after_script_action(state, "saved")
+
+        return _queue_registered_script(
+            state,
+            registered_tool_name,
+            str(desc_data.get("script_code") or ""),
+            description or registered.get("description", ""),
+            selected_category or registered.get("category", "custom"),
+            registered.get("creation_method", "ai_generate"),
+        )
     
     if not description:
         if ws_callback:
@@ -3059,6 +3111,13 @@ async def user_interact(state: ScanState) -> ScanState:
         return state
     
     interaction_id = f"{session_id}:interaction:{next_task}:{len(state.get('completed_tasks', []))}"
+    if state.get("pending_action_type") == "resume_after_chat":
+        # Replanning may select the same tool without changing the completed
+        # count. Give that confirmation a fresh identity so clients do not
+        # mistake it for the already-resolved pre-chat interaction.
+        context_version = int(state.get("decision_context_version", 0) or 0)
+        pause_token = str(state.get("resume_pause_id", "") or "").rsplit(":", 1)[-1]
+        interaction_id = f"{interaction_id}:replan:{pause_token or f'v{context_version}'}"
     interaction_data = {
         "type": "interaction_required",
         "session_id": session_id,
@@ -3121,9 +3180,11 @@ async def user_interact(state: ScanState) -> ScanState:
     memory_store.clear_pending_interaction(session_id)
     
     control_action = ""
+    resume_pause_id = ""
     if isinstance(user_choice, dict):
         control_action = str(user_choice.get("action", "") or "")
         if control_action == "resume_after_chat":
+            resume_pause_id = str(user_choice.get("pause_id", "") or "")
             resume_context = {
                 key: user_choice[key]
                 for key in (
@@ -3161,6 +3222,7 @@ async def user_interact(state: ScanState) -> ScanState:
         authorized_task=next_task if choice == "1" else "",
         workflow_node="ai_decision" if is_replanning else "router",
         pending_action_type=control_action,
+        resume_pause_id=resume_pause_id if is_replanning else "",
         script_origin=script_origin,
         script_operation=("upload" if choice == "4" else "generate" if choice == "5" else ""),
         script_operation_status="waiting" if choice in ("4", "5") else "",
@@ -3417,6 +3479,7 @@ async def execute_task(state: ScanState) -> ScanState:
         result_summary = analysis if category == "info_collection" else ""
 
         result_data = res.get("data", {}) if isinstance(res, dict) else {}
+        result_status = tool_result_status(res)
         is_vulnerable = category == "vuln_scan" and bool(
             isinstance(res, dict) and (
                 res.get("vulnerable") or
@@ -3438,6 +3501,7 @@ async def execute_task(state: ScanState) -> ScanState:
                         "analysis": "" if category == "info_collection" else analysis,
                         "vulnerable": is_vulnerable,
                         "information_summary": information_items(task, res),
+                        "result_status": result_status,
                         "auth_obtained": bool(auth_info),
                         "timestamp": datetime.now().isoformat()
                     }
@@ -3464,8 +3528,7 @@ async def execute_task(state: ScanState) -> ScanState:
             completed_tasks.append(task)
 
         task_metadata = dict(state.get("task_metadata") or {})
-        if task in task_metadata:
-            task_metadata[task] = {**task_metadata[task], "status": "completed"}
+        task_metadata[task] = {**task_metadata.get(task, {}), "status": result_status}
         
         all_vulns = state.get("vulnerabilities", []).copy()
         current_vulns = []
@@ -4822,6 +4885,8 @@ class AgentOrchestrator:
                             "target": target,
                             "formatted_result": formatted,
                             "information_summary": information_items(tool_name, result),
+                            "result_status": tool_result_status(result),
+                            "raw_result": result if isinstance(result, dict) else {"data": str(result)},
                         }
                     })
                 except Exception as e:

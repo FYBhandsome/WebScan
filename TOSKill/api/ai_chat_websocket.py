@@ -1477,10 +1477,18 @@ class AIChatManager:
             try:
                 orchestrator = get_agent_orchestrator()
                 await orchestrator._ensure_initialized()
-                result = await orchestrator.resume_workflow(session_id, {
+                resume_payload = {
                     "description": description,
                     "tool_category": _requested_script_category(payload),
-                })
+                }
+                for key in (
+                    "script_action",
+                    "registered_tool_name",
+                    "script_code",
+                ):
+                    if key in payload:
+                        resume_payload[key] = payload[key]
+                result = await orchestrator.resume_workflow(session_id, resume_payload)
                 if result is None:
                     await self._send_error(session_id, "恢复脚本生成工作流失败")
                 else:

@@ -22,7 +22,7 @@ from TOSKill.AI.tools import (
     get_tool_metadata, list_tool_metadata, script_manager
 )
 from TOSKill.analysis.result_analyzer import get_analyzer
-from TOSKill.tools.tool_categories import information_items, tool_category
+from TOSKill.tools.tool_categories import information_items, tool_category, tool_result_status
 from TOSKill.utils.target import normalize_scan_target
 
 logger = logging.getLogger(__name__)
@@ -412,8 +412,12 @@ async def api_register_custom_tool(request: CustomToolRegisterRequest):
             detail={"message": result.get("error", "注册失败"), "error_code": code},
         )
     return APIResponse(
-        message=f"自定义工具 '{request.tool_name}' 注册成功",
-        data={"tool": result["metadata"]},
+        message=(
+            f"自定义工具 '{request.tool_name}' 已存在，已复用"
+            if result.get("reused")
+            else f"自定义工具 '{request.tool_name}' 注册成功"
+        ),
+        data={"tool": result["metadata"], "reused": bool(result.get("reused"))},
     )
 
 
@@ -448,6 +452,7 @@ async def api_execute_tool(request: ToolExecuteRequest):
             "tool_category": category,
             "target": target,
             "success": not (isinstance(result, dict) and result.get("success") is False),
+            "result_status": tool_result_status(result),
             "result": result,
             "timestamp": datetime.now().isoformat()
         }

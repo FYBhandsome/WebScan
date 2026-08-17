@@ -24,9 +24,14 @@ const wsMock = vi.hoisted(() => ({
   off: vi.fn((type) => wsMock.handlers.delete(type)),
 }))
 
+const storeMock = vi.hoisted(() => ({
+  showToast: vi.fn(),
+  consumeCustomToolFocus: vi.fn(() => null),
+}))
+
 vi.mock('../../services/api.js', () => ({ API: apiMock }))
 vi.mock('../../services/websocket.js', () => ({ ws: wsMock }))
-vi.mock('../../store.js', () => ({ showToast: vi.fn() }))
+vi.mock('../../store.js', () => storeMock)
 
 import ToolsView from './ToolsView.vue'
 
@@ -44,6 +49,7 @@ describe('ToolsView', () => {
     apiMock.executeTool.mockReset()
     wsMock.handlers.clear()
     wsMock.send.mockClear()
+    storeMock.consumeCustomToolFocus.mockReset().mockReturnValue(null)
     vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
 
@@ -58,6 +64,60 @@ describe('ToolsView', () => {
 
     await wrapper.get('.primary-filter button:nth-child(2)').trigger('click')
     expect(wrapper.text()).toContain('暂无自定义工具')
+    wrapper.unmount()
+  })
+
+  it('opens the category custom list for a tool registered from the console', async () => {
+    storeMock.consumeCustomToolFocus.mockReturnValue({
+      name: 'technology_fingerprint',
+      category: 'vuln_scan',
+    })
+    apiMock.getTools.mockResolvedValue({
+      data: {
+        tools: [
+          ...tools,
+          {
+            name: 'technology_fingerprint',
+            description: '技术指纹识别',
+            category: 'vuln_scan',
+            source: 'custom',
+            creation_method: 'ai_generate',
+          },
+        ],
+      },
+    })
+
+    const wrapper = await mountView()
+
+    expect(wrapper.get('.primary-filter button:nth-child(2)').classes()).toContain('active')
+    expect(wrapper.get('.source-switch button:nth-child(2)').classes()).toContain('active')
+    expect(wrapper.text()).toContain('Technology Fingerprint')
+    wrapper.unmount()
+  })
+
+  it('shows the global custom count and switches to the category that contains custom tools', async () => {
+    apiMock.getTools.mockResolvedValue({
+      data: {
+        tools: [
+          ...tools.filter(tool => tool.source === 'system'),
+          {
+            name: 'technology_fingerprint',
+            description: '技术指纹识别',
+            category: 'vuln_scan',
+            source: 'custom',
+            creation_method: 'ai_generate',
+          },
+        ],
+      },
+    })
+    const wrapper = await mountView()
+    const customButton = wrapper.get('.source-switch button:nth-child(2)')
+
+    expect(customButton.text()).toContain('1')
+    await customButton.trigger('click')
+
+    expect(wrapper.get('.primary-filter button:nth-child(2)').classes()).toContain('active')
+    expect(wrapper.text()).toContain('Technology Fingerprint')
     wrapper.unmount()
   })
 

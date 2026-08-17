@@ -39,6 +39,7 @@ const FIELD_LABELS = {
 const INTERNAL_FIELDS = new Set([
   'success', 'error', 'metadata', 'data', 'raw', 'headers',
   'request_response_log', 'result', 'vulnerabilities', 'timestamp',
+  'result_status',
 ])
 
 const hasValue = (value) => value !== undefined && value !== null && value !== ''

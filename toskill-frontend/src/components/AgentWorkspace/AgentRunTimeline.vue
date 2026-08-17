@@ -154,11 +154,11 @@ defineEmits(['action', 'submit-input', 'open-report'])
 
 const statusLabel = (status) => ({
   pending: '等待', running: '运行中', completed: '已完成', failed: '失败',
-  skipped: '已跳过', waiting: '等待确认', cancelled: '已取消'
+  not_applicable: '不适用', skipped: '已跳过', waiting: '等待确认', cancelled: '已取消'
 }[status] || '运行中')
 
 const statusIcon = (status) => ({
-  failed: '×', skipped: '−', waiting: '?', cancelled: '−', running: '•'
+  failed: '×', not_applicable: '−', skipped: '−', waiting: '?', cancelled: '−', running: '•'
 }[status] || '○')
 
 const formatTime = (timestamp) => {
@@ -211,7 +211,7 @@ const renderMarkdown = (text) => marked.parse(text || '', { breaks: true, gfm: t
   stroke-linejoin: round;
 }
 .step-dot.status-failed { color: white; border-color: #ef4444; background: #ef4444; }
-.step-dot.status-skipped, .step-dot.status-cancelled { background: #f4f4f5; }
+.step-dot.status-not_applicable, .step-dot.status-skipped, .step-dot.status-cancelled { background: #f4f4f5; }
 .step-line { position: absolute; top: 17px; bottom: 0; width: 1px; background: #e4e4e7; }
 .run-step:last-child .step-line { display: none; }
 .step-content { min-width: 0; padding: 0 0 18px 10px; text-align: left; }

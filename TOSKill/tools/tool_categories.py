@@ -60,12 +60,12 @@ PREFERRED_FIELDS = {
     "subdomain_scan": ("status_message", "subdomains", "total_count", "provider", "provider_error"),
     "dir_brute": ("directories", "files", "found_paths", "total_count"),
     "waf_detect_scan": ("waf_detected", "waf_type", "waf", "detected", "name"),
-    "cdn_detect_scan": ("cdn_detected", "cdn_provider", "detected", "provider"),
+    "cdn_detect_scan": ("status_message", "cdn_detected", "cdn_provider", "detected", "provider"),
     "cms_detect_scan": ("cms_name", "cms_version", "cms", "version"),
     "crawler_scan": ("pages", "urls", "crawled_urls", "page_count", "forms", "form_count", "parameters", "params"),
-    "ip_locate_scan": ("ip", "location", "isp", "provider"),
+    "ip_locate_scan": ("status_message", "ip", "location", "isp", "provider"),
     "webside_query_scan": ("status_message", "website_name", "record", "domain", "provider"),
-    "web_weight_scan": ("weight", "domain"),
+    "web_weight_scan": ("status_message", "weight", "domain"),
     "infoleak_scan": ("leaks_found", "leak_details"),
     "tls_certificate_scan": ("status_message", "host", "port", "tls_version", "cipher", "certificate_subject", "certificate_issuer", "certificate_expires_at", "subject_alt_names"),
     "http_methods_scan": ("allowed_methods", "options_status_code", "head_status_code", "redirect_location", "server"),
@@ -133,6 +133,12 @@ def result_data(result: Any) -> Dict[str, Any]:
     }
 
 
+def tool_result_status(result: Any) -> str:
+    """Return the semantic outcome used by workflow and UI status rendering."""
+    status = str(result_data(result).get("result_status") or "completed")
+    return status if status in {"completed", "not_applicable"} else "completed"
+
+
 def information_items(tool_name: str, result: Any, limit: int = 6) -> List[Dict[str, str]]:
     """Return UI-safe, structured information collected by one info tool."""
     if not is_information_tool(tool_name):
@@ -150,7 +156,9 @@ def information_items(tool_name: str, result: Any, limit: int = 6) -> List[Dict[
         if len(items) >= limit:
             return items
     for key, value in data.items():
-        if key in used or key in {"headers", "raw", "request_response_log", "result", "vulnerabilities"}:
+        if key in used or key in {
+            "headers", "raw", "request_response_log", "result", "result_status", "vulnerabilities"
+        }:
             continue
         text = _plain(value)
         if text:

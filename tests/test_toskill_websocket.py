@@ -414,11 +414,17 @@ class TestMessageHandlers:
                 "description": "检测敏感文件泄露",
                 "tool_category": "info_collection",
                 "interaction_id": interaction_id,
+                "script_action": "use_registered",
+                "registered_tool_name": "technology_fingerprint",
+                "script_code": "def run(target): return {'success': True}",
             })
 
         orchestrator.resume_workflow.assert_awaited_once_with(session_id, {
             "description": "检测敏感文件泄露",
             "tool_category": "info_collection",
+            "script_action": "use_registered",
+            "registered_tool_name": "technology_fingerprint",
+            "script_code": "def run(target): return {'success': True}",
         })
         mock_send.assert_awaited_once()
 
