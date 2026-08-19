@@ -67,6 +67,18 @@ describe('ToolsView', () => {
     wrapper.unmount()
   })
 
+  it('shows the system count for the active category', async () => {
+    const wrapper = await mountView()
+    const systemButton = wrapper.get('.source-switch button:first-child')
+    const getSystemCount = () => systemButton.text().match(/\d+/)?.[0]
+
+    expect(getSystemCount()).toBe('1')
+
+    await wrapper.get('.primary-filter button:nth-child(2)').trigger('click')
+    expect(getSystemCount()).toBe('1')
+    wrapper.unmount()
+  })
+
   it('opens the category custom list for a tool registered from the console', async () => {
     storeMock.consumeCustomToolFocus.mockReturnValue({
       name: 'technology_fingerprint',

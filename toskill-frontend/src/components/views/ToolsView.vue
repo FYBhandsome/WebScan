@@ -570,7 +570,9 @@ const categoryCounts = computed(() => ({
 }))
 
 const sourceCounts = computed(() => ({
-  system: toolsList.value.filter(tool => tool.source === 'system').length,
+  system: toolsList.value.filter(tool =>
+    tool.category === currentCategory.value && tool.source === 'system'
+  ).length,
   custom: toolsList.value.filter(tool => tool.source === 'custom').length
 }))
 
